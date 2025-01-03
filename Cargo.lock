@@ -1691,6 +1691,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "gophermap"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6ec2186bfad5a5dcbc9307dbc2d2444062300a836ae91b00dd80c3b71c34af3b"
+
+[[package]]
 name = "gosub-gtk"
 version = "0.1.0"
 dependencies = [
@@ -1703,6 +1709,7 @@ dependencies = [
  "futures",
  "futures-core",
  "glib-build-tools",
+ "gophermap",
  "gosub_engine",
  "gtk-macros",
  "gtk4",
