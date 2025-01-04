@@ -12,4 +12,10 @@ pub enum GopherError {
     Timeout(Url),
     #[error("Too many stuff happening: {0}")]
     GopherStuff(String),
+    #[error("Read error: {0}")]
+    ReadError(String),
+    #[error("Connection error: {0}")]
+    ConnectionError(String),
+    #[error("Invalid gopher URL: {0}")]
+    InvalidUrl(String),
 }
