@@ -28,7 +28,7 @@ bytes = "1.9.0"
 futures = "0.3.31"
 lazy_static = "1.5.0"
 # Optional dependencies
-reqwest = {  version = "0.12.11", features = ["blocking", "gzip", "brotli", "cookies", "deflate", "http2", "rustls-tls", "stream"], optional = true }
+reqwest = {  version = "0.12.12", features = ["blocking", "gzip", "brotli", "cookies", "deflate", "http2", "rustls-tls", "stream"], optional = true }
 ureq = { version = "2.0.0", optional = true }
 gophermap = { version = "0.1.2", optional = true }
 
