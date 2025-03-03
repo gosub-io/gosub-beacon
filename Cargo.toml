@@ -22,7 +22,7 @@ rusqlite = "0.32.1"
 cookie = "0.18.1"
 sourceview5 = { version = "0.9.1", features = ["gtk_v4_6"] }
 anyhow = "1.0.95"
-thiserror = "2.0.9"
+thiserror = "2.0.12"
 futures-core = "0.3.31"
 bytes = "1.9.0"
 futures = "0.3.31"
