@@ -2,7 +2,6 @@ mod application;
 mod cookies;
 mod dialog;
 pub mod engine;
-mod eventloop;
 #[allow(dead_code)]
 mod fetcher;
 mod tab;
@@ -42,7 +41,6 @@ fn main() {
     });
 
     gtk4::init().unwrap();
-    sourceview5::init();
 
     gio::resources_register_include!("gosub.gresource").expect("Failed to register resources.");
 

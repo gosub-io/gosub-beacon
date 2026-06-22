@@ -40,6 +40,9 @@ impl BrowserWindow {
         Self::connect_actions(app, &window);
         Self::connect_accelerators(app, &window);
 
+        // Start the engine and wire its redraw/event notifications before opening any tabs.
+        window.imp().init_engine();
+
         // Spawn handler
         let window_clone = window.clone();
         spawn_future_local(async move {
@@ -56,27 +59,36 @@ impl BrowserWindow {
             }
         });
 
-        // Refresh tabs on startup
-        let window_clone = window.clone();
-        spawn_future_local(async move {
-            let initial_urls = [
-                "https://gosub.io",
-                "https://gosub.io/test.html",
-                // We use source: as render mode, as we do not generate HTML output for gopher sites
-                "source:gopher://gopher.meulie.net",
-            ];
-
-            for url in initial_urls.iter() {
-                window_clone
-                    .imp()
-                    .get_sender()
-                    .send(Message::OpenTab(url.to_string(), "New Tab".to_string()))
-                    .await
-                    .unwrap();
+        // Open the startup tabs only once the window is mapped, i.e. it has a real
+        // allocated size. Creating tabs before then makes GTK measure the tab-label
+        // icons against a zero-sized parent, producing `width 0, height -9`
+        // allocation warnings.
+        let opened = std::rc::Rc::new(std::cell::Cell::new(false));
+        window.connect_map(move |window| {
+            if opened.replace(true) {
+                return;
             }
 
-            // Refresh tabs on startup
-            window_clone.imp().get_sender().send(Message::RefreshTabs()).await.unwrap();
+            let window_clone = window.clone();
+            spawn_future_local(async move {
+                let initial_urls = [
+                    "https://gosub.io",
+                    "https://adayinthelifeof.nl",
+                    "https://news.ycombinator.com",
+                ];
+
+                for url in initial_urls.iter() {
+                    window_clone
+                        .imp()
+                        .get_sender()
+                        .send(Message::OpenTab(url.to_string(), "New Tab".to_string()))
+                        .await
+                        .unwrap();
+                }
+
+                // Refresh tabs on startup
+                window_clone.imp().get_sender().send(Message::RefreshTabs()).await.unwrap();
+            });
         });
 
         window
@@ -152,6 +164,9 @@ impl BrowserWindow {
                     let tab = manager.get_tab(tab_id).unwrap();
                     window_clone.imp().searchbar.set_text(tab.url().as_str());
                     drop(manager);
+
+                    // Back/forward availability is per-tab.
+                    window_clone.imp().update_nav_buttons();
                 }
             }
         });

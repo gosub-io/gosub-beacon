@@ -1,14 +1,83 @@
-use crate::engine::GosubEngineConfig;
+use crate::engine::EngineTabId;
 use crate::fetcher::address_parser::GosubRenderMode;
-use gosub_engine::prelude::HasTreeDrawer;
+use gosub_engine::tab::TabHandle;
 use gtk4::gdk::Texture;
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::fmt::Debug;
 use std::str::FromStr;
-use std::sync::{Arc, Mutex};
 use url::Url;
 use uuid::Uuid;
+
+/// A single entry in a tab's session history.
+#[derive(Clone, Debug)]
+pub struct HistoryEntry {
+    pub url: Url,
+    /// Whether back/forward may re-navigate to this entry. A POST result is not safely
+    /// re-navigable (it would need to re-submit the form body), so such entries are marked
+    /// non-navigable and are skipped by back/forward. The engine is GET-only today, so every
+    /// entry is currently navigable; this is the hook for when form submissions arrive.
+    pub navigable: bool,
+}
+
+/// Cursor-based session history for a tab. `current` is the index of the entry currently shown
+/// (valid only while `entries` is non-empty).
+#[derive(Clone, Debug, Default)]
+pub struct History {
+    entries: Vec<HistoryEntry>,
+    current: usize,
+}
+
+impl History {
+    /// Record a brand-new navigation: drop any forward entries, append the URL, and point at it.
+    pub fn push(&mut self, url: Url) {
+        if !self.entries.is_empty() {
+            self.entries.truncate(self.current + 1);
+        }
+        self.entries.push(HistoryEntry { url, navigable: true });
+        self.current = self.entries.len() - 1;
+    }
+
+    /// Index of the nearest navigable entry before `current`, if any.
+    fn prev_index(&self) -> Option<usize> {
+        if self.entries.is_empty() {
+            return None;
+        }
+        (0..self.current).rev().find(|&i| self.entries[i].navigable)
+    }
+
+    /// Index of the nearest navigable entry after `current`, if any.
+    fn next_index(&self) -> Option<usize> {
+        self.entries
+            .iter()
+            .enumerate()
+            .skip(self.current + 1)
+            .find(|(_, e)| e.navigable)
+            .map(|(i, _)| i)
+    }
+
+    pub fn can_go_back(&self) -> bool {
+        self.prev_index().is_some()
+    }
+
+    pub fn can_go_forward(&self) -> bool {
+        self.next_index().is_some()
+    }
+
+    /// Move the cursor back and return the URL to navigate to, or `None` if at the start.
+    pub fn go_back(&mut self) -> Option<Url> {
+        let i = self.prev_index()?;
+        self.current = i;
+        Some(self.entries[i].url.clone())
+    }
+
+    /// Move the cursor forward and return the URL to navigate to, or `None` if at the end.
+    pub fn go_forward(&mut self) -> Option<Url> {
+        let i = self.next_index()?;
+        self.current = i;
+        Some(self.entries[i].url.clone())
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
 pub struct TabId(Uuid);
@@ -57,16 +126,19 @@ pub struct GosubTab {
     private: bool,
     /// URL that is loaded into the tab
     url: Url,
-    /// History of the tab
-    history: Vec<Url>,
+    /// Session history of the tab (back/forward)
+    history: History,
+    /// When set, the next finished navigation came from back/forward and must update the
+    /// history cursor instead of pushing a new entry.
+    suppress_history_push: bool,
     /// Title of the tab
     title: String,
     /// Loaded favicon of the tab
     favicon: Option<Texture>,
     /// Actual content (HTML) of the tab
     content: String,
-    /// Drawer
-    drawer: Arc<Mutex<Option<<GosubEngineConfig as HasTreeDrawer>::TreeDrawer>>>,
+    /// Handle to the engine-side tab that drives navigation and rendering.
+    tab_handle: Option<TabHandle>,
 }
 
 impl Debug for GosubTab {
@@ -87,11 +159,12 @@ impl GosubTab {
             pinned: false,
             private: false,
             url,
-            history: Vec::new(),
+            history: History::default(),
+            suppress_history_push: false,
             title: title.to_string(),
             favicon: None,
             content: String::new(),
-            drawer: Arc::new(Mutex::new(None)),
+            tab_handle: None,
         }
     }
 
@@ -102,16 +175,23 @@ impl GosubTab {
         self.render_mode.clone()
     }
 
-    pub fn has_drawer(&self) -> bool {
-        self.drawer.lock().unwrap().is_some()
+    /// Returns the engine tab handle, if one has been attached.
+    pub fn tab_handle(&self) -> Option<TabHandle> {
+        self.tab_handle.clone()
     }
 
-    pub fn drawer(&self) -> Arc<Mutex<Option<<GosubEngineConfig as HasTreeDrawer>::TreeDrawer>>> {
-        self.drawer.clone()
+    /// Returns the engine-side tab id, if a handle has been attached.
+    pub fn engine_tab_id(&self) -> Option<EngineTabId> {
+        self.tab_handle.as_ref().map(|h| h.tab_id)
     }
 
-    pub fn set_drawer(&mut self, drawer: <GosubEngineConfig as HasTreeDrawer>::TreeDrawer) {
-        self.drawer = Arc::new(Mutex::new(Some(drawer)));
+    /// Returns true once this tab is backed by an engine tab.
+    pub fn has_engine_tab(&self) -> bool {
+        self.tab_handle.is_some()
+    }
+
+    pub fn set_tab_handle(&mut self, handle: TabHandle) {
+        self.tab_handle = Some(handle);
     }
 
     pub fn is_loading(&self) -> bool {
@@ -158,12 +238,20 @@ impl GosubTab {
         self.url = url
     }
 
-    pub fn add_to_history(&mut self, url: Url) {
-        self.history.push(url);
+    pub fn history(&self) -> &History {
+        &self.history
     }
 
-    pub fn pop_history(&mut self) -> Option<Url> {
-        self.history.pop()
+    pub fn history_mut(&mut self) -> &mut History {
+        &mut self.history
+    }
+
+    pub fn suppress_history_push(&self) -> bool {
+        self.suppress_history_push
+    }
+
+    pub fn set_suppress_history_push(&mut self, suppress: bool) {
+        self.suppress_history_push = suppress;
     }
 
     pub fn set_title(&mut self, title: &str) {
