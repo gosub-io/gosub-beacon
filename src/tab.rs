@@ -9,73 +9,99 @@ use std::str::FromStr;
 use url::Url;
 use uuid::Uuid;
 
-/// A single entry in a tab's session history.
+/// Identifier of a history node (index into the arena in [`History`]).
+pub type HistoryNodeId = usize;
+
+/// A single node in a tab's history tree.
 #[derive(Clone, Debug)]
-pub struct HistoryEntry {
+pub struct HistoryNode {
     pub url: Url,
-    /// Whether back/forward may re-navigate to this entry. A POST result is not safely
-    /// re-navigable (it would need to re-submit the form body), so such entries are marked
-    /// non-navigable and are skipped by back/forward. The engine is GET-only today, so every
-    /// entry is currently navigable; this is the hook for when form submissions arrive.
+    /// Whether back/forward may re-navigate to this node. A POST result is not safely
+    /// re-navigable (it would need to re-submit the form body), so such nodes are marked
+    /// non-navigable and skipped by back/forward. The engine is GET-only today, so every
+    /// node is currently navigable; this is the hook for when form submissions arrive.
     pub navigable: bool,
+    parent: Option<HistoryNodeId>,
+    children: Vec<HistoryNodeId>,
 }
 
-/// Cursor-based session history for a tab. `current` is the index of the entry currently shown
-/// (valid only while `entries` is non-empty).
+/// Tree-structured session history for a tab.
+///
+/// Unlike a linear back/forward stack, navigating away from a node that already has forward
+/// entries does **not** discard them: the new page becomes another child of the current node,
+/// so the old path is preserved as a sibling branch. Back walks to the parent; forward walks to
+/// a child (and the UI asks which one when a node has several).
+///
+/// Nodes live in an append-only arena (`nodes`); ids are stable indices and nodes are never
+/// removed, which keeps the structure trivially `Clone`.
 #[derive(Clone, Debug, Default)]
 pub struct History {
-    entries: Vec<HistoryEntry>,
-    current: usize,
+    nodes: Vec<HistoryNode>,
+    current: Option<HistoryNodeId>,
 }
 
 impl History {
-    /// Record a brand-new navigation: drop any forward entries, append the URL, and point at it.
+    /// Record a navigation to a new page: append a child of the current node and move to it.
+    /// If the current node already has children, this forks a new branch.
     pub fn push(&mut self, url: Url) {
-        if !self.entries.is_empty() {
-            self.entries.truncate(self.current + 1);
+        let id = self.nodes.len();
+        self.nodes.push(HistoryNode {
+            url,
+            navigable: true,
+            parent: self.current,
+            children: Vec::new(),
+        });
+        if let Some(cur) = self.current {
+            self.nodes[cur].children.push(id);
         }
-        self.entries.push(HistoryEntry { url, navigable: true });
-        self.current = self.entries.len() - 1;
+        self.current = Some(id);
     }
 
-    /// Index of the nearest navigable entry before `current`, if any.
-    fn prev_index(&self) -> Option<usize> {
-        if self.entries.is_empty() {
-            return None;
+    /// Nearest navigable ancestor of the current node, if any.
+    fn back_target(&self) -> Option<HistoryNodeId> {
+        let mut node = self.nodes[self.current?].parent;
+        while let Some(id) = node {
+            if self.nodes[id].navigable {
+                return Some(id);
+            }
+            node = self.nodes[id].parent;
         }
-        (0..self.current).rev().find(|&i| self.entries[i].navigable)
+        None
     }
 
-    /// Index of the nearest navigable entry after `current`, if any.
-    fn next_index(&self) -> Option<usize> {
-        self.entries
+    /// Navigable children of the current node, as `(id, url)` pairs — the forward branches.
+    pub fn forward_children(&self) -> Vec<(HistoryNodeId, Url)> {
+        let Some(cur) = self.current else {
+            return Vec::new();
+        };
+        self.nodes[cur]
+            .children
             .iter()
-            .enumerate()
-            .skip(self.current + 1)
-            .find(|(_, e)| e.navigable)
-            .map(|(i, _)| i)
+            .filter(|&&c| self.nodes[c].navigable)
+            .map(|&c| (c, self.nodes[c].url.clone()))
+            .collect()
     }
 
     pub fn can_go_back(&self) -> bool {
-        self.prev_index().is_some()
+        self.back_target().is_some()
     }
 
     pub fn can_go_forward(&self) -> bool {
-        self.next_index().is_some()
+        !self.forward_children().is_empty()
     }
 
-    /// Move the cursor back and return the URL to navigate to, or `None` if at the start.
+    /// Move to the parent and return its URL, or `None` if already at the root.
     pub fn go_back(&mut self) -> Option<Url> {
-        let i = self.prev_index()?;
-        self.current = i;
-        Some(self.entries[i].url.clone())
+        let id = self.back_target()?;
+        self.current = Some(id);
+        Some(self.nodes[id].url.clone())
     }
 
-    /// Move the cursor forward and return the URL to navigate to, or `None` if at the end.
-    pub fn go_forward(&mut self) -> Option<Url> {
-        let i = self.next_index()?;
-        self.current = i;
-        Some(self.entries[i].url.clone())
+    /// Move to a specific node (a forward child the user picked) and return its URL.
+    pub fn go_to(&mut self, id: HistoryNodeId) -> Option<Url> {
+        let url = self.nodes.get(id)?.url.clone();
+        self.current = Some(id);
+        Some(url)
     }
 }
 

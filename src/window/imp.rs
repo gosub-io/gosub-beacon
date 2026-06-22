@@ -1,6 +1,6 @@
 use crate::engine::{draw_frame, BrowserEngine, EngineTabId};
 use crate::fetcher::address_parser::GosubAddressParser;
-use crate::tab::{GosubTab, GosubTabManager, TabCommand, TabId};
+use crate::tab::{GosubTab, GosubTabManager, HistoryNodeId, TabCommand, TabId};
 use crate::window::message::Message;
 use crate::window::tab_context_menu::{build_context_menu, setup_context_menu_actions, TabInfo};
 use crate::runtime;
@@ -14,8 +14,8 @@ use gtk4::graphene::Point;
 use gtk4::prelude::*;
 use gtk4::subclass::prelude::*;
 use gtk4::{
-    gdk, glib, Button, CompositeTemplate, DrawingArea, Entry, GestureClick, Image, Notebook, PopoverMenu, PopoverMenuFlags, ScrolledWindow,
-    Settings, TemplateChild, TextView, ToggleButton, Widget,
+    gdk, glib, Button, CompositeTemplate, DrawingArea, Entry, GestureClick, Image, Notebook, Popover, PopoverMenu, PopoverMenuFlags,
+    ScrolledWindow, Settings, TemplateChild, TextView, ToggleButton, Widget,
 };
 use log::info;
 use once_cell::sync::Lazy;
@@ -158,12 +158,12 @@ impl BrowserWindow {
 
     #[template_callback]
     fn handle_prev_clicked(&self, _btn: &Button) {
-        self.go_history(true);
+        self.navigate_back();
     }
 
     #[template_callback]
-    fn handle_next_clicked(&self, _btn: &Button) {
-        self.go_history(false);
+    fn handle_next_clicked(&self, btn: &Button) {
+        self.navigate_forward(btn);
     }
 
     #[template_callback]
@@ -478,32 +478,105 @@ impl BrowserWindow {
         self.tab_bar.nth_page(Some(cur))?.get_tab_id()
     }
 
-    /// Navigate the active tab back (or forward) through its session history.
-    fn go_history(&self, back: bool) {
+    /// Navigate the active tab to its parent history node (the Back button).
+    fn navigate_back(&self) {
         let Some(tab_id) = self.active_tab_id() else {
             return;
         };
+        let url = {
+            let mut manager = self.tab_manager.lock().unwrap();
+            let Some(mut tab) = manager.get_tab(tab_id) else {
+                return;
+            };
+            let Some(url) = tab.history_mut().go_back() else {
+                return;
+            };
+            self.stage_history_nav(&mut manager, tab_id, &mut tab, url.clone());
+            url
+        };
+        self.finish_history_nav(tab_id, url);
+    }
 
-        let mut manager = self.tab_manager.lock().unwrap();
-        let Some(mut tab) = manager.get_tab(tab_id) else {
+    /// Handle the Forward button: with a single forward branch go straight there; with several,
+    /// pop up a menu (anchored to `anchor`) asking which branch to follow.
+    fn navigate_forward(&self, anchor: &Button) {
+        let Some(tab_id) = self.active_tab_id() else {
             return;
         };
-        let target = if back { tab.history_mut().go_back() } else { tab.history_mut().go_forward() };
-        let Some(url) = target else {
+        let children = {
+            let manager = self.tab_manager.lock().unwrap();
+            match manager.get_tab(tab_id) {
+                Some(tab) => tab.history().forward_children(),
+                None => return,
+            }
+        };
+        match children.as_slice() {
+            [] => {}
+            [(id, _url)] => self.go_to_history_node(*id),
+            _ => self.show_forward_menu(anchor, children),
+        }
+    }
+
+    /// Navigate the active tab to a specific (forward) history node.
+    fn go_to_history_node(&self, node_id: HistoryNodeId) {
+        let Some(tab_id) = self.active_tab_id() else {
             return;
         };
+        let url = {
+            let mut manager = self.tab_manager.lock().unwrap();
+            let Some(mut tab) = manager.get_tab(tab_id) else {
+                return;
+            };
+            let Some(url) = tab.history_mut().go_to(node_id) else {
+                return;
+            };
+            self.stage_history_nav(&mut manager, tab_id, &mut tab, url.clone());
+            url
+        };
+        self.finish_history_nav(tab_id, url);
+    }
 
-        // Mark this navigation as history-driven so the resulting `Finished` event updates the
-        // cursor instead of pushing a new entry.
+    /// Mark a navigation as history-driven (so its `Finished` event won't push a new node) and
+    /// store the updated tab. Runs while the manager lock is held by the caller.
+    fn stage_history_nav(&self, manager: &mut GosubTabManager, tab_id: TabId, tab: &mut GosubTab, url: url::Url) {
         tab.set_suppress_history_push(true);
-        tab.set_url(url.clone());
+        tab.set_url(url);
         tab.set_loading(true);
-        manager.update_tab(tab_id, &tab);
-        drop(manager);
+        manager.update_tab(tab_id, tab);
+    }
 
+    /// Shared tail of a history navigation, run after the manager lock has been released.
+    fn finish_history_nav(&self, tab_id: TabId, url: url::Url) {
         self.refresh_tabs();
         self.navigate_engine_tab(tab_id, url.as_str());
         self.update_nav_buttons();
+    }
+
+    /// Build and show a popover listing the forward branches of the active tab; picking one
+    /// navigates to it.
+    fn show_forward_menu(&self, anchor: &Button, children: Vec<(HistoryNodeId, url::Url)>) {
+        let vbox = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+        let popover = Popover::builder().build();
+        popover.set_parent(anchor);
+        popover.connect_closed(|p| p.unparent());
+
+        for (id, url) in children {
+            let item = Button::builder().label(url.as_str()).has_frame(false).build();
+            if let Some(label) = item.child().and_downcast::<gtk4::Label>() {
+                label.set_xalign(0.0);
+                label.set_ellipsize(gtk4::pango::EllipsizeMode::End);
+            }
+            let window = self.obj().clone();
+            let popover_clone = popover.clone();
+            item.connect_clicked(move |_| {
+                popover_clone.popdown();
+                window.imp().go_to_history_node(id);
+            });
+            vbox.append(&item);
+        }
+
+        popover.set_child(Some(&vbox));
+        popover.popup();
     }
 
     /// Enable/disable the back and forward buttons based on the active tab's history.
