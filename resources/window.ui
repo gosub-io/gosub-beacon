@@ -3,7 +3,7 @@
     <template class="BrowserWindow" parent="GtkApplicationWindow">
         <property name="title">Gosub Beacon</property>
 
-        <!-- Row 1: plain titlebar (window controls only; menubar renders below it) -->
+        <!-- Row 1: slim headerbar: menus left (packed in code), title, window controls -->
         <child type="titlebar">
             <object class="GtkHeaderBar" id="headerbar">
                 <property name="show-title-buttons">True</property>
@@ -14,7 +14,7 @@
             <object class="GtkBox">
                 <property name="orientation">vertical</property>
 
-                <!-- Row 3: full-width tab strip -->
+                <!-- Row 2: full-width tab strip -->
                 <child>
                     <object class="GtkBox">
                         <property name="orientation">horizontal</property>
@@ -54,7 +54,7 @@
                     </object>
                 </child>
 
-                <!-- Row 4: navigation toolbar -->
+                <!-- Row 3: navigation toolbar -->
                 <child>
                     <object class="GtkBox">
                         <property name="orientation">horizontal</property>
@@ -264,9 +264,30 @@
                             </object>
                         </child>
                         <child>
-                            <object class="GtkStack" id="content_stack">
-                                <property name="vexpand">True</property>
+                            <object class="GtkOverlay">
                                 <property name="hexpand">True</property>
+                                <property name="vexpand">True</property>
+                                <child>
+                                    <object class="GtkStack" id="content_stack">
+                                        <property name="vexpand">True</property>
+                                        <property name="hexpand">True</property>
+                                    </object>
+                                </child>
+                                <child type="overlay">
+                                    <!-- hover-URL bubble, Firefox style -->
+                                    <object class="GtkLabel" id="statusbar">
+                                        <property name="visible">False</property>
+                                        <property name="can-focus">False</property>
+                                        <property name="halign">start</property>
+                                        <property name="valign">end</property>
+                                        <property name="single-line-mode">True</property>
+                                        <property name="ellipsize">end</property>
+                                        <property name="max-width-chars">80</property>
+                                        <style>
+                                            <class name="status-bubble"/>
+                                        </style>
+                                    </object>
+                                </child>
                             </object>
                         </child>
                     </object>
@@ -291,23 +312,6 @@
                     </object>
                 </child>
 
-                <!-- status bar: shows the hovered link URL -->
-                <child>
-                    <object class="GtkLabel" id="statusbar">
-                        <property name="visible">True</property>
-                        <property name="can-focus">False</property>
-                        <property name="valign">end</property>
-                        <property name="vexpand">False</property>
-                        <property name="halign">start</property>
-                        <property name="xalign">0</property>
-                        <property name="single-line-mode">True</property>
-                        <property name="ellipsize">end</property>
-                        <property name="margin-start">6</property>
-                        <property name="margin-end">6</property>
-                        <property name="margin-top">2</property>
-                        <property name="margin-bottom">2</property>
-                    </object>
-                </child>
             </object>
         </child>
     </template>

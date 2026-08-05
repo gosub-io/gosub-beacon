@@ -33,8 +33,12 @@ impl BrowserWindow {
         let builder = gtk4::Builder::from_resource("/io/gosub/beacon/ui/main_menu.ui");
         let menubar = builder.object::<gio::MenuModel>("app-menu").expect("Could not find app-menu");
 
-        app.set_menubar(Some(&menubar));
-        window.set_show_menubar(true);
+        // The menubar lives inside the headerbar (left of the tab strip) instead
+        // of occupying its own row.
+        window.set_show_menubar(false);
+        let menu_bar = gtk4::PopoverMenuBar::from_model(Some(&menubar));
+        menu_bar.add_css_class("header-menubar");
+        window.imp().headerbar.pack_start(&menu_bar);
 
         Self::connect_actions(app, &window);
         Self::connect_accelerators(app, &window);

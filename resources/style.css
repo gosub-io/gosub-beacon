@@ -108,18 +108,53 @@ box.sidebar button:active {
 /* ── Address bar ─────────────────────────────────────────────────────────── */
 
 entry.address-bar {
-    border-radius: 10px;
-    padding: 4px 8px;
+    border-radius: 8px;
+    padding: 1px 8px;
+    min-height: 26px;
+    font-size: 13px;
+}
+box.nav-toolbar button {
+    min-height: 26px;
+    min-width: 26px;
+    padding: 2px 5px;
 }
 
-/* ── Tab row (full-width, under the menubar) ─────────────────────────────── */
+/* Hover-URL bubble overlaid on the viewport (bottom-left, Firefox style). */
+label.status-bubble {
+    background: @theme_bg_color;
+    color: @theme_fg_color;
+    border-top: 1px solid alpha(@theme_fg_color, 0.15);
+    border-right: 1px solid alpha(@theme_fg_color, 0.15);
+    border-radius: 0 6px 0 0;
+    padding: 2px 10px;
+    font-size: 12px;
+}
 
+/* ── Headerbar: menu + tabs + window controls in one row ─────────────────── */
+
+headerbar {
+    min-height: 34px;
+    padding: 0 4px;
+}
+headerbar > windowhandle > box > box.start > label,
+headerbar .title {
+    font-size: 13px;
+}
+
+/* Full-width tab row under the titlebar. */
 box.tab-row {
     padding: 2px 6px;
     background: alpha(@theme_fg_color, 0.04);
     border-bottom: 1px solid alpha(@theme_fg_color, 0.08);
 }
-box.tab-row button.new-tab {
+menubar.header-menubar {
+    background: transparent;
+}
+menubar.header-menubar > item {
+    padding: 4px 8px;
+    border-radius: 6px;
+}
+button.new-tab {
     padding: 0 6px;
     min-height: 20px;
 }
@@ -127,7 +162,7 @@ box.tab-row button.new-tab {
 /* ── Bookmarks strip ─────────────────────────────────────────────────────── */
 
 box.bookmarks-bar {
-    padding: 1px 8px;
+    padding: 0 8px 2px 8px;
     border-bottom: 1px solid alpha(@theme_fg_color, 0.08);
 }
 box.bookmarks-bar button {

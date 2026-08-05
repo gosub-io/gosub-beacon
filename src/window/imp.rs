@@ -57,6 +57,8 @@ pub struct BrowserWindow {
     #[template_child]
     pub btn_next: TemplateChild<Button>,
     #[template_child]
+    pub headerbar: TemplateChild<gtk4::HeaderBar>,
+    #[template_child]
     pub tab_strip: TemplateChild<gtk4::Box>,
     #[template_child]
     pub content_stack: TemplateChild<Stack>,
@@ -87,6 +89,7 @@ impl Default for BrowserWindow {
             searchbar: TemplateChild::default(),
             btn_prev: TemplateChild::default(),
             btn_next: TemplateChild::default(),
+            headerbar: TemplateChild::default(),
             tab_strip: TemplateChild::default(),
             content_stack: TemplateChild::default(),
             log_scroller: TemplateChild::default(),
@@ -470,14 +473,20 @@ impl BrowserWindow {
             label_vbox.append(&img);
         }
 
-        // Ellipsize instead of truncating: byte-truncation panics on multi-byte
-        // titles, and fixed char bounds keep all tabs the same width.
-        let tab_label = gtk4::Label::new(Some(tab.title()));
+        // Until the engine reports real page titles, tab titles are URLs; show
+        // just the host so tabs read like a browser, not a log file. Ellipsize
+        // instead of truncating (byte-truncation panics on multi-byte titles)
+        // and keep fixed char bounds so all tabs are the same width. No hexpand:
+        // chips must stay content-sized, not divide the strip between them.
+        let display_title = url::Url::parse(tab.title())
+            .ok()
+            .and_then(|u| u.host_str().map(str::to_string))
+            .unwrap_or_else(|| tab.title().to_string());
+        let tab_label = gtk4::Label::new(Some(&display_title));
         tab_label.set_ellipsize(gtk4::pango::EllipsizeMode::End);
         tab_label.set_width_chars(12);
         tab_label.set_max_width_chars(16);
         tab_label.set_xalign(0.0);
-        tab_label.set_hexpand(true);
         label_vbox.append(&tab_label);
 
         let tab_close_button = Button::builder()
@@ -1096,7 +1105,9 @@ impl BrowserWindow {
                     return;
                 };
                 if self.active_tab_id() == Some(our_id) {
-                    self.statusbar.set_text(url.as_deref().unwrap_or(""));
+                    let text = url.as_deref().unwrap_or("");
+                    self.statusbar.set_text(text);
+                    self.statusbar.set_visible(!text.is_empty());
                 }
             }
             _ => {}
