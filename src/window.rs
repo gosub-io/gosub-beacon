@@ -7,7 +7,6 @@ mod tab_context_menu;
 
 use crate::application::Application;
 use crate::runtime;
-use crate::window::imp::WidgetExtTabId;
 use crate::window::message::Message;
 use gtk4::gio;
 use gtk4::gio::SimpleAction;
@@ -128,47 +127,7 @@ impl BrowserWindow {
         });
         app.add_action(&new_tab_action);
 
-        let tab_bar = window.imp().tab_bar.clone();
-        tab_bar.connect_page_added({
-            let window_clone = window.clone();
-            move |_notebook, _, page_num| {
-                window_clone
-                    .imp()
-                    .log(format!("[result] added a tab on page {}", page_num).as_str());
-            }
-        });
-
-        tab_bar.connect_page_removed({
-            let window_clone = window.clone();
-            move |_notebook, _widget, page_num| {
-                window_clone.imp().log(format!("[result] removed tab: {}", page_num).as_str());
-            }
-        });
-
-        tab_bar.connect_page_reordered({
-            let window_clone = window.clone();
-            move |_notebook, page, page_num| {
-                window_clone
-                    .imp()
-                    .log(format!("[result] reordered tab: [{:?}] to {}", page.get_tab_id(), page_num).as_str());
-            }
-        });
-
-        tab_bar.connect_switch_page({
-            let window_clone = window.clone();
-            move |_notebook, page, page_num| {
-                window_clone.imp().log(format!("[result] switched to tab: {}", page_num).as_str());
-
-                if let Some(tab_id) = page.get_tab_id() {
-                    let manager = window_clone.imp().tab_manager.lock().unwrap();
-                    let tab = manager.get_tab(tab_id).unwrap();
-                    window_clone.imp().searchbar.set_text(tab.url().as_str());
-                    drop(manager);
-
-                    // Back/forward availability is per-tab.
-                    window_clone.imp().update_nav_buttons();
-                }
-            }
-        });
+        // Tab switching (chip clicks) is handled by `imp::BrowserWindow::activate_tab`,
+        // which also syncs the address bar and nav buttons.
     }
 }

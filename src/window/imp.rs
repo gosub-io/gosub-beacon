@@ -14,8 +14,8 @@ use gtk4::graphene::Point;
 use gtk4::prelude::*;
 use gtk4::subclass::prelude::*;
 use gtk4::{
-    gdk, glib, Button, CompositeTemplate, DrawingArea, Entry, GestureClick, Image, Notebook, Popover, PopoverMenu, PopoverMenuFlags,
-    ScrolledWindow, Settings, TemplateChild, TextView, ToggleButton, Widget,
+    gdk, glib, Button, CompositeTemplate, DrawingArea, Entry, GestureClick, Image, Popover, PopoverMenu, PopoverMenuFlags,
+    ScrolledWindow, Settings, Stack, TemplateChild, TextView, ToggleButton, Widget,
 };
 use log::info;
 use once_cell::sync::Lazy;
@@ -57,7 +57,9 @@ pub struct BrowserWindow {
     #[template_child]
     pub btn_next: TemplateChild<Button>,
     #[template_child]
-    pub tab_bar: TemplateChild<Notebook>,
+    pub tab_strip: TemplateChild<gtk4::Box>,
+    #[template_child]
+    pub content_stack: TemplateChild<Stack>,
     #[template_child]
     pub log_scroller: TemplateChild<ScrolledWindow>,
     #[template_child]
@@ -85,7 +87,8 @@ impl Default for BrowserWindow {
             searchbar: TemplateChild::default(),
             btn_prev: TemplateChild::default(),
             btn_next: TemplateChild::default(),
-            tab_bar: TemplateChild::default(),
+            tab_strip: TemplateChild::default(),
+            content_stack: TemplateChild::default(),
             log_scroller: TemplateChild::default(),
             log: TemplateChild::default(),
             statusbar: TemplateChild::default(),
@@ -147,13 +150,30 @@ impl ApplicationWindowImpl for BrowserWindow {}
 #[gtk4::template_callbacks]
 impl BrowserWindow {
     #[template_callback]
-    fn handle_new_tab(&self, _btn: &Button) {
-        todo!("not yet implemented");
+    fn handle_sidebar_home(&self, _btn: &Button) {
+        let Some(tab_id) = self.active_tab_id() else {
+            return;
+        };
+        let sender = self.get_sender();
+        let _ = sender.send_blocking(Message::LoadUrl(tab_id, "https://gosub.io".into()));
     }
 
     #[template_callback]
-    fn handle_close_tab(&self, _btn: &Button) {
-        todo!("not yet implemented");
+    fn handle_sidebar_todo(&self, _btn: &Button) {
+        self.log("Not implemented yet");
+    }
+
+    /// Bookmarks-bar buttons carry their URL in the widget `name` property.
+    #[template_callback]
+    fn handle_bookmark_clicked(&self, btn: &Button) {
+        let url = btn.widget_name();
+        if !url.starts_with("http") {
+            return;
+        }
+        let Some(tab_id) = self.active_tab_id() else {
+            return;
+        };
+        let _ = self.get_sender().send_blocking(Message::LoadUrl(tab_id, url.to_string()));
     }
 
     #[template_callback]
@@ -211,24 +231,13 @@ impl BrowserWindow {
 
     #[template_callback]
     async fn handle_searchbar_clicked(&self, entry: &Entry) {
-        let Some(page_num) = self.tab_bar.current_page() else {
+        let Some(tab_id) = self.active_tab_id() else {
             self.log("No active tab to load the URL");
             return;
         };
-
-        match self.tab_bar.nth_page(Some(page_num)) {
-            Some(page) => {
-                self.log(format!("Visiting the URL {}", entry.text().as_str()).as_str());
-
-                let tab_id = page.get_tab_id().unwrap();
-                let url_str = entry.text().to_string();
-
-                self.sender.send(Message::LoadUrl(tab_id, url_str)).await.unwrap();
-            }
-            None => {
-                self.log("No active tab to load the URL");
-            }
-        }
+        self.log(format!("Visiting the URL {}", entry.text().as_str()).as_str());
+        let url_str = entry.text().to_string();
+        self.sender.send(Message::LoadUrl(tab_id, url_str)).await.unwrap();
     }
 }
 
@@ -271,46 +280,63 @@ impl BrowserWindow {
         for cmd in commands {
             match cmd {
                 TabCommand::Activate(tab_id) => {
-                    let page_num = self.get_page_num_for_tab(tab_id);
-                    self.tab_bar.set_current_page(page_num);
+                    self.activate_tab(tab_id);
                 }
                 TabCommand::Insert(tab_id, position) => {
                     let manager = self.tab_manager.lock().unwrap();
                     let tab = manager.get_tab(tab_id).unwrap().clone();
                     drop(manager);
 
-                    let label = self.create_tab_label(&tab);
-                    let default_page = self.generate_default_page();
+                    let chip = self.create_tab_chip(&tab);
+                    let sibling = if position == 0 {
+                        None
+                    } else {
+                        self.chips().get(position as usize - 1).cloned()
+                    };
+                    self.tab_strip.insert_child_after(&chip, sibling.as_ref());
 
-                    let notebook_box = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
-                    notebook_box.append(&default_page);
-                    notebook_box.set_tab_id(tab.id());
-                    self.tab_bar.insert_page(&notebook_box, Some(&label), Some(position));
+                    let page = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+                    page.append(&self.generate_default_page());
+                    page.set_tab_id(tab.id());
+                    self.content_stack.add_child(&page);
 
-                    // We can reorder tab, unless it's pinned/pinned
-                    if let Some(page) = self.tab_bar.nth_page(Some(position)) {
-                        self.tab_bar.set_tab_reorderable(&page, !tab.is_pinned());
+                    // The stack shows its first child automatically; mirror that on the chip.
+                    if self.content_stack.visible_child().as_ref() == Some(page.upcast_ref()) {
+                        chip.set_active(true);
                     }
                 }
                 TabCommand::Close(tab_id) => {
-                    let page_num = self.get_page_num_for_tab(tab_id);
-                    self.tab_bar.remove_page(page_num);
+                    if let Some(chip) = self.chip_for_tab(tab_id) {
+                        self.tab_strip.remove(&chip);
+                    }
+                    if let Some(page) = self.page_for_tab(tab_id) {
+                        self.content_stack.remove(&page);
+                    }
+                    self.render_areas.borrow_mut().remove(&tab_id);
                 }
                 TabCommand::CloseAll => {
-                    for _ in 0..self.tab_bar.pages().n_items() {
-                        self.tab_bar.remove_page(Some(0));
+                    while let Some(chip) = self.tab_strip.first_child() {
+                        self.tab_strip.remove(&chip);
                     }
+                    while let Some(page) = self.content_stack.first_child() {
+                        self.content_stack.remove(&page);
+                    }
+                    self.render_areas.borrow_mut().clear();
                 }
                 TabCommand::Move(tab_id, position) => {
-                    let page_num = self.get_page_num_for_tab(tab_id);
-                    let page = self.tab_bar.nth_page(page_num).unwrap();
-                    self.tab_bar.reorder_child(&page, Some(position));
+                    if let Some(chip) = self.chip_for_tab(tab_id) {
+                        let sibling = if position == 0 {
+                            None
+                        } else {
+                            self.chips().into_iter().filter(|c| *c != chip).nth(position as usize - 1)
+                        };
+                        self.tab_strip.reorder_child_after(&chip, sibling.as_ref());
+                    }
                 }
                 TabCommand::Update(tab_id) => {
                     let manager = self.tab_manager.lock().unwrap();
                     let tab = manager.get_tab(tab_id).unwrap().clone();
                     drop(manager);
-                    let page_num = self.get_page_num_for_tab(tab_id).unwrap();
 
                     // Either an engine-backed render area (once the tab has an engine tab),
                     // or the default gosub splash page.
@@ -320,22 +346,92 @@ impl BrowserWindow {
                         self.generate_default_page().upcast::<Widget>()
                     };
 
-                    // Since a tab contains a box, we just update the child inside the box. This way
-                    // we do not need to remove the actual page from the notebook, which results in all
-                    // kind of issues.
-                    let page = self.tab_bar.nth_page(Some(page_num)).unwrap();
-                    let notebox_box = page.downcast_ref::<gtk4::Box>().unwrap();
-                    notebox_box.remove(&notebox_box.first_child().unwrap());
-                    notebox_box.append(&child);
+                    // The stack page is a box wrapper; swap only its inner child so the
+                    // page itself (and the visible-child state) stays put.
+                    if let Some(page) = self.page_for_tab(tab_id) {
+                        let page_box = page.downcast_ref::<gtk4::Box>().unwrap();
+                        if let Some(old) = page_box.first_child() {
+                            page_box.remove(&old);
+                        }
+                        page_box.append(&child);
+                    }
 
-                    // We update the tab label as well
-                    let tab_label = self.create_tab_label(&tab);
-                    self.tab_bar.set_tab_label(notebox_box, Some(&tab_label));
-
-                    // self.tab_bar.set_current_page(Some(page_num));
+                    if let Some(chip) = self.chip_for_tab(tab_id) {
+                        chip.set_child(Some(&self.create_tab_label(&tab)));
+                        if tab.is_pinned() {
+                            chip.add_css_class("pinned");
+                        } else {
+                            chip.remove_css_class("pinned");
+                        }
+                    }
                 }
             }
         }
+    }
+
+    /// All tab chips in strip order.
+    fn chips(&self) -> Vec<ToggleButton> {
+        let mut out = Vec::new();
+        let mut child = self.tab_strip.first_child();
+        while let Some(widget) = child {
+            child = widget.next_sibling();
+            if let Ok(chip) = widget.downcast::<ToggleButton>() {
+                out.push(chip);
+            }
+        }
+        out
+    }
+
+    fn chip_for_tab(&self, tab_id: TabId) -> Option<ToggleButton> {
+        self.chips().into_iter().find(|c| c.get_tab_id() == Some(tab_id))
+    }
+
+    fn page_for_tab(&self, tab_id: TabId) -> Option<Widget> {
+        let mut child = self.content_stack.first_child();
+        while let Some(widget) = child {
+            if widget.get_tab_id() == Some(tab_id) {
+                return Some(widget);
+            }
+            child = widget.next_sibling();
+        }
+        None
+    }
+
+    /// Make `tab_id` the visible tab: check its chip, show its page, and sync
+    /// the address bar and nav buttons (the old notebook switch-page handler).
+    pub(crate) fn activate_tab(&self, tab_id: TabId) {
+        for chip in self.chips() {
+            chip.set_active(chip.get_tab_id() == Some(tab_id));
+        }
+        if let Some(page) = self.page_for_tab(tab_id) {
+            self.content_stack.set_visible_child(&page);
+        }
+
+        let manager = self.tab_manager.lock().unwrap();
+        if let Some(tab) = manager.get_tab(tab_id) {
+            self.searchbar.set_text(tab.url().as_str());
+        }
+        drop(manager);
+        self.update_nav_buttons();
+    }
+
+    /// A tab chip: toggle button in the strip whose child is the tab label.
+    fn create_tab_chip(&self, tab: &GosubTab) -> ToggleButton {
+        let chip = ToggleButton::new();
+        chip.set_has_frame(false);
+        chip.add_css_class("tab-chip");
+        if tab.is_pinned() {
+            chip.add_css_class("pinned");
+        }
+        chip.set_child(Some(&self.create_tab_label(tab)));
+        chip.set_tab_id(tab.id());
+
+        let window_clone = self.obj().clone();
+        let tab_id = tab.id();
+        chip.connect_clicked(move |_| {
+            window_clone.imp().activate_tab(tab_id);
+        });
+        chip
     }
 
     fn create_pinned_tab_label(&self, tab: &GosubTab) -> Widget {
@@ -364,6 +460,13 @@ impl BrowserWindow {
         } else if let Some(favicon) = &tab.favicon() {
             let img = Image::from_paintable(Some(&favicon.clone()));
             img.set_pixel_size(16);
+            label_vbox.append(&img);
+        } else {
+            // No favicon (yet): a globe placeholder keeps the slot occupied so
+            // tabs don't jump when the real icon arrives.
+            let img = Image::from_icon_name("web-browser-symbolic");
+            img.set_pixel_size(16);
+            img.add_css_class("dim-label");
             label_vbox.append(&img);
         }
 
@@ -510,10 +613,9 @@ impl BrowserWindow {
         });
     }
 
-    /// The tab id of the currently active notebook page, if any.
+    /// The tab id of the currently visible stack page, if any.
     fn active_tab_id(&self) -> Option<TabId> {
-        let cur = self.tab_bar.current_page()?;
-        self.tab_bar.nth_page(Some(cur))?.get_tab_id()
+        self.content_stack.visible_child()?.get_tab_id()
     }
 
     /// Navigate the active tab to its parent history node (the Back button).
@@ -669,12 +771,8 @@ impl BrowserWindow {
                 self.open_tab(None, &url, &title);
             }
             Message::OpenTabRight(target_tab_id, url, title) => {
-                for page_num in 0..self.tab_bar.pages().n_items() {
-                    let page = self.tab_bar.nth_page(Some(page_num)).unwrap();
-                    if page.get_tab_id().unwrap() == target_tab_id {
-                        self.open_tab(Some(page_num as usize + 1), &url, &title);
-                        return;
-                    }
+                if let Some(pos) = self.get_page_num_for_tab(target_tab_id) {
+                    self.open_tab(Some(pos as usize + 1), &url, &title);
                 }
             }
 
@@ -717,6 +815,29 @@ impl BrowserWindow {
                 // Update tab-bar
                 self.refresh_tabs();
             }
+            Message::FaviconLoaded(tab_id, bytes) => {
+                // PixbufLoader handles ICO (the common favicon format), which
+                // gdk::Texture::from_bytes does not reliably decode.
+                let loader = gtk4::gdk_pixbuf::PixbufLoader::new();
+                let texture = loader
+                    .write(&bytes)
+                    .and_then(|_| loader.close())
+                    .ok()
+                    .and_then(|_| loader.pixbuf())
+                    .map(|pixbuf| gdk::Texture::for_pixbuf(&pixbuf));
+                let Some(texture) = texture else {
+                    self.log("Could not decode favicon");
+                    return;
+                };
+
+                let mut manager = self.tab_manager.lock().unwrap();
+                if let Some(mut tab) = manager.get_tab(tab_id) {
+                    tab.set_favicon(Some(texture));
+                    manager.update_tab(tab_id, &tab);
+                }
+                drop(manager);
+                self.refresh_tabs();
+            }
             Message::UnpinTab(tab_id) => {
                 let mut manager = self.tab_manager.lock().unwrap();
                 manager.unpin_tab(tab_id);
@@ -728,16 +849,9 @@ impl BrowserWindow {
         }
     }
 
-    /// Retrieves the page number for the given TabID
+    /// Retrieves the strip position for the given TabID
     fn get_page_num_for_tab(&self, tab_id: TabId) -> Option<u32> {
-        for i in 0..self.tab_bar.pages().n_items() {
-            let page = self.tab_bar.nth_page(Some(i)).unwrap();
-            if page.get_tab_id().unwrap() == tab_id {
-                return Some(i);
-            }
-        }
-
-        None
+        self.chips().iter().position(|c| c.get_tab_id() == Some(tab_id)).map(|i| i as u32)
     }
 
     /// Opens a new tab at the given position, with the given URL and title. If the position is None,
@@ -935,10 +1049,12 @@ impl BrowserWindow {
                     return;
                 };
                 if let NavigationEvent::Finished { url, .. } = event {
+                    let mut need_favicon = false;
                     let mut manager = self.tab_manager.lock().unwrap();
                     if let Some(mut tab) = manager.get_tab(our_id) {
                         tab.set_loading(false);
                         tab.set_title(url.as_str());
+                        need_favicon = tab.favicon().is_none();
 
                         // Record history: a history-driven (back/forward) navigation only moved
                         // the cursor, so don't push; any other navigation appends a new entry
@@ -959,6 +1075,19 @@ impl BrowserWindow {
                     }
                     self.refresh_tabs();
                     self.update_nav_buttons();
+
+                    // Fetch the site's favicon off-thread; bytes come back as a
+                    // FaviconLoaded message and are decoded on the GTK side.
+                    if need_favicon {
+                        let sender = self.get_sender();
+                        let page_url = url.to_string();
+                        runtime().spawn(async move {
+                            let bytes = fetcher::fetch_favicon(&page_url).await;
+                            if !bytes.is_empty() {
+                                let _ = sender.send(Message::FaviconLoaded(our_id, bytes)).await;
+                            }
+                        });
+                    }
                 }
             }
             EngineEvent::HoverUrl { tab_id, url } => {
@@ -966,13 +1095,7 @@ impl BrowserWindow {
                 let Some(our_id) = self.engine_tab_map.borrow().get(&tab_id).copied() else {
                     return;
                 };
-                let is_active = self
-                    .tab_bar
-                    .current_page()
-                    .and_then(|cur| self.tab_bar.nth_page(Some(cur)))
-                    .and_then(|page| page.get_tab_id())
-                    == Some(our_id);
-                if is_active {
+                if self.active_tab_id() == Some(our_id) {
                     self.statusbar.set_text(url.as_deref().unwrap_or(""));
                 }
             }

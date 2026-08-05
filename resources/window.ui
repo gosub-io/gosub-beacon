@@ -3,60 +3,116 @@
     <template class="BrowserWindow" parent="GtkApplicationWindow">
         <property name="title">Gosub Beacon</property>
 
+        <!-- Row 1: plain titlebar (window controls only; menubar renders below it) -->
         <child type="titlebar">
             <object class="GtkHeaderBar" id="headerbar">
                 <property name="show-title-buttons">True</property>
             </object>
         </child>
 
-    <!-- main menu here -->
-
         <child>
             <object class="GtkBox">
                 <property name="orientation">vertical</property>
-                <property name="margin-top">12</property>
+
+                <!-- Row 3: full-width tab strip -->
                 <child>
-    <!-- url bar -->
+                    <object class="GtkBox">
+                        <property name="orientation">horizontal</property>
+                        <property name="spacing">2</property>
+                        <style>
+                            <class name="tab-row"/>
+                        </style>
+                        <child>
+                            <object class="GtkScrolledWindow">
+                                <property name="hscrollbar-policy">external</property>
+                                <property name="vscrollbar-policy">never</property>
+                                <property name="hexpand">True</property>
+                                <child>
+                                    <object class="GtkBox" id="tab_strip">
+                                        <property name="orientation">horizontal</property>
+                                        <property name="spacing">2</property>
+                                    </object>
+                                </child>
+                            </object>
+                        </child>
+                        <child>
+                            <object class="GtkButton">
+                                <property name="has-frame">false</property>
+                                <property name="tooltip-text">New tab</property>
+                                <property name="action-name">app.open-new-tab</property>
+                                <property name="valign">center</property>
+                                <style>
+                                    <class name="new-tab"/>
+                                </style>
+                                <child>
+                                    <object class="GtkImage">
+                                        <property name="icon-name">list-add-symbolic</property>
+                                    </object>
+                                </child>
+                            </object>
+                        </child>
+                    </object>
+                </child>
+
+                <!-- Row 4: navigation toolbar -->
+                <child>
                     <object class="GtkBox">
                         <property name="orientation">horizontal</property>
                         <property name="spacing">5</property>
-                        <property name="margin-start">12</property>
-                        <property name="margin-end">12</property>
+                        <property name="margin-start">8</property>
+                        <property name="margin-end">8</property>
+                        <property name="margin-top">4</property>
+                        <property name="margin-bottom">4</property>
+                        <style>
+                            <class name="nav-toolbar"/>
+                        </style>
                         <child>
                             <object class="GtkButton" id="btn_prev">
+                                <property name="has-frame">false</property>
                                 <signal name="clicked" handler="handle_prev_clicked" swapped="true"/>
                                 <child>
                                     <object class="GtkImage">
-                                        <property name="icon-name">go-previous</property>
+                                        <property name="icon-name">go-previous-symbolic</property>
                                     </object>
                                 </child>
                             </object>
                         </child>
                         <child>
                             <object class="GtkButton" id="btn_next">
+                                <property name="has-frame">false</property>
                                 <signal name="clicked" handler="handle_next_clicked" swapped="true"/>
                                 <child>
                                     <object class="GtkImage">
-                                        <property name="icon-name">go-next</property>
+                                        <property name="icon-name">go-next-symbolic</property>
                                     </object>
                                 </child>
                             </object>
                         </child>
                         <child>
-                            <object class="GtkSeparator"/>
-                        </child>
-                        <child>
                             <object class="GtkButton" id="btn_refresh">
+                                <property name="has-frame">false</property>
                                 <signal name="clicked" handler="handle_refresh_clicked" swapped="true"/>
                                 <child>
                                     <object class="GtkImage">
-                                        <property name="icon-name">view-refresh</property>
+                                        <property name="icon-name">view-refresh-symbolic</property>
                                     </object>
                                 </child>
+                            </object>
+                        </child>
+                        <child>
+                            <object class="GtkEntry" id="searchbar">
+                                <signal name="activate" handler="handle_searchbar_clicked" swapped="true"/>
+                                <property name="placeholder-text" translatable="yes">Search or enter address</property>
+                                <property name="primary-icon-name">channel-secure-symbolic</property>
+                                <property name="hexpand">True</property>
+                                <style>
+                                    <class name="address-bar"/>
+                                </style>
                             </object>
                         </child>
                         <child>
                             <object class="GtkButton" id="btn_view_source">
+                                <property name="has-frame">false</property>
                                 <property name="tooltip-text">View source</property>
                                 <signal name="clicked" handler="handle_view_source_clicked" swapped="true"/>
                                 <child>
@@ -67,77 +123,156 @@
                             </object>
                         </child>
                         <child>
-                            <object class="GtkSeparator"/>
-                        </child>
-
-                        <child>
-                            <object class="GtkEntry" id="searchbar">
-                                <signal name="activate" handler="handle_searchbar_clicked" swapped="true"/>
-                                <property name="placeholder-text" translatable="yes">about:gosub</property>
-                                <property name="primary-icon-name">channel-secure</property>
-                                <property name="secondary-icon-name">edit-find</property>
-                                <property name="hexpand">True</property>
-                            </object>
-                        </child>
-                        <child>
                             <object class="GtkToggleButton">
+                                <property name="has-frame">false</property>
+                                <property name="tooltip-text">Dark mode</property>
                                 <signal name="clicked" handler="handle_toggle_darkmode" swapped="true"/>
                                 <child>
                                     <object class="GtkImage">
-                                        <property name="icon-name">weather-clear-symbolic</property>
-                                    </object>
-                                </child>
-                            </object>
-                        </child>
-                        <child>
-                            <object class="GtkButton">
-                                <child>
-                                    <object class="GtkImage">
-                                        <property name="icon-name">preferences-desktop-accessibility-symbolic</property>
-                                    </object>
-                                </child>
-                            </object>
-                        </child>
-                        <child>
-                            <object class="GtkButton">
-                                <child>
-                                    <object class="GtkImage">
-                                        <property name="icon-name">preferences-desktop-keyboard-symbolic</property>
+                                        <property name="icon-name">weather-clear-night-symbolic</property>
                                     </object>
                                 </child>
                             </object>
                         </child>
                     </object>
                 </child>
+
+                <!-- Row 5: slim bookmarks strip -->
                 <child>
-    <!-- tab bar -->
-                    <object class="GtkNotebook" id="tab_bar">
-                        <property name="margin-top">6</property>
-                        <property name="scrollable">true</property>
+                    <object class="GtkBox">
+                        <property name="orientation">horizontal</property>
+                        <property name="spacing">2</property>
                         <style>
-                            <class name="browser-tabs"/>
+                            <class name="bookmarks-bar"/>
                         </style>
-                        <child type="action-end">
+                        <child>
                             <object class="GtkButton">
                                 <property name="has-frame">false</property>
-                                <property name="tooltip-text">New tab</property>
-                                <style>
-                                    <class name="new-tab"/>
-                                </style>
-                                <property name="margin-top">0</property>
-                                <property name="margin-end">0</property>
-                                <property name="margin-start">0</property>
-                                <property name="margin-bottom">0</property>
-                                <child>
-                                    <object class="GtkImage">
-                                        <property name="icon-name">list-add-symbolic</property>
-                                    </object>
-                                </child>
+                                <property name="label">Gosub</property>
+                                <property name="name">https://gosub.io</property>
+                                <signal name="clicked" handler="handle_bookmark_clicked" swapped="true"/>
+                            </object>
+                        </child>
+                        <child>
+                            <object class="GtkButton">
+                                <property name="has-frame">false</property>
+                                <property name="label">GitHub</property>
+                                <property name="name">https://github.com/gosub-io</property>
+                                <signal name="clicked" handler="handle_bookmark_clicked" swapped="true"/>
+                            </object>
+                        </child>
+                        <child>
+                            <object class="GtkButton">
+                                <property name="has-frame">false</property>
+                                <property name="label">Hacker News</property>
+                                <property name="name">https://news.ycombinator.com</property>
+                                <signal name="clicked" handler="handle_bookmark_clicked" swapped="true"/>
                             </object>
                         </child>
                     </object>
                 </child>
-    <!-- log screen -->
+
+                <!-- Row 6: icon rail + viewport -->
+                <child>
+                    <object class="GtkBox">
+                        <property name="orientation">horizontal</property>
+                        <property name="vexpand">True</property>
+                        <child>
+                            <object class="GtkBox" id="sidebar">
+                                <property name="orientation">vertical</property>
+                                <property name="spacing">4</property>
+                                <style>
+                                    <class name="sidebar"/>
+                                </style>
+                                <child>
+                                    <object class="GtkButton">
+                                        <property name="has-frame">false</property>
+                                        <property name="tooltip-text">Home</property>
+                                        <signal name="clicked" handler="handle_sidebar_home" swapped="true"/>
+                                        <child>
+                                            <object class="GtkImage">
+                                                <property name="icon-name">user-home-symbolic</property>
+                                            </object>
+                                        </child>
+                                    </object>
+                                </child>
+                                <child>
+                                    <object class="GtkButton">
+                                        <property name="has-frame">false</property>
+                                        <property name="tooltip-text">Bookmarks</property>
+                                        <signal name="clicked" handler="handle_sidebar_todo" swapped="true"/>
+                                        <child>
+                                            <object class="GtkImage">
+                                                <property name="icon-name">user-bookmarks-symbolic</property>
+                                            </object>
+                                        </child>
+                                    </object>
+                                </child>
+                                <child>
+                                    <object class="GtkButton">
+                                        <property name="has-frame">false</property>
+                                        <property name="tooltip-text">History</property>
+                                        <signal name="clicked" handler="handle_sidebar_todo" swapped="true"/>
+                                        <child>
+                                            <object class="GtkImage">
+                                                <property name="icon-name">document-open-recent-symbolic</property>
+                                            </object>
+                                        </child>
+                                    </object>
+                                </child>
+                                <child>
+                                    <object class="GtkButton">
+                                        <property name="has-frame">false</property>
+                                        <property name="tooltip-text">Downloads</property>
+                                        <signal name="clicked" handler="handle_sidebar_todo" swapped="true"/>
+                                        <child>
+                                            <object class="GtkImage">
+                                                <property name="icon-name">folder-download-symbolic</property>
+                                            </object>
+                                        </child>
+                                    </object>
+                                </child>
+                                <child>
+                                    <object class="GtkBox">
+                                        <property name="vexpand">True</property>
+                                    </object>
+                                </child>
+                                <child>
+                                    <object class="GtkButton">
+                                        <property name="has-frame">false</property>
+                                        <property name="tooltip-text">Log window (Ctrl+L)</property>
+                                        <property name="action-name">app.toggle-log</property>
+                                        <child>
+                                            <object class="GtkImage">
+                                                <property name="icon-name">utilities-terminal-symbolic</property>
+                                            </object>
+                                        </child>
+                                    </object>
+                                </child>
+                                <child>
+                                    <object class="GtkButton">
+                                        <property name="has-frame">false</property>
+                                        <property name="tooltip-text">Settings</property>
+                                        <signal name="clicked" handler="handle_sidebar_todo" swapped="true"/>
+                                        <child>
+                                            <object class="GtkImage">
+                                                <property name="icon-name">emblem-system-symbolic</property>
+                                            </object>
+                                        </child>
+                                    </object>
+                                </child>
+                            </object>
+                        </child>
+                        <child>
+                            <object class="GtkStack" id="content_stack">
+                                <property name="vexpand">True</property>
+                                <property name="hexpand">True</property>
+                            </object>
+                        </child>
+                    </object>
+                </child>
+
+                <!-- log screen -->
                 <child>
                     <object class="GtkScrolledWindow" id="log_scroller">
                         <property name="visible">False</property>
@@ -155,8 +290,9 @@
                         </child>
                     </object>
                 </child>
+
+                <!-- status bar: shows the hovered link URL -->
                 <child>
-    <!-- status bar: shows the hovered link URL -->
                     <object class="GtkLabel" id="statusbar">
                         <property name="visible">True</property>
                         <property name="can-focus">False</property>

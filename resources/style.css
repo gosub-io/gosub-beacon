@@ -33,63 +33,109 @@ scrolledwindow.about-credits-scroller > viewport {
     background: transparent;
 }
 
-/* ── Tab bar: chip-style tabs instead of the stock notebook look ─────────── */
+/* ── Tab chips (in the headerbar) ────────────────────────────────────────── */
 
-notebook.browser-tabs > header {
-    background: transparent;
-    border: none;
-    padding: 2px 6px;
-}
-notebook.browser-tabs > header > tabs {
-    background: transparent;
-}
-notebook.browser-tabs > header > tabs > tab {
-    margin: 3px 2px;
-    padding: 3px 10px;
-    min-height: 26px;
-    border-radius: 8px;
-    border: none;
-    outline: none;
-    box-shadow: none;
+button.tab-chip {
+    margin: 0;
+    padding: 1px 8px;
+    min-height: 20px;
+    border-radius: 7px;
     background: transparent;
     transition: background 150ms ease;
 }
-notebook.browser-tabs > header > tabs > tab:hover {
+button.tab-chip:hover {
     background: alpha(@theme_fg_color, 0.07);
 }
-notebook.browser-tabs > header > tabs > tab:checked {
+button.tab-chip:checked {
     background: alpha(@theme_fg_color, 0.13);
 }
-notebook.browser-tabs > header > tabs > tab:checked:hover {
+button.tab-chip:checked:hover {
     background: alpha(@theme_fg_color, 0.16);
+}
+button.tab-chip.pinned {
+    padding: 2px 6px;
 }
 
 /* Close button: appears on hover/active tabs only, circular hover halo. */
-notebook.browser-tabs tab button.tab-close {
-    padding: 1px;
-    min-width: 18px;
-    min-height: 18px;
+button.tab-chip button.tab-close {
+    padding: 0;
+    min-width: 16px;
+    min-height: 16px;
     border-radius: 50%;
     background: transparent;
     opacity: 0;
     transition: opacity 150ms ease, background 150ms ease;
 }
-notebook.browser-tabs tab:hover button.tab-close,
-notebook.browser-tabs tab:checked button.tab-close {
+button.tab-chip:hover button.tab-close,
+button.tab-chip:checked button.tab-close {
     opacity: 1;
 }
-notebook.browser-tabs tab button.tab-close:hover {
+button.tab-chip button.tab-close:hover {
     background: alpha(@theme_fg_color, 0.15);
 }
 
-/* New-tab (+) button in the action area. */
-notebook.browser-tabs > header button.new-tab {
-    margin: 3px 2px;
+/* New-tab (+) button next to the strip. */
+button.new-tab {
     padding: 2px 8px;
     border-radius: 8px;
     background: transparent;
     transition: background 150ms ease;
 }
-notebook.browser-tabs > header button.new-tab:hover {
+button.new-tab:hover {
+    background: alpha(@theme_fg_color, 0.07);
+}
+
+/* ── Sidebar: fixed Beacon-navy icon rail ────────────────────────────────── */
+
+box.sidebar {
+    background: #0d1b2a;
+    padding: 6px 5px;
+}
+box.sidebar button {
+    padding: 9px;
+    border-radius: 8px;
+    background: transparent;
+    color: #c9d4e3;
+    transition: background 150ms ease;
+}
+box.sidebar button:hover {
+    background: alpha(#ffffff, 0.12);
+}
+box.sidebar button:active {
+    background: alpha(#ffffff, 0.18);
+}
+
+/* ── Address bar ─────────────────────────────────────────────────────────── */
+
+entry.address-bar {
+    border-radius: 10px;
+    padding: 4px 8px;
+}
+
+/* ── Tab row (full-width, under the menubar) ─────────────────────────────── */
+
+box.tab-row {
+    padding: 2px 6px;
+    background: alpha(@theme_fg_color, 0.04);
+    border-bottom: 1px solid alpha(@theme_fg_color, 0.08);
+}
+box.tab-row button.new-tab {
+    padding: 0 6px;
+    min-height: 20px;
+}
+
+/* ── Bookmarks strip ─────────────────────────────────────────────────────── */
+
+box.bookmarks-bar {
+    padding: 1px 8px;
+    border-bottom: 1px solid alpha(@theme_fg_color, 0.08);
+}
+box.bookmarks-bar button {
+    padding: 1px 8px;
+    border-radius: 6px;
+    font-size: 12px;
+    background: transparent;
+}
+box.bookmarks-bar button:hover {
     background: alpha(@theme_fg_color, 0.07);
 }
