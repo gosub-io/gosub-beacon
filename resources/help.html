@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Help — Gosub Beacon</title>
+    <style>
+        body {
+            background-color: #ffffff;
+            color: #14213d;
+            font-family: Cantarell, "DejaVu Sans", sans-serif;
+            margin: 0;
+            padding: 40px 60px;
+        }
+        h1 { font-size: 28px; margin: 0; }
+        .subtitle { color: #6b7280; margin-bottom: 28px; font-size: 15px; }
+        .page { margin-bottom: 16px; }
+        .addr { font-family: monospace; font-size: 15px; color: #1a5fb4; }
+        .planned-addr { font-family: monospace; font-size: 15px; color: #9aa3af; }
+        .badge {
+            font-size: 11px;
+            color: #8a6d1d;
+            background-color: #f5e9c8;
+            padding: 2px 8px;
+            border-radius: 8px;
+        }
+        .desc { color: #4b5563; font-size: 14px; margin-top: 2px; }
+        .footer {
+            margin-top: 48px;
+            padding-top: 12px;
+            border-top: 1px solid #e5e7eb;
+            color: #9aa3af;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Gosub Beacon</h1>
+    <div class="subtitle">Internal pages</div>
+
+    <div class="page">
+        <a class="addr" href="gosub://home">gosub://home</a>
+        <div class="desc">The home page</div>
+    </div>
+    <div class="page">
+        <a class="addr" href="gosub://blank">gosub://blank</a>
+        <div class="desc">An empty page (about:blank is an alias)</div>
+    </div>
+    <div class="page">
+        <a class="addr" href="gosub://help">gosub://help</a>
+        <div class="desc">This page</div>
+    </div>
+
+    <div class="page">
+        <span class="planned-addr">gosub://version</span> <span class="badge">planned</span>
+        <div class="desc">Build, engine and render-backend info</div>
+    </div>
+    <div class="page">
+        <span class="planned-addr">gosub://stats</span> <span class="badge">planned</span>
+        <div class="desc">Per-tab layout/paint timings and memory</div>
+    </div>
+    <div class="page">
+        <span class="planned-addr">gosub://config</span> <span class="badge">planned</span>
+        <div class="desc">Engine settings</div>
+    </div>
+    <div class="page">
+        <span class="planned-addr">gosub://zones</span> <span class="badge">planned</span>
+        <div class="desc">Zones and their storage</div>
+    </div>
+    <div class="page">
+        <span class="planned-addr">gosub://history</span> <span class="badge">planned</span>
+        <div class="desc">Visited pages</div>
+    </div>
+    <div class="page">
+        <span class="planned-addr">gosub://bookmarks</span> <span class="badge">planned</span>
+        <div class="desc">Bookmark management</div>
+    </div>
+
+    <div class="footer">This page is rendered by the Gosub engine.</div>
+</body>
+</html>
