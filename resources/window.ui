@@ -112,11 +112,18 @@
                 <child>
     <!-- tab bar -->
                     <object class="GtkNotebook" id="tab_bar">
-                        <property name="margin-top">12</property>
+                        <property name="margin-top">6</property>
                         <property name="scrollable">true</property>
+                        <style>
+                            <class name="browser-tabs"/>
+                        </style>
                         <child type="action-end">
                             <object class="GtkButton">
                                 <property name="has-frame">false</property>
+                                <property name="tooltip-text">New tab</property>
+                                <style>
+                                    <class name="new-tab"/>
+                                </style>
                                 <property name="margin-top">0</property>
                                 <property name="margin-end">0</property>
                                 <property name="margin-start">0</property>

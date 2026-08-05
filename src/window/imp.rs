@@ -354,7 +354,7 @@ impl BrowserWindow {
     }
 
     fn create_normal_tab_label(&self, tab: &GosubTab) -> Widget {
-        let label_vbox = gtk4::Box::new(gtk4::Orientation::Horizontal, 5);
+        let label_vbox = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
 
         // When the tab is loading, we show a spinner
         if tab.is_loading() {
@@ -362,12 +362,19 @@ impl BrowserWindow {
             spinner.start();
             label_vbox.append(&spinner);
         } else if let Some(favicon) = &tab.favicon() {
-            label_vbox.append(&Image::from_paintable(Some(&favicon.clone())));
+            let img = Image::from_paintable(Some(&favicon.clone()));
+            img.set_pixel_size(16);
+            label_vbox.append(&img);
         }
 
-        let mut title = tab.title().to_string();
-        title.truncate(20);
-        let tab_label = gtk4::Label::new(Some(title.as_str()));
+        // Ellipsize instead of truncating: byte-truncation panics on multi-byte
+        // titles, and fixed char bounds keep all tabs the same width.
+        let tab_label = gtk4::Label::new(Some(tab.title()));
+        tab_label.set_ellipsize(gtk4::pango::EllipsizeMode::End);
+        tab_label.set_width_chars(12);
+        tab_label.set_max_width_chars(16);
+        tab_label.set_xalign(0.0);
+        tab_label.set_hexpand(true);
         label_vbox.append(&tab_label);
 
         let tab_close_button = Button::builder()
@@ -378,7 +385,9 @@ impl BrowserWindow {
             .margin_start(0)
             .margin_top(0)
             .build();
+        tab_close_button.add_css_class("tab-close");
         let img = Image::from_icon_name("window-close-symbolic");
+        img.set_pixel_size(14);
         tab_close_button.set_child(Some(&img));
         label_vbox.append(&tab_close_button);
 

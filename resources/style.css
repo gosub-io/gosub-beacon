@@ -32,3 +32,64 @@ scrolledwindow.about-credits-scroller,
 scrolledwindow.about-credits-scroller > viewport {
     background: transparent;
 }
+
+/* ── Tab bar: chip-style tabs instead of the stock notebook look ─────────── */
+
+notebook.browser-tabs > header {
+    background: transparent;
+    border: none;
+    padding: 2px 6px;
+}
+notebook.browser-tabs > header > tabs {
+    background: transparent;
+}
+notebook.browser-tabs > header > tabs > tab {
+    margin: 3px 2px;
+    padding: 3px 10px;
+    min-height: 26px;
+    border-radius: 8px;
+    border: none;
+    outline: none;
+    box-shadow: none;
+    background: transparent;
+    transition: background 150ms ease;
+}
+notebook.browser-tabs > header > tabs > tab:hover {
+    background: alpha(@theme_fg_color, 0.07);
+}
+notebook.browser-tabs > header > tabs > tab:checked {
+    background: alpha(@theme_fg_color, 0.13);
+}
+notebook.browser-tabs > header > tabs > tab:checked:hover {
+    background: alpha(@theme_fg_color, 0.16);
+}
+
+/* Close button: appears on hover/active tabs only, circular hover halo. */
+notebook.browser-tabs tab button.tab-close {
+    padding: 1px;
+    min-width: 18px;
+    min-height: 18px;
+    border-radius: 50%;
+    background: transparent;
+    opacity: 0;
+    transition: opacity 150ms ease, background 150ms ease;
+}
+notebook.browser-tabs tab:hover button.tab-close,
+notebook.browser-tabs tab:checked button.tab-close {
+    opacity: 1;
+}
+notebook.browser-tabs tab button.tab-close:hover {
+    background: alpha(@theme_fg_color, 0.15);
+}
+
+/* New-tab (+) button in the action area. */
+notebook.browser-tabs > header button.new-tab {
+    margin: 3px 2px;
+    padding: 2px 8px;
+    border-radius: 8px;
+    background: transparent;
+    transition: background 150ms ease;
+}
+notebook.browser-tabs > header button.new-tab:hover {
+    background: alpha(@theme_fg_color, 0.07);
+}
