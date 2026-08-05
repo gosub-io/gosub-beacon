@@ -6,6 +6,8 @@
 
 use std::sync::Arc;
 
+use gtk4::prelude::*;
+
 use gosub_engine::cookies::SqliteCookieStore;
 use gosub_engine::events::EngineEvent;
 use gosub_engine::storage::{InMemorySessionStore, PartitionPolicy, SqliteLocalStore, StorageService};
@@ -15,7 +17,6 @@ use gosub_engine::{DefaultRenderConfig, GosubEngine};
 use gosub_render_pipeline::render::backend::{blend_over_argb_u32, CachedTile, ExternalHandle};
 use gosub_render_pipeline::render::DefaultCompositor;
 use gosub_renderer_cairo::{CairoBackend, PangoFontSystem};
-use parking_lot::RwLock;
 use tokio::runtime::Runtime;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
@@ -130,6 +131,25 @@ impl BrowserEngine {
             .map_err(|e| anyhow::anyhow!("create_tab: {e:?}"))?;
         Ok(tab)
     }
+}
+
+/// Resolve the device-pixel ratio to render at for `widget`.
+///
+/// `GtkWidget::scale_factor()` only ever reports an integer, so on a fractionally
+/// scaled display (e.g. 1.25× or 1.5×, common on Wayland) it returns 1 and the page
+/// is rasterized at logical resolution — the compositor then upscales the whole
+/// surface, blurring text. `GdkSurface::scale()` exposes the true fractional scale;
+/// round it *up* and render at that resolution: downscaling a slightly-too-large
+/// buffer stays sharp, upscaling a too-small one does not.
+pub fn render_dpr(widget: &impl IsA<gtk4::Widget>) -> u32 {
+    let widget = widget.upcast_ref::<gtk4::Widget>();
+    let fractional = widget
+        .native()
+        .and_then(|n| n.surface())
+        .map(|s| s.scale())
+        .filter(|s| *s > 0.0)
+        .unwrap_or_else(|| widget.scale_factor() as f64);
+    fractional.ceil().max(1.0) as u32
 }
 
 /// Blit the latest composited frame for `tab_id` into the cairo context `cr`.
