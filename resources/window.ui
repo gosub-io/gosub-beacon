@@ -56,6 +56,17 @@
                             </object>
                         </child>
                         <child>
+                            <object class="GtkButton" id="btn_view_source">
+                                <property name="tooltip-text">View source</property>
+                                <signal name="clicked" handler="handle_view_source_clicked" swapped="true"/>
+                                <child>
+                                    <object class="GtkImage">
+                                        <property name="icon-name">text-x-generic-symbolic</property>
+                                    </object>
+                                </child>
+                            </object>
+                        </child>
+                        <child>
                             <object class="GtkSeparator"/>
                         </child>
 

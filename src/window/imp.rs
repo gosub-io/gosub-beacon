@@ -3,7 +3,7 @@ use crate::fetcher::address_parser::GosubAddressParser;
 use crate::tab::{GosubTab, GosubTabManager, HistoryNodeId, TabCommand, TabId};
 use crate::window::message::Message;
 use crate::window::tab_context_menu::{build_context_menu, setup_context_menu_actions, TabInfo};
-use crate::runtime;
+use crate::{fetcher, runtime};
 use async_channel::{Receiver, Sender};
 use glib::subclass::InitializingObject;
 use gosub_engine::events::{EngineEvent, NavigationEvent, TabCommand as EngineTabCommand};
@@ -164,6 +164,35 @@ impl BrowserWindow {
     #[template_callback]
     fn handle_next_clicked(&self, btn: &Button) {
         self.navigate_forward(btn);
+    }
+
+    #[template_callback]
+    fn handle_view_source_clicked(&self, _btn: &Button) {
+        let Some(tab_id) = self.active_tab_id() else {
+            self.log("No active tab to view source for");
+            return;
+        };
+        let url = {
+            let manager = self.tab_manager.lock().unwrap();
+            match manager.get_tab(tab_id) {
+                Some(tab) => tab.url().clone(),
+                None => return,
+            }
+        };
+
+        // The engine does not expose the page source, so re-fetch the URL.
+        let sender = self.get_sender();
+        runtime().spawn(async move {
+            match fetcher::fetch_url_body(url.clone()).await {
+                Ok(bytes) => {
+                    let content = String::from_utf8_lossy(&bytes).to_string();
+                    let _ = sender.send(Message::ShowSource(url.to_string(), content)).await;
+                }
+                Err(e) => {
+                    let _ = sender.send(Message::Log(format!("View source failed: {e}"))).await;
+                }
+            }
+        });
     }
 
     #[template_callback]
@@ -579,6 +608,30 @@ impl BrowserWindow {
         popover.popup();
     }
 
+    /// Open a read-only monospace window showing the fetched page source.
+    fn show_source_window(&self, url: &str, content: &str) {
+        let buffer = gtk4::TextBuffer::builder().text(content).build();
+        let view = TextView::builder()
+            .buffer(&buffer)
+            .editable(false)
+            .cursor_visible(false)
+            .monospace(true)
+            .wrap_mode(gtk4::WrapMode::None)
+            .build();
+
+        let scrolled = ScrolledWindow::builder().hexpand(true).vexpand(true).child(&view).build();
+
+        let parent = self.obj();
+        let window = gtk4::Window::builder()
+            .transient_for(&*parent)
+            .title(format!("Source: {url}"))
+            .default_width(800)
+            .default_height(600)
+            .child(&scrolled)
+            .build();
+        window.present();
+    }
+
     /// Enable/disable the back and forward buttons based on the active tab's history.
     pub(crate) fn update_nav_buttons(&self) {
         let (back, forward) = match self.active_tab_id() {
@@ -643,6 +696,9 @@ impl BrowserWindow {
             }
             Message::Log(msg) => {
                 self.log(msg.as_str());
+            }
+            Message::ShowSource(url, content) => {
+                self.show_source_window(&url, &content);
             }
             Message::PinTab(tab_id) => {
                 let mut manager = self.tab_manager.lock().unwrap();

@@ -39,7 +39,7 @@ pub struct BrowserEngine {
     engine: GosubEngine<AppConfig>,
     zone: Zone<AppConfig>,
     /// Shared compositor; clone the `Arc` into draw callbacks to read frames.
-    pub compositor: Arc<RwLock<DefaultCompositor>>,
+    pub compositor: Arc<DefaultCompositor>,
     /// Fires (after `take_redraw_rx`) whenever a new frame is composited.
     redraw_rx: Option<mpsc::UnboundedReceiver<()>>,
     /// Engine event stream. Subscribed before the zone is created (the engine emits
@@ -58,13 +58,15 @@ impl BrowserEngine {
         gosub_renderer_cairo::init_gtk_resources()?;
 
         let (tx_redraw, rx_redraw) = mpsc::unbounded_channel::<()>();
-        let compositor = Arc::new(RwLock::new(DefaultCompositor::new(move || {
+        let compositor = Arc::new(DefaultCompositor::new(move || {
             let _ = tx_redraw.send(());
-        })));
+        }));
 
         let backend = CairoBackend::new();
         let mut engine = GosubEngine::<AppConfig>::new(None, Arc::new(backend), compositor.clone());
-        engine.start()?;
+        // start() hands back the engine main-loop future; it only runs once spawned.
+        let engine_loop = engine.start().map_err(|e| anyhow::anyhow!("engine start: {e:?}"))?;
+        tokio::spawn(engine_loop);
 
         // Subscribe before creating the zone: `create_zone` emits `ZoneCreated` on the
         // event channel, which errors out ("channel closed") if there is no live receiver.
@@ -90,7 +92,7 @@ impl BrowserEngine {
         };
 
         let zone = engine
-            .create_zone(zone_cfg, zone_services, Some(ZoneId::from(DEFAULT_ZONE)))
+            .create_zone(Some(zone_cfg), zone_services, Some(ZoneId::from(DEFAULT_ZONE)))
             .map_err(|e| anyhow::anyhow!("create_zone: {e:?}"))?;
 
         Ok(Self {
@@ -132,8 +134,8 @@ impl BrowserEngine {
 
 /// Blit the latest composited frame for `tab_id` into the cairo context `cr`.
 /// Falls back to a light placeholder when no frame is available yet.
-pub fn draw_frame(compositor: &Arc<RwLock<DefaultCompositor>>, tab_id: EngineTabId, cr: &gtk4::cairo::Context, w: i32, h: i32) {
-    match compositor.read().frame_for(tab_id) {
+pub fn draw_frame(compositor: &Arc<DefaultCompositor>, tab_id: EngineTabId, cr: &gtk4::cairo::Context, w: i32, h: i32) {
+    match compositor.frame_for(tab_id) {
         Some(ExternalHandle::TileCache {
             dpr,
             scroll_x,

@@ -104,11 +104,12 @@ impl Application {
             self,
             "show-about",
             clone!(
-                #[weak(rename_to=_app)]
+                #[weak(rename_to=app)]
                 self,
                 move |_, _| {
                     info!(target: "gtk", "Show about dialog action triggered");
                     let about = About::create_dialog();
+                    about.set_transient_for(app.active_window().as_ref());
                     about.present();
                 }
             )

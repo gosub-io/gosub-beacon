@@ -6,3 +6,29 @@
 /*window {*/
 /*    background-color: rgba(0, 0, 0, 0); !* Fully transparent background *!*/
 /*}*/
+
+/* About dialog: text overlaid on the artwork's white region, so the color is
+   fixed regardless of light/dark theme. */
+.about-info-line {
+    color: #14213d;
+    font-size: 13px;
+}
+.about-info-link {
+    padding: 0;
+    margin-top: 3px;
+    font-size: 13px;
+}
+.about-credits-heading {
+    color: #14213d;
+    font-size: 13px;
+    font-weight: bold;
+}
+.about-credits-name {
+    color: #44506b;
+    font-size: 12px;
+}
+/* The credits column sits on the artwork; keep the scroller transparent. */
+scrolledwindow.about-credits-scroller,
+scrolledwindow.about-credits-scroller > viewport {
+    background: transparent;
+}

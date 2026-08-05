@@ -20,6 +20,9 @@ pub enum Message {
 
     /// Single message to print in the log
     Log(String),
+
+    /// Show the fetched page source (url, source) in a viewer window
+    ShowSource(String, String),
 }
 
 impl Debug for Message {
@@ -32,6 +35,7 @@ impl Debug for Message {
             Message::Log(msg) => write!(f, "Log({})", msg),
             Message::PinTab(tab_id) => write!(f, "PinTab({:?})", tab_id),
             Message::UnpinTab(tab_id) => write!(f, "UnpinTab({:?})", tab_id),
+            Message::ShowSource(url, content) => write!(f, "ShowSource({}, {} bytes)", url, content.len()),
         }
     }
 }

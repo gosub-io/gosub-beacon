@@ -7,5 +7,7 @@
     <gresource prefix="/io/gosub/browser-gtk/assets">
         <file>gosub.svg</file>
         <file>submarine.svg</file>
+        <file>about.png</file>
+        <file>about-credits.png</file>
     </gresource>
 </gresources>
