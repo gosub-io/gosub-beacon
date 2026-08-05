@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <gresources>
-    <gresource prefix="/io/gosub/browser-gtk/ui">
+    <gresource prefix="/io/gosub/beacon/ui">
         <file compressed="true" preprocess="xml-stripblanks">window.ui</file>
         <file compressed="true" preprocess="xml-stripblanks">main_menu.ui</file>
     </gresource>
-    <gresource prefix="/io/gosub/browser-gtk/assets">
+    <gresource prefix="/io/gosub/beacon/assets">
         <file>gosub.svg</file>
         <file>submarine.svg</file>
         <file>about.png</file>

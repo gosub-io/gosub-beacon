@@ -31,7 +31,7 @@ impl BrowserWindow {
         window.set_decorated(true);
         window.set_default_size(1024, 768);
 
-        let builder = gtk4::Builder::from_resource("/io/gosub/browser-gtk/ui/main_menu.ui");
+        let builder = gtk4::Builder::from_resource("/io/gosub/beacon/ui/main_menu.ui");
         let menubar = builder.object::<gio::MenuModel>("app-menu").expect("Could not find app-menu");
 
         app.set_menubar(Some(&menubar));

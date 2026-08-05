@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <interface>
     <template class="BrowserWindow" parent="GtkApplicationWindow">
-        <property name="title">Gosub UserAgent - Browser - v0.0.1</property>
+        <property name="title">Gosub Beacon</property>
 
         <child type="titlebar">
             <object class="GtkHeaderBar" id="headerbar">

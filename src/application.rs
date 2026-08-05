@@ -63,7 +63,7 @@ impl Application {
     pub fn new() -> Self {
         glib::Object::builder()
             .property("application-id", APP_ID)
-            .property("resource-base-path", Some("/io/gosub/browser-gtk"))
+            .property("resource-base-path", Some("/io/gosub/beacon"))
             .build()
     }
 

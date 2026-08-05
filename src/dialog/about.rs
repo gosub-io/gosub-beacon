@@ -98,7 +98,7 @@ impl About {
     /// The branded artwork already contains the logo, tagline and an empty
     /// bottom-left region; only the version block is overlaid as real widgets.
     fn build_art_page() -> Overlay {
-        let picture = Self::scaled_art("/io/gosub/browser-gtk/assets/about.png");
+        let picture = Self::scaled_art("/io/gosub/beacon/assets/about.png");
 
         let info = GtkBox::new(Orientation::Vertical, 2);
         info.set_halign(Align::Start);
@@ -130,7 +130,7 @@ impl About {
     /// Credits artwork keeps the whole left half white; the scrolling credits
     /// column is overlaid there.
     fn build_credits_page() -> Overlay {
-        let picture = Self::scaled_art("/io/gosub/browser-gtk/assets/about-credits.png");
+        let picture = Self::scaled_art("/io/gosub/beacon/assets/about-credits.png");
 
         let list = GtkBox::new(Orientation::Vertical, 4);
         list.set_margin_end(12);

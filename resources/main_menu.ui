@@ -117,7 +117,7 @@
                 <attribute name="action">app.show-help</attribute>
             </item>
             <item>
-                <attribute name="label">About Gosub</attribute>
+                <attribute name="label">About Gosub Beacon</attribute>
                 <attribute name="action">app.show-about</attribute>
             </item>
         </submenu>

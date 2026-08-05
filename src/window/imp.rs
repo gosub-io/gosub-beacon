@@ -48,7 +48,7 @@ impl<T: IsA<Widget>> WidgetExtTabId for T {
 }
 
 #[derive(CompositeTemplate)]
-#[template(resource = "/io/gosub/browser-gtk/ui/window.ui")]
+#[template(resource = "/io/gosub/beacon/ui/window.ui")]
 pub struct BrowserWindow {
     #[template_child]
     pub searchbar: TemplateChild<Entry>,
@@ -347,7 +347,7 @@ impl BrowserWindow {
         }
 
         // No favicon for this pinned tab, so use a default icon
-        let img = Image::from_resource("/io/gosub/browser-gtk/assets/pin.svg");
+        let img = Image::from_resource("/io/gosub/beacon/assets/pin.svg");
         img.set_margin_top(5);
         img.set_margin_bottom(5);
         img.into()
@@ -451,7 +451,7 @@ impl BrowserWindow {
     }
 
     fn generate_default_page(&self) -> gtk4::Widget {
-        let img = Image::from_resource("/io/gosub/browser-gtk/assets/submarine.svg");
+        let img = Image::from_resource("/io/gosub/beacon/assets/submarine.svg");
         img.set_visible(true);
         img.set_focusable(false);
         img.set_valign(gtk4::Align::Center);

@@ -1,9 +1,9 @@
 [package]
-name = "gosub-gtk"
+name = "gosub-beacon"
 version = "0.1.0"
 edition = "2021"
 authors = ["Gosub Community <info@gosub.io>"]
-description = "Gosub browser using GTK"
+description = "Gosub Beacon — a web browser built on the Gosub engine"
 license = "MIT"
 
 [dependencies]

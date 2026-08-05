@@ -77,13 +77,13 @@ impl BrowserEngine {
             .build()
             .map_err(|e| anyhow::anyhow!("ZoneConfig: {e:?}"))?;
 
-        let cookie_store: gosub_engine::cookies::CookieStoreHandle = SqliteCookieStore::new(".gosub-gtk-cookies.db".into())
+        let cookie_store: gosub_engine::cookies::CookieStoreHandle = SqliteCookieStore::new(".gosub-beacon-cookies.db".into())
             .map_err(|e| anyhow::anyhow!("cookie store: {e:?}"))?
             .into();
 
         let zone_services = ZoneServices {
             storage: Arc::new(StorageService::new(
-                Arc::new(SqliteLocalStore::new(".gosub-gtk-local.db").map_err(|e| anyhow::anyhow!("local store: {e:?}"))?),
+                Arc::new(SqliteLocalStore::new(".gosub-beacon-local.db").map_err(|e| anyhow::anyhow!("local store: {e:?}"))?),
                 Arc::new(InMemorySessionStore::new()),
             )),
             cookie_store: Some(cookie_store),

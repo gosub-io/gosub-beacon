@@ -1,4 +1,4 @@
-# Gosub GTK browser prototype
+# Gosub Beacon — GTK browser
 
 This is a prototype of a GTK browser written in Rust. It is a work in progress and is not intended to be used as a real browser bur merely as a test to see how well the Gosub engine can be implemented in a real-life applicaiton.
 

@@ -15,7 +15,7 @@ use gtk4::{gio, CssProvider};
 use std::sync::OnceLock;
 use tokio::runtime::Runtime;
 
-const APP_ID: &str = "io.gosub.browser-gtk";
+const APP_ID: &str = "io.gosub.beacon";
 
 fn runtime() -> &'static Runtime {
     static RUNTIME: OnceLock<Runtime> = OnceLock::new();
