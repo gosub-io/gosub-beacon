@@ -1020,9 +1020,14 @@ impl BrowserWindow {
         });
 
         if let Some(handle) = tab.tab_handle() {
-            // Resize -> tell the engine the new viewport.
+            // Resize -> tell the engine the new viewport. The DPR must be stored
+            // before the viewport lands so the rasterizer renders at physical
+            // resolution — otherwise HiDPI/fractional-scale displays get a 1x
+            // buffer upscaled by the compositor (blurry text).
             let resize_handle = handle.clone();
-            area.connect_resize(move |_area, w, h| {
+            area.connect_resize(move |area, w, h| {
+                use gosub_render_pipeline::render::DEVICE_PIXEL_RATIO;
+                DEVICE_PIXEL_RATIO.store(crate::engine::render_dpr(area), std::sync::atomic::Ordering::Relaxed);
                 let handle = resize_handle.clone();
                 runtime().spawn(async move {
                     let _ = handle
