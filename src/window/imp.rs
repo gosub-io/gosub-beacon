@@ -57,6 +57,8 @@ pub struct BrowserWindow {
     #[template_child]
     pub btn_next: TemplateChild<Button>,
     #[template_child]
+    pub btn_refresh: TemplateChild<Button>,
+    #[template_child]
     pub headerbar: TemplateChild<gtk4::HeaderBar>,
     #[template_child]
     pub tab_strip: TemplateChild<gtk4::Box>,
@@ -89,6 +91,7 @@ impl Default for BrowserWindow {
             searchbar: TemplateChild::default(),
             btn_prev: TemplateChild::default(),
             btn_next: TemplateChild::default(),
+            btn_refresh: TemplateChild::default(),
             headerbar: TemplateChild::default(),
             tab_strip: TemplateChild::default(),
             content_stack: TemplateChild::default(),
@@ -227,9 +230,61 @@ impl BrowserWindow {
         settings.set_property("gtk-application-prefer-dark-theme", btn.is_active());
     }
 
+    /// Reload the active tab — or, while it is loading, stop it (the button
+    /// doubles as a stop button; see `update_reload_button`).
     #[template_callback]
     fn handle_refresh_clicked(&self, _btn: &Button) {
-        self.log("Refreshing the current page");
+        let Some(tab_id) = self.active_tab_id() else {
+            return;
+        };
+        let (loading, url, handle) = {
+            let manager = self.tab_manager.lock().unwrap();
+            match manager.get_tab(tab_id) {
+                Some(tab) => (tab.is_loading(), tab.url().clone(), tab.tab_handle()),
+                None => return,
+            }
+        };
+
+        if loading {
+            if let Some(handle) = handle {
+                runtime().spawn(async move {
+                    let _ = handle.send(EngineTabCommand::CancelNavigation).await;
+                });
+            }
+            let mut manager = self.tab_manager.lock().unwrap();
+            if let Some(mut tab) = manager.get_tab(tab_id) {
+                tab.set_loading(false);
+                manager.update_tab(tab_id, &tab);
+            }
+            drop(manager);
+            self.refresh_tabs();
+            self.log("Stopped loading");
+            return;
+        }
+
+        // Shell-rendered internal pages have nothing to reload; engine-rendered
+        // ones get their HTML pushed again.
+        if Self::is_internal_url(&url) {
+            if Self::engine_rendered_internal(Self::internal_page_name(&url)) {
+                self.load_internal_html(tab_id, &url);
+            }
+            return;
+        }
+
+        let mut manager = self.tab_manager.lock().unwrap();
+        if let Some(mut tab) = manager.get_tab(tab_id) {
+            tab.set_loading(true);
+            manager.update_tab(tab_id, &tab);
+        }
+        drop(manager);
+        self.refresh_tabs();
+
+        if let Some(handle) = handle {
+            runtime().spawn(async move {
+                let _ = handle.send(EngineTabCommand::Reload { ignore_cache: false }).await;
+                let _ = handle.send(EngineTabCommand::ResumeDrawing { fps: 30 }).await;
+            });
+        }
     }
 
     #[template_callback]
@@ -375,6 +430,67 @@ impl BrowserWindow {
                 }
             }
         }
+
+        // Loading state may have changed for the active tab.
+        self.update_reload_button();
+    }
+
+    /// Swap the reload button between reload and stop based on the active
+    /// tab's loading state.
+    pub(crate) fn update_reload_button(&self) {
+        let loading = self
+            .active_tab_id()
+            .and_then(|id| self.tab_manager.lock().unwrap().get_tab(id).map(|t| t.is_loading()))
+            .unwrap_or(false);
+        if loading {
+            self.btn_refresh.set_icon_name("process-stop-symbolic");
+            self.btn_refresh.set_tooltip_text(Some("Stop loading"));
+        } else {
+            self.btn_refresh.set_icon_name("view-refresh-symbolic");
+            self.btn_refresh.set_tooltip_text(Some("Reload"));
+        }
+    }
+
+    /// A navigation failed: clear the loading state and show the error page.
+    fn on_navigation_failed(&self, our_id: TabId, url: &url::Url, error: &str) {
+        // Cancellations (stop button, gosub:// interception) are not errors.
+        if error.to_lowercase().contains("cancel") {
+            return;
+        }
+        if Self::is_internal_url(url) {
+            return;
+        }
+
+        let mut manager = self.tab_manager.lock().unwrap();
+        if let Some(mut tab) = manager.get_tab(our_id) {
+            tab.set_loading(false);
+            manager.update_tab(our_id, &tab);
+        }
+        drop(manager);
+        self.refresh_tabs();
+        self.load_error_page(our_id, url, error);
+    }
+
+    /// Push the branded error page into a tab whose navigation failed.
+    fn load_error_page(&self, tab_id: TabId, url: &url::Url, error: &str) {
+        fn esc(s: &str) -> String {
+            s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+        }
+        let html = include_str!("../../resources/error.html")
+            .replace("{{URL}}", &esc(url.as_str()))
+            .replace("{{ERROR}}", &esc(error));
+
+        let manager = self.tab_manager.lock().unwrap();
+        let Some(handle) = manager.get_tab(tab_id).and_then(|t| t.tab_handle()) else {
+            return;
+        };
+        drop(manager);
+
+        let base_url = url.to_string();
+        runtime().spawn(async move {
+            let _ = handle.send(EngineTabCommand::LoadHtml { html, base_url }).await;
+            let _ = handle.send(EngineTabCommand::ResumeDrawing { fps: 30 }).await;
+        });
     }
 
     /// All tab chips in strip order.
@@ -423,9 +539,11 @@ impl BrowserWindow {
             } else {
                 self.searchbar.set_text(tab.url().as_str());
             }
+            self.obj().set_title(Some(&format!("{} — Gosub Beacon", tab.title())));
         }
         drop(manager);
         self.update_nav_buttons();
+        self.update_reload_button();
     }
 
     /// A tab chip: toggle button in the strip whose child is the tab label.
@@ -1182,6 +1300,15 @@ impl BrowserWindow {
                     }
                 }
 
+                if let NavigationEvent::Failed { url, error, .. } = &event {
+                    self.on_navigation_failed(our_id, url, &error.to_string());
+                    return;
+                }
+                if let NavigationEvent::FailedUrl { url, error, .. } = &event {
+                    self.log(&format!("Cannot load {url}: {error}"));
+                    return;
+                }
+
                 if let NavigationEvent::Finished { url, .. } = event {
                     let mut need_favicon = false;
                     let mut manager = self.tab_manager.lock().unwrap();
@@ -1223,6 +1350,22 @@ impl BrowserWindow {
                             }
                         });
                     }
+                }
+            }
+            EngineEvent::TitleChanged { tab_id, title } => {
+                let Some(our_id) = self.engine_tab_map.borrow().get(&tab_id).copied() else {
+                    return;
+                };
+                let mut manager = self.tab_manager.lock().unwrap();
+                if let Some(mut tab) = manager.get_tab(our_id) {
+                    tab.set_title(&title);
+                    manager.update_tab(our_id, &tab);
+                }
+                drop(manager);
+                self.refresh_tabs();
+
+                if self.active_tab_id() == Some(our_id) {
+                    self.obj().set_title(Some(&format!("{title} — Gosub Beacon")));
                 }
             }
             EngineEvent::HoverUrl { tab_id, url } => {
