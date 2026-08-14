@@ -63,6 +63,14 @@ impl BrowserEngine {
 
         let backend = SkiaBackend::new();
         let mut engine = GosubEngine::<AppConfig>::new(None, Arc::new(backend), compositor.clone());
+
+        // Identify as Beacon on the wire; the engine alone would send only its Gosub
+        // token. Must land before start(), which reads the network settings once.
+        let ua = gosub_engine::net::default_user_agent(Some(concat!("Beacon/", env!("CARGO_PKG_VERSION"))));
+        if let Err(e) = engine.settings().set("net.user_agent", gosub_engine::Setting::String(ua)) {
+            log::warn!("failed to set net.user_agent: {e:?}");
+        }
+
         // start() hands back the engine main-loop future; it only runs once spawned.
         let engine_loop = engine.start().map_err(|e| anyhow::anyhow!("engine start: {e:?}"))?;
         tokio::spawn(engine_loop);
@@ -73,6 +81,9 @@ impl BrowserEngine {
 
         let zone_cfg = ZoneConfig::builder()
             .do_not_track(true)
+            // Without this the engine sends no Accept-Language at all. TODO: derive
+            // from the desktop locale / a beacon setting instead of hardcoding.
+            .accept_languages("en-US,en;q=0.9")
             .build()
             .map_err(|e| anyhow::anyhow!("ZoneConfig: {e:?}"))?;
 
