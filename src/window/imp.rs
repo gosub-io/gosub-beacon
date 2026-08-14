@@ -1,4 +1,4 @@
-use crate::engine::{draw_frame, BrowserEngine, EngineTabId};
+use crate::engine::{render_frame_gl, BrowserEngine, EngineTabId};
 use crate::fetcher::address_parser::GosubAddressParser;
 use crate::tab::{GosubTab, GosubTabManager, HistoryNodeId, TabCommand, TabId};
 use crate::window::message::Message;
@@ -14,7 +14,7 @@ use gtk4::graphene::Point;
 use gtk4::prelude::*;
 use gtk4::subclass::prelude::*;
 use gtk4::{
-    gdk, glib, Button, CompositeTemplate, DrawingArea, Entry, GestureClick, Image, Popover, PopoverMenu, PopoverMenuFlags,
+    gdk, glib, Button, CompositeTemplate, Entry, GLArea, GestureClick, Image, Popover, PopoverMenu, PopoverMenuFlags,
     ScrolledWindow, Settings, Stack, TemplateChild, TextView, ToggleButton, Widget,
 };
 use log::info;
@@ -78,8 +78,8 @@ pub struct BrowserWindow {
 
     /// The running engine (created in `init_engine`). Main-thread only.
     pub engine: Rc<RefCell<Option<BrowserEngine>>>,
-    /// Per-tab drawing areas, so the redraw loop can request repaints.
-    pub render_areas: Rc<RefCell<HashMap<TabId, DrawingArea>>>,
+    /// Per-tab GL areas, so the redraw loop can request repaints.
+    pub render_areas: Rc<RefCell<HashMap<TabId, GLArea>>>,
     /// Maps engine tab ids back to our tab ids (for routing engine events).
     pub engine_tab_map: Rc<RefCell<HashMap<EngineTabId, TabId>>>,
 }
@@ -1101,10 +1101,12 @@ impl BrowserWindow {
         }
     }
 
-    /// Build a drawing area that blits the engine's composited frames for `tab`, and forwards
-    /// resize/scroll input to the engine tab.
-    fn build_render_area(&self, tab: &GosubTab) -> DrawingArea {
-        let area = DrawingArea::default();
+    /// Build a GL area that composites the engine's tile frames for `tab` on the GPU,
+    /// and forwards resize/scroll input to the engine tab.
+    fn build_render_area(&self, tab: &GosubTab) -> GLArea {
+        let area = GLArea::new();
+        area.set_has_depth_buffer(false);
+        area.set_has_stencil_buffer(true);
         area.set_vexpand(true);
         area.set_hexpand(true);
         area.set_focusable(true);
@@ -1118,8 +1120,42 @@ impl BrowserWindow {
             .compositor
             .clone();
 
-        area.set_draw_func(move |_area, cr, w, h| {
-            draw_frame(&compositor, engine_id, cr, w, h);
+        // Skia's GL context wrapper: created once the area is realized (its GdkGLContext
+        // exists from then on), dropped again on unrealize so it can't outlive the context.
+        let dc_holder: Rc<RefCell<Option<skia_safe::gpu::DirectContext>>> = Rc::new(RefCell::new(None));
+        area.connect_realize({
+            let dc_holder = dc_holder.clone();
+            move |area| {
+                area.make_current();
+                if let Some(err) = area.error() {
+                    log::error!("GLArea realize error: {err:?}");
+                    return;
+                }
+                let Some(interface) = skia_safe::gpu::gl::Interface::new_native() else {
+                    log::error!("Skia GL interface creation failed");
+                    return;
+                };
+                *dc_holder.borrow_mut() = skia_safe::gpu::direct_contexts::make_gl(interface, None);
+            }
+        });
+        area.connect_unrealize({
+            let dc_holder = dc_holder.clone();
+            move |_| {
+                dc_holder.borrow_mut().take();
+            }
+        });
+
+        area.connect_render({
+            let dc_holder = dc_holder.clone();
+            move |area, _ctx| {
+                let mut dc_ref = dc_holder.borrow_mut();
+                let Some(dc) = dc_ref.as_mut() else {
+                    return glib::Propagation::Stop;
+                };
+                let scale = crate::engine::render_dpr(area) as i32;
+                render_frame_gl(&compositor, engine_id, dc, area.width() * scale, area.height() * scale);
+                glib::Propagation::Stop
+            }
         });
 
         if let Some(handle) = tab.tab_handle() {
@@ -1130,15 +1166,19 @@ impl BrowserWindow {
             let resize_handle = handle.clone();
             area.connect_resize(move |area, w, h| {
                 use gosub_render_pipeline::render::DEVICE_PIXEL_RATIO;
-                DEVICE_PIXEL_RATIO.store(crate::engine::render_dpr(area), std::sync::atomic::Ordering::Relaxed);
+                let dpr = crate::engine::render_dpr(area);
+                DEVICE_PIXEL_RATIO.store(dpr, std::sync::atomic::Ordering::Relaxed);
+                // GtkGLArea's resize reports PHYSICAL pixels; the engine viewport is
+                // logical (CSS) px — the DPR handles physical rasterization separately.
+                let (vw, vh) = (w / dpr as i32, h / dpr as i32);
                 let handle = resize_handle.clone();
                 runtime().spawn(async move {
                     let _ = handle
                         .send(EngineTabCommand::SetViewport {
                             x: 0,
                             y: 0,
-                            width: w as u32,
-                            height: h as u32,
+                            width: vw as u32,
+                            height: vh as u32,
                         })
                         .await;
                 });
@@ -1219,7 +1259,7 @@ impl BrowserWindow {
             glib::spawn_future_local(async move {
                 while redraw_rx.recv().await.is_some() {
                     for area in render_areas.borrow().values() {
-                        area.queue_draw();
+                        area.queue_render();
                     }
                 }
             });
@@ -1251,7 +1291,7 @@ impl BrowserWindow {
         match evt {
             EngineEvent::Redraw { .. } => {
                 for area in self.render_areas.borrow().values() {
-                    area.queue_draw();
+                    area.queue_render();
                 }
             }
             EngineEvent::Navigation { tab_id, event } => {

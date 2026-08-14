@@ -12,7 +12,10 @@ license = "MIT"
 # compositor / tile cache.
 gosub_engine = { path = "../gosub-engine/crates/gosub_engine", features = ["sqlite_cookie_store"] }
 gosub_render_pipeline = { path = "../gosub-engine/crates/gosub_render_pipeline" }
-gosub_renderer_cairo = { path = "../gosub-engine/crates/gosub_renderer_cairo" }
+gosub_renderer_skia = { path = "../gosub-engine/crates/gosub_renderer_skia" }
+# Skia rasterizes tiles on the CPU; compositing happens on the GPU via GtkGLArea
+# (see src/engine.rs). Version must match the engine workspace's skia-safe.
+skia-safe = { version = "0.99.0", features = ["gl"] }
 parking_lot = "0.12"
 gtk-macros = "0.3"
 # gtk4 must match the version the engine's `gtk4` feature pins (gtk4-sys uses `links`,
@@ -49,6 +52,10 @@ http-agent-ureq = ["http-agent", "dep:ureq"]
 proto-http = []     # Enables the HTTP(s) protocol (required)
 proto-ftp = []      # Enables the FTP protocol (ftp://)
 proto-gopher = [ "dep:gophermap" ]   # Enables the Gopher protocol (gopher://)
+
+# EGL is how Skia binds the GL context on Wayland/X11; macOS uses CGL natively.
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+skia-safe = { version = "0.99.0", features = ["gl", "egl"] }
 
 [build-dependencies]
 glib-build-tools = "0.21.0"
