@@ -116,12 +116,18 @@ impl BrowserEngine {
     }
 
     /// Create a fresh engine tab in the default zone. Blocks on the runtime.
-    pub fn create_tab(&mut self, rt: &Runtime, title: &str) -> anyhow::Result<TabHandle> {
+    ///
+    /// `viewport` is the initial size in CSS px. Pass the currently visible content
+    /// area's size: a hidden `GtkStack` page is never allocated, so its GLArea's
+    /// resize handler (the only other `SetViewport` source) does not fire until the
+    /// tab is first shown — without an initial viewport, background tabs lay out and
+    /// rasterize at the engine's default size and must fully re-render on switch.
+    pub fn create_tab(&mut self, rt: &Runtime, title: &str, viewport: Option<(u32, u32)>) -> anyhow::Result<TabHandle> {
         let defaults = TabDefaults {
             url: None,
             title: Some(title.to_string()),
-            // Viewport is set on the first GTK resize so the DPR is correct.
-            viewport: None,
+            // Falls back to the first GTK resize when the window has no allocation yet.
+            viewport: viewport.map(|(w, h)| gosub_render_pipeline::render::Viewport::new(0, 0, w, h)),
         };
 
         let tab = rt

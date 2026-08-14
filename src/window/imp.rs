@@ -1068,7 +1068,13 @@ impl BrowserWindow {
                 self.log("Engine not ready");
                 return;
             };
-            match eng.create_tab(runtime(), title) {
+            // Size new tabs to the visible content area so background tabs render at
+            // the right size before they are first shown (see BrowserEngine::create_tab).
+            let viewport = {
+                let (w, h) = (self.content_stack.width(), self.content_stack.height());
+                (w > 0 && h > 0).then_some((w as u32, h as u32))
+            };
+            match eng.create_tab(runtime(), title, viewport) {
                 Ok(h) => h,
                 Err(e) => {
                     self.log(format!("Failed to create engine tab: {e}").as_str());
