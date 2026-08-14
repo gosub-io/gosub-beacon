@@ -53,3 +53,14 @@ proto-gopher = [ "dep:gophermap" ]   # Enables the Gopher protocol (gopher://)
 [build-dependencies]
 glib-build-tools = "0.21.0"
 
+# Dev builds must stay fast enough to actually browse with: the engine's render
+# pipeline and the frame blit in src/engine.rs are per-pixel CPU work that is
+# unusable at opt-level 0. Dependencies (including the engine path deps, which
+# do not inherit the engine workspace's own profile) get full optimization;
+# the beacon crate itself gets light optimization to keep rebuilds quick.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 2
+
