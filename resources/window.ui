@@ -172,122 +172,30 @@
                     </object>
                 </child>
 
-                <!-- Row 6: icon rail + viewport -->
+                <!-- Row 6: viewport -->
                 <child>
-                    <object class="GtkBox">
-                        <property name="orientation">horizontal</property>
+                    <object class="GtkOverlay">
+                        <property name="hexpand">True</property>
                         <property name="vexpand">True</property>
                         <child>
-                            <object class="GtkBox" id="sidebar">
-                                <property name="orientation">vertical</property>
-                                <property name="spacing">4</property>
-                                <style>
-                                    <class name="sidebar"/>
-                                </style>
-                                <child>
-                                    <object class="GtkButton">
-                                        <property name="has-frame">false</property>
-                                        <property name="tooltip-text">Home</property>
-                                        <signal name="clicked" handler="handle_sidebar_home" swapped="true"/>
-                                        <child>
-                                            <object class="GtkImage">
-                                                <property name="icon-name">user-home-symbolic</property>
-                                            </object>
-                                        </child>
-                                    </object>
-                                </child>
-                                <child>
-                                    <object class="GtkButton">
-                                        <property name="has-frame">false</property>
-                                        <property name="tooltip-text">Bookmarks</property>
-                                        <signal name="clicked" handler="handle_sidebar_todo" swapped="true"/>
-                                        <child>
-                                            <object class="GtkImage">
-                                                <property name="icon-name">user-bookmarks-symbolic</property>
-                                            </object>
-                                        </child>
-                                    </object>
-                                </child>
-                                <child>
-                                    <object class="GtkButton">
-                                        <property name="has-frame">false</property>
-                                        <property name="tooltip-text">History</property>
-                                        <signal name="clicked" handler="handle_sidebar_todo" swapped="true"/>
-                                        <child>
-                                            <object class="GtkImage">
-                                                <property name="icon-name">document-open-recent-symbolic</property>
-                                            </object>
-                                        </child>
-                                    </object>
-                                </child>
-                                <child>
-                                    <object class="GtkButton">
-                                        <property name="has-frame">false</property>
-                                        <property name="tooltip-text">Downloads</property>
-                                        <signal name="clicked" handler="handle_sidebar_todo" swapped="true"/>
-                                        <child>
-                                            <object class="GtkImage">
-                                                <property name="icon-name">folder-download-symbolic</property>
-                                            </object>
-                                        </child>
-                                    </object>
-                                </child>
-                                <child>
-                                    <object class="GtkBox">
-                                        <property name="vexpand">True</property>
-                                    </object>
-                                </child>
-                                <child>
-                                    <object class="GtkButton">
-                                        <property name="has-frame">false</property>
-                                        <property name="tooltip-text">Log window (Ctrl+L)</property>
-                                        <property name="action-name">app.toggle-log</property>
-                                        <child>
-                                            <object class="GtkImage">
-                                                <property name="icon-name">utilities-terminal-symbolic</property>
-                                            </object>
-                                        </child>
-                                    </object>
-                                </child>
-                                <child>
-                                    <object class="GtkButton">
-                                        <property name="has-frame">false</property>
-                                        <property name="tooltip-text">Settings</property>
-                                        <signal name="clicked" handler="handle_sidebar_todo" swapped="true"/>
-                                        <child>
-                                            <object class="GtkImage">
-                                                <property name="icon-name">emblem-system-symbolic</property>
-                                            </object>
-                                        </child>
-                                    </object>
-                                </child>
+                            <object class="GtkStack" id="content_stack">
+                                <property name="vexpand">True</property>
+                                <property name="hexpand">True</property>
                             </object>
                         </child>
-                        <child>
-                            <object class="GtkOverlay">
-                                <property name="hexpand">True</property>
-                                <property name="vexpand">True</property>
-                                <child>
-                                    <object class="GtkStack" id="content_stack">
-                                        <property name="vexpand">True</property>
-                                        <property name="hexpand">True</property>
-                                    </object>
-                                </child>
-                                <child type="overlay">
-                                    <!-- hover-URL bubble, Firefox style -->
-                                    <object class="GtkLabel" id="statusbar">
-                                        <property name="visible">False</property>
-                                        <property name="can-focus">False</property>
-                                        <property name="halign">start</property>
-                                        <property name="valign">end</property>
-                                        <property name="single-line-mode">True</property>
-                                        <property name="ellipsize">end</property>
-                                        <property name="max-width-chars">80</property>
-                                        <style>
-                                            <class name="status-bubble"/>
-                                        </style>
-                                    </object>
-                                </child>
+                        <child type="overlay">
+                            <!-- hover-URL bubble, Firefox style -->
+                            <object class="GtkLabel" id="statusbar">
+                                <property name="visible">False</property>
+                                <property name="can-focus">False</property>
+                                <property name="halign">start</property>
+                                <property name="valign">end</property>
+                                <property name="single-line-mode">True</property>
+                                <property name="ellipsize">end</property>
+                                <property name="max-width-chars">80</property>
+                                <style>
+                                    <class name="status-bubble"/>
+                                </style>
                             </object>
                         </child>
                     </object>

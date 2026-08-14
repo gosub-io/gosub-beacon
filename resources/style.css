@@ -39,6 +39,15 @@ menubar.header-menubar {
 menubar.header-menubar > item {
     padding: 4px 8px;
     border-radius: 6px;
+    box-shadow: none;
+}
+/* Quiet rounded highlight instead of the theme's colored underline. */
+menubar.header-menubar > item:hover,
+menubar.header-menubar > item:selected {
+    background: alpha(@theme_fg_color, 0.08);
+    color: @theme_fg_color;
+    box-shadow: none;
+    border: none;
 }
 
 /* ── Tab row + chips ─────────────────────────────────────────────────────── */
@@ -97,26 +106,6 @@ button.new-tab {
 }
 button.new-tab:hover {
     background: alpha(@theme_fg_color, 0.07);
-}
-
-/* ── Sidebar: fixed Beacon-navy icon rail ────────────────────────────────── */
-
-box.sidebar {
-    background: #0d1b2a;
-    padding: 6px 5px;
-}
-box.sidebar button {
-    padding: 9px;
-    border-radius: 8px;
-    background: transparent;
-    color: #c9d4e3;
-    transition: background 150ms ease;
-}
-box.sidebar button:hover {
-    background: alpha(#ffffff, 0.12);
-}
-box.sidebar button:active {
-    background: alpha(#ffffff, 0.18);
 }
 
 /* ── Address bar / toolbar ───────────────────────────────────────────────── */

@@ -155,20 +155,6 @@ impl ApplicationWindowImpl for BrowserWindow {}
 
 #[gtk4::template_callbacks]
 impl BrowserWindow {
-    #[template_callback]
-    fn handle_sidebar_home(&self, _btn: &Button) {
-        let Some(tab_id) = self.active_tab_id() else {
-            return;
-        };
-        let sender = self.get_sender();
-        let _ = sender.send_blocking(Message::LoadUrl(tab_id, "gosub://home".into()));
-    }
-
-    #[template_callback]
-    fn handle_sidebar_todo(&self, _btn: &Button) {
-        self.log("Not implemented yet");
-    }
-
     /// Bookmarks-bar buttons carry their URL in the widget `name` property.
     #[template_callback]
     fn handle_bookmark_clicked(&self, btn: &Button) {
