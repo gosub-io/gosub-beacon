@@ -125,7 +125,7 @@ impl BrowserWindow {
                 #[strong]
                 sender,
                 async move {
-                    sender.send(Message::OpenTab("gosub://blank".into(), "New Tab".into())).await.unwrap();
+                    sender.send(Message::OpenTab("gosub://home".into(), "New Tab".into())).await.unwrap();
                 }
             ));
         });

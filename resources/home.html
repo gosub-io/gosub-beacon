@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>New Tab</title>
+    <style>
+        body {
+            margin: 0;
+            background-color: #0a1628;
+            background: linear-gradient(#070e1a, #122540);
+            color: #e8edf5;
+            font-family: Cantarell, "DejaVu Sans", sans-serif;
+            text-align: center;
+        }
+        .wrap { padding: 80px 40px 40px 40px; }
+
+        .brand-top {
+            letter-spacing: 8px;
+            font-size: 15px;
+            color: #c9a227;
+        }
+        h1 {
+            font-family: Georgia, "DejaVu Serif", serif;
+            font-size: 56px;
+            margin: 4px 0 6px 0;
+            color: #ffffff;
+        }
+        .brand-sub {
+            letter-spacing: 6px;
+            font-size: 13px;
+            color: #b8c4d6;
+        }
+        .tagline {
+            font-family: Georgia, "DejaVu Serif", serif;
+            font-style: italic;
+            font-size: 17px;
+            color: #9fb0c8;
+            margin-top: 26px;
+        }
+
+        .tiles {
+            margin-top: 56px;
+            display: flex;
+            justify-content: center;
+        }
+        a.tile {
+            display: block;
+            width: 108px;
+            margin: 0 10px;
+            padding: 18px 6px 14px 6px;
+            background-color: #16243d;
+            border-radius: 14px;
+            color: #e8edf5;
+            text-decoration: none;
+        }
+        .tile-glyph {
+            font-family: Georgia, "DejaVu Serif", serif;
+            font-size: 30px;
+            color: #c9a227;
+        }
+        .tile-name {
+            font-size: 13px;
+            color: #c3cddd;
+            margin-top: 10px;
+        }
+
+        .foot {
+            margin-top: 70px;
+            font-size: 13px;
+            color: #6d7d94;
+        }
+        .foot a {
+            font-family: monospace;
+            color: #7ea6d9;
+        }
+    </style>
+</head>
+<body>
+    <div class="wrap">
+        <div class="brand-top">G O S U B</div>
+        <h1>Beacon</h1>
+        <div class="brand-sub">W E B &nbsp; B R O W S E R</div>
+        <div class="tagline">Chart your course. Explore without limits.</div>
+
+        <div class="tiles">
+            <a class="tile" href="https://gosub.io">
+                <div class="tile-glyph">G</div>
+                <div class="tile-name">Gosub</div>
+            </a>
+            <a class="tile" href="https://github.com/gosub-io">
+                <div class="tile-glyph">&#x2318;</div>
+                <div class="tile-name">GitHub</div>
+            </a>
+            <a class="tile" href="https://news.ycombinator.com">
+                <div class="tile-glyph">Y</div>
+                <div class="tile-name">Hacker News</div>
+            </a>
+            <a class="tile" href="gosub://help">
+                <div class="tile-glyph">?</div>
+                <div class="tile-name">Help</div>
+            </a>
+        </div>
+
+        <div class="foot">
+            <a href="gosub://help">gosub://help</a> lists all internal pages
+        </div>
+    </div>
+</body>
+</html>

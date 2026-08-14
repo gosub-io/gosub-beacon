@@ -34,7 +34,7 @@ pub(crate) fn setup_context_menu_actions(action_group: &SimpleActionGroup, windo
             sender,
             async move {
                 sender
-                    .send(Message::OpenTabRight(info.id, "gosub://blank".into(), "New Tab".into()))
+                    .send(Message::OpenTabRight(info.id, "gosub://home".into(), "New Tab".into()))
                     .await
                     .unwrap();
             }

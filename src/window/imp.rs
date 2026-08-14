@@ -161,7 +161,7 @@ impl BrowserWindow {
             return;
         };
         let sender = self.get_sender();
-        let _ = sender.send_blocking(Message::LoadUrl(tab_id, "https://gosub.io".into()));
+        let _ = sender.send_blocking(Message::LoadUrl(tab_id, "gosub://home".into()));
     }
 
     #[template_callback]
@@ -533,8 +533,8 @@ impl BrowserWindow {
 
         let manager = self.tab_manager.lock().unwrap();
         if let Some(tab) = manager.get_tab(tab_id) {
-            // A blank tab gets an empty address bar, ready to type into.
-            if Self::is_internal_url(tab.url()) && Self::internal_page_name(tab.url()) == "blank" {
+            // New-tab pages (blank, home) get an empty address bar, ready to type into.
+            if Self::is_internal_url(tab.url()) && matches!(Self::internal_page_name(tab.url()), "blank" | "home") {
                 self.searchbar.set_text("");
             } else {
                 self.searchbar.set_text(tab.url().as_str());
@@ -713,8 +713,8 @@ impl BrowserWindow {
 
     fn internal_title(url: &url::Url) -> &str {
         match Self::internal_page_name(url) {
-            "home" => "Home",
             "help" => "Help",
+            // gosub://home is the new-tab page; its <title> confirms this once loaded.
             _ => "New Tab",
         }
     }
@@ -722,13 +722,14 @@ impl BrowserWindow {
     /// Internal pages that go through the engine (via `LoadHtml`) instead of a
     /// shell-built GTK widget.
     fn engine_rendered_internal(name: &str) -> bool {
-        matches!(name, "help")
+        matches!(name, "help" | "home")
     }
 
     /// Send the bundled HTML for an engine-rendered internal page to the tab.
     fn load_internal_html(&self, tab_id: TabId, url: &url::Url) {
         let html = match Self::internal_page_name(url) {
             "help" => include_str!("../../resources/help.html").to_string(),
+            "home" => include_str!("../../resources/home.html").to_string(),
             _ => return,
         };
 
@@ -752,8 +753,6 @@ impl BrowserWindow {
     /// Shell-rendered stand-ins until the engine serves gosub:// pages itself.
     fn build_internal_page(&self, url: &url::Url) -> Widget {
         match Self::internal_page_name(url) {
-            // Placeholder for the branded gosub://home page: the splash art.
-            "home" => self.generate_default_page(),
             // gosub://blank (and about:blank, and unknown pages): plain white,
             // like every browser's blank page regardless of theme.
             _ => {

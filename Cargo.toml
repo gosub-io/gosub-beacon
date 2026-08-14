@@ -7,14 +7,12 @@ description = "Gosub Beacon — a web browser built on the Gosub engine"
 license = "MIT"
 
 [dependencies]
-# Local engine: dedicated main-branch checkout for the Beacon browser (the
-# ../engine checkout tracks in-flight branches). The engine owns networking,
+# Local engine: main gosub-engine checkout. The engine owns networking,
 # cookies, storage and the render pipeline; rendering is consumed via the
 # compositor / tile cache.
-gosub_engine = { path = "../gosub-engine-for-beacon/crates/gosub_engine", features = ["sqlite_cookie_store"] }
-gosub_render_pipeline = { path = "../gosub-engine-for-beacon/crates/gosub_render_pipeline" }
-# Cairo rendering moved into its own crate on this engine branch.
-gosub_renderer_cairo = { path = "../gosub-engine-for-beacon/crates/gosub_renderer_cairo" }
+gosub_engine = { path = "../gosub-engine/crates/gosub_engine", features = ["sqlite_cookie_store"] }
+gosub_render_pipeline = { path = "../gosub-engine/crates/gosub_render_pipeline" }
+gosub_renderer_cairo = { path = "../gosub-engine/crates/gosub_renderer_cairo" }
 parking_lot = "0.12"
 gtk-macros = "0.3"
 # gtk4 must match the version the engine's `gtk4` feature pins (gtk4-sys uses `links`,
