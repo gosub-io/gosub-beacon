@@ -700,6 +700,7 @@ impl BrowserWindow {
     fn internal_title(url: &url::Url) -> &str {
         match Self::internal_page_name(url) {
             "help" => "Help",
+            "config" => "Engine settings",
             // gosub://home is the new-tab page; its <title> confirms this once loaded.
             _ => "New Tab",
         }
@@ -739,6 +740,16 @@ impl BrowserWindow {
     /// Shell-rendered stand-ins until the engine serves gosub:// pages itself.
     fn build_internal_page(&self, url: &url::Url) -> Widget {
         match Self::internal_page_name(url) {
+            // gosub://config: about:config-style editor over the engine's settings store.
+            "config" => match self.engine.borrow().as_ref() {
+                Some(engine) => super::config_page::build(engine.settings().clone()),
+                None => {
+                    let label = gtk4::Label::new(Some("Engine not running"));
+                    label.set_hexpand(true);
+                    label.set_vexpand(true);
+                    label.upcast::<Widget>()
+                }
+            },
             // gosub://blank (and about:blank, and unknown pages): plain white,
             // like every browser's blank page regardless of theme.
             _ => {

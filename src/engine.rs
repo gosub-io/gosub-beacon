@@ -26,6 +26,20 @@ use uuid::uuid;
 
 const DEFAULT_ZONE: uuid::Uuid = uuid!("f1234567-abcd-4000-8000-000000000001");
 
+/// Per-user data directory holding the profile databases (cookies, local storage,
+/// settings): `$XDG_DATA_HOME/gosub-beacon`, i.e. `~/.local/share/gosub-beacon` by
+/// default. Created on first use. Falls back to the working directory if the XDG dir
+/// cannot be created, so a locked-down environment still gets a working (if
+/// non-standard) profile.
+pub fn data_dir() -> std::path::PathBuf {
+    let dir = gtk4::glib::user_data_dir().join("gosub-beacon");
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        log::warn!("cannot create data dir {}: {e}; using the working directory", dir.display());
+        return std::path::PathBuf::from(".");
+    }
+    dir
+}
+
 /// The engine is generic over a render configuration; we rasterize through Skia.
 type AppConfig = DefaultRenderConfig<SkiaBackend, SkiaFontSystem>;
 
@@ -64,11 +78,25 @@ impl BrowserEngine {
         let backend = SkiaBackend::new();
         let mut engine = GosubEngine::<AppConfig>::new(None, Arc::new(backend), compositor.clone());
 
+        let data_dir = data_dir();
+
+        // Persist settings overrides (edited via gosub://config) across runs. Attached
+        // before anything reads or writes settings, so stored values win over defaults.
+        // Falls back to the in-memory store if the database cannot be opened.
+        let settings_db = data_dir.join("settings.db").to_string_lossy().into_owned();
+        match gosub_engine::config_storage::SqliteStorageAdapter::try_from(&settings_db) {
+            Ok(storage) => engine.settings().set_storage(Box::new(storage)),
+            Err(e) => log::warn!("settings database {settings_db} unavailable, settings will not persist: {e:?}"),
+        }
+
         // Identify as Beacon on the wire; the engine alone would send only its Gosub
-        // token. Must land before start(), which reads the network settings once.
-        let ua = gosub_engine::net::default_user_agent(Some(concat!("Beacon/", env!("CARGO_PKG_VERSION"))));
-        if let Err(e) = engine.settings().set("net.user_agent", gosub_engine::Setting::String(ua)) {
-            log::warn!("failed to set net.user_agent: {e:?}");
+        // token. Only seeded when nothing is stored, so a user-customized UA survives
+        // restarts. Must land before start(), which reads the network settings once.
+        if engine.settings().get_string("net.user_agent").is_empty() {
+            let ua = gosub_engine::net::default_user_agent(Some(concat!("Beacon/", env!("CARGO_PKG_VERSION"))));
+            if let Err(e) = engine.settings().set("net.user_agent", gosub_engine::Setting::String(ua)) {
+                log::warn!("failed to set net.user_agent: {e:?}");
+            }
         }
 
         // start() hands back the engine main-loop future; it only runs once spawned.
@@ -87,13 +115,14 @@ impl BrowserEngine {
             .build()
             .map_err(|e| anyhow::anyhow!("ZoneConfig: {e:?}"))?;
 
-        let cookie_store: gosub_engine::cookies::CookieStoreHandle = SqliteCookieStore::new(".gosub-beacon-cookies.db".into())
+        let cookie_store: gosub_engine::cookies::CookieStoreHandle = SqliteCookieStore::new(data_dir.join("cookies.db"))
             .map_err(|e| anyhow::anyhow!("cookie store: {e:?}"))?
             .into();
 
+        let local_db = data_dir.join("local-storage.db").to_string_lossy().into_owned();
         let zone_services = ZoneServices {
             storage: Arc::new(StorageService::new(
-                Arc::new(SqliteLocalStore::new(".gosub-beacon-local.db").map_err(|e| anyhow::anyhow!("local store: {e:?}"))?),
+                Arc::new(SqliteLocalStore::new(&local_db).map_err(|e| anyhow::anyhow!("local store: {e:?}"))?),
                 Arc::new(InMemorySessionStore::new()),
             )),
             cookie_store: Some(cookie_store),
@@ -112,6 +141,11 @@ impl BrowserEngine {
             redraw_rx: Some(rx_redraw),
             event_rx: Some(event_rx),
         })
+    }
+
+    /// The engine's settings store (backs the `gosub://config` page).
+    pub fn settings(&self) -> &gosub_engine::Config {
+        self.engine.settings()
     }
 
     /// Take the engine event stream (navigation, redraw, hover, …). Only the first

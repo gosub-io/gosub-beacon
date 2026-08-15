@@ -145,6 +145,51 @@ box.blank-page {
     background: #ffffff;
 }
 
+/* gosub://config: about:config-style settings editor. */
+box.config-page {
+    background: @theme_bg_color;
+}
+box.config-header {
+    padding: 12px 16px 6px 16px;
+}
+label.config-title {
+    font-size: 16px;
+    font-weight: bold;
+}
+label.config-notice {
+    padding: 0 16px 8px 16px;
+    font-size: 12px;
+    opacity: 0.7;
+}
+list.config-list {
+    background: transparent;
+}
+list.config-list > row {
+    border-bottom: 1px solid alpha(@theme_fg_color, 0.08);
+}
+grid.config-row {
+    padding: 8px 16px;
+}
+label.config-key {
+    font-family: monospace;
+    font-size: 13px;
+}
+label.config-key.modified {
+    font-weight: bold;
+    color: @accent_color;
+}
+label.config-type {
+    font-size: 11px;
+    opacity: 0.6;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: alpha(@theme_fg_color, 0.06);
+}
+label.config-desc {
+    font-size: 12px;
+    opacity: 0.75;
+}
+
 /* Hover-URL bubble overlaid on the viewport (bottom-left, Firefox style). */
 label.status-bubble {
     background: @theme_bg_color;

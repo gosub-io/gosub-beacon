@@ -1,6 +1,7 @@
 use gtk4::glib;
 use gtk4::glib::{clone, spawn_future_local};
 
+mod config_page;
 mod imp;
 mod message;
 mod tab_context_menu;

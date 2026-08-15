@@ -34,7 +34,8 @@ impl HttpRequestAgent for ReqwestAgent {
             .deflate(true);
 
         // Cookies should be dealt with more flexible
-        let jar = match SqliteStorage::new("./gosub_cookies.db") {
+        let jar_path = crate::engine::data_dir().join("fetcher-cookies.db");
+        let jar = match SqliteStorage::new(&jar_path.to_string_lossy()) {
             Ok(store) => {
                 info!(target: "fetcher", "successfully created SqliteStorage");
                 Some(CookieJar::new(Arc::new(Mutex::new(store))))
