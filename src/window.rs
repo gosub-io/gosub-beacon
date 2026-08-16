@@ -4,6 +4,7 @@ use gtk4::glib::{clone, spawn_future_local};
 mod config_page;
 mod imp;
 mod message;
+mod page_context_menu;
 mod tab_context_menu;
 
 use crate::application::Application;

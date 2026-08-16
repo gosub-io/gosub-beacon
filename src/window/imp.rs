@@ -19,7 +19,7 @@ use gtk4::{
 };
 use log::info;
 use once_cell::sync::Lazy;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -82,6 +82,10 @@ pub struct BrowserWindow {
     pub render_areas: Rc<RefCell<HashMap<TabId, GLArea>>>,
     /// Maps engine tab ids back to our tab ids (for routing engine events).
     pub engine_tab_map: Rc<RefCell<HashMap<EngineTabId, TabId>>>,
+    /// Right-clicks awaiting the engine's hit-test answer: token → (tab, window point).
+    pub pending_hit_tests: RefCell<HashMap<u64, (TabId, Point)>>,
+    /// Source of hit-test tokens.
+    pub next_hit_test_token: Cell<u64>,
 }
 
 impl Default for BrowserWindow {
@@ -106,6 +110,8 @@ impl Default for BrowserWindow {
             engine: Rc::new(RefCell::new(None)),
             render_areas: Rc::new(RefCell::new(HashMap::new())),
             engine_tab_map: Rc::new(RefCell::new(HashMap::new())),
+            pending_hit_tests: RefCell::new(HashMap::new()),
+            next_hit_test_token: Cell::new(1),
         }
     }
 }
@@ -820,7 +826,7 @@ impl BrowserWindow {
 
     /// Back button: the engine owns session history, so just ask it to go back. It answers
     /// with `HistoryChanged` (cursor moved) and the usual navigation events for the reload.
-    fn navigate_back(&self) {
+    pub(crate) fn navigate_back(&self) {
         self.send_history_command(EngineTabCommand::GoBack);
     }
 
@@ -850,7 +856,7 @@ impl BrowserWindow {
     }
 
     /// Send a history traversal command to the active tab's engine tab and mark it loading.
-    fn send_history_command(&self, cmd: EngineTabCommand) {
+    pub(crate) fn send_history_command(&self, cmd: EngineTabCommand) {
         let Some(tab_id) = self.active_tab_id() else {
             return;
         };
@@ -1234,6 +1240,36 @@ impl BrowserWindow {
                 });
             });
             area.add_controller(click);
+
+            // Secondary click -> ask the engine what is under the pointer; the context menu
+            // is built from its HitTestResult (see handle_engine_event).
+            let right = gtk4::GestureClick::new();
+            right.set_button(gdk::BUTTON_SECONDARY);
+            let right_handle = handle.clone();
+            let window = self.obj().clone();
+            let our_tab_id = tab.id();
+            right.connect_pressed(move |gesture, _n, x, y| {
+                let imp = window.imp();
+                let token = imp.next_hit_test_token.get();
+                imp.next_hit_test_token.set(token + 1);
+                // Remember where to anchor the menu, in window coordinates.
+                let Some(widget) = gesture.widget() else { return };
+                let Some(p) = widget.compute_point(&window, &Point::new(x as f32, y as f32)) else {
+                    return;
+                };
+                imp.pending_hit_tests.borrow_mut().insert(token, (our_tab_id, p));
+                let handle = right_handle.clone();
+                runtime().spawn(async move {
+                    let _ = handle
+                        .send(EngineTabCommand::QueryHitTest {
+                            x: x as f32,
+                            y: y as f32,
+                            token: gosub_engine::events::HitTestToken(token),
+                        })
+                        .await;
+                });
+            });
+            area.add_controller(right);
         }
 
         self.render_areas.borrow_mut().insert(tab.id(), area.clone());
@@ -1388,6 +1424,13 @@ impl BrowserWindow {
                     return;
                 };
                 let _ = self.get_sender().send_blocking(Message::FaviconLoaded(our_id, favicon));
+            }
+            // Answer to a right-click's QueryHitTest: build the page context menu from it.
+            EngineEvent::HitTestResult { token, hit, .. } => {
+                let Some((tab_id, point)) = self.pending_hit_tests.borrow_mut().remove(&token.0) else {
+                    return;
+                };
+                super::page_context_menu::show(&self.obj(), tab_id, point, hit);
             }
             // Cursor shape for what is under the pointer; only the active tab's area is under
             // the pointer, but setting it on the tab's own area is always correct.
