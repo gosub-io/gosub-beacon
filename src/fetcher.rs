@@ -136,41 +136,6 @@ impl Fetcher {
     }
 }
 
-pub async fn fetch_favicon(url: &str) -> Vec<u8> {
-    let Ok(url) = Url::parse(url) else {
-        return Vec::new();
-    };
-
-    let url = url.join("/favicon.ico").unwrap();
-
-    // This should be a method in Fetcher... it's a lot of boilerplate for fetching a simple favicon
-    let fetcher = Fetcher::new(url.clone());
-    match fetcher.fetch(url).await {
-        // There was a correct response
-        Ok(response) => match response {
-            Response::Http(http_response) => {
-                if http_response.head().status_code() == 200 {
-                    match http_response.body() {
-                        HttpBody::Reader(reader) => reader.vec().await.unwrap_or_else(|e| {
-                            error!("Failed to fetch favicon from URL: {:?}", e);
-                            Vec::new()
-                        }),
-                        HttpBody::Empty => Vec::new(),
-                    }
-                } else {
-                    Vec::new()
-                }
-            }
-            #[allow(unreachable_patterns)]
-            _ => Vec::new(),
-        },
-        Err(e) => {
-            error!("Failed to fetch favicon from URL: {:?}", e);
-            Vec::new()
-        }
-    }
-}
-
 pub async fn fetch_url_body(url: Url) -> Result<Vec<u8>, FetcherError> {
     let fetcher = Fetcher::new(url.clone());
     match fetcher.fetch(url).await {

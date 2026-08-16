@@ -1362,14 +1362,13 @@ impl BrowserWindow {
                 }
 
                 if let NavigationEvent::Finished { url, .. } = event {
-                    let mut need_favicon = false;
                     let mut manager = self.tab_manager.lock().unwrap();
                     if let Some(mut tab) = manager.get_tab(our_id) {
                         tab.set_loading(false);
                         tab.set_title(url.as_str());
-                        need_favicon = tab.favicon().is_none();
                         // Session history is recorded by the engine; it follows up with a
-                        // HistoryChanged event that refreshes the back/forward state.
+                        // HistoryChanged event that refreshes the back/forward state. The
+                        // favicon likewise arrives as a FavIconChanged event.
                         manager.update_tab(our_id, &tab);
                     }
                     drop(manager);
@@ -1380,20 +1379,29 @@ impl BrowserWindow {
                     }
                     self.refresh_tabs();
                     self.update_nav_buttons();
-
-                    // Fetch the site's favicon off-thread; bytes come back as a
-                    // FaviconLoaded message and are decoded on the GTK side.
-                    // Internal schemes (gosub://) have no favicon endpoint.
-                    if need_favicon && url.scheme().starts_with("http") {
-                        let sender = self.get_sender();
-                        let page_url = url.to_string();
-                        runtime().spawn(async move {
-                            let bytes = fetcher::fetch_favicon(&page_url).await;
-                            if !bytes.is_empty() {
-                                let _ = sender.send(Message::FaviconLoaded(our_id, bytes)).await;
-                            }
-                        });
-                    }
+                }
+            }
+            // The engine fetched the page's icon (through its own fetcher, so with the
+            // page's cookies and UA); decode it on the GTK side like before.
+            EngineEvent::FavIconChanged { tab_id, favicon } => {
+                let Some(our_id) = self.engine_tab_map.borrow().get(&tab_id).copied() else {
+                    return;
+                };
+                let _ = self.get_sender().send_blocking(Message::FaviconLoaded(our_id, favicon));
+            }
+            // Cursor shape for what is under the pointer; only the active tab's area is under
+            // the pointer, but setting it on the tab's own area is always correct.
+            EngineEvent::CursorChanged { tab_id, cursor } => {
+                let Some(our_id) = self.engine_tab_map.borrow().get(&tab_id).copied() else {
+                    return;
+                };
+                let name = match cursor {
+                    gosub_engine::events::CursorShape::Pointer => "pointer",
+                    gosub_engine::events::CursorShape::Text => "text",
+                    gosub_engine::events::CursorShape::Default => "default",
+                };
+                if let Some(area) = self.render_areas.borrow().get(&our_id) {
+                    area.set_cursor_from_name(Some(name));
                 }
             }
             EngineEvent::TitleChanged { tab_id, title } => {
