@@ -1,6 +1,6 @@
 use crate::engine::{render_frame_gl, BrowserEngine, EngineTabId};
 use crate::fetcher::address_parser::GosubAddressParser;
-use crate::tab::{GosubTab, GosubTabManager, HistoryNodeId, TabCommand, TabId};
+use crate::tab::{GosubTab, GosubTabManager, HistoryEntryId, TabCommand, TabId};
 use crate::window::message::Message;
 use crate::window::tab_context_menu::{build_context_menu, setup_context_menu_actions, TabInfo};
 use crate::{fetcher, runtime};
@@ -818,27 +818,14 @@ impl BrowserWindow {
         self.content_stack.visible_child()?.get_tab_id()
     }
 
-    /// Navigate the active tab to its parent history node (the Back button).
+    /// Back button: the engine owns session history, so just ask it to go back. It answers
+    /// with `HistoryChanged` (cursor moved) and the usual navigation events for the reload.
     fn navigate_back(&self) {
-        let Some(tab_id) = self.active_tab_id() else {
-            return;
-        };
-        let url = {
-            let mut manager = self.tab_manager.lock().unwrap();
-            let Some(mut tab) = manager.get_tab(tab_id) else {
-                return;
-            };
-            let Some(url) = tab.history_mut().go_back() else {
-                return;
-            };
-            self.stage_history_nav(&mut manager, tab_id, &mut tab, url.clone());
-            url
-        };
-        self.finish_history_nav(tab_id, url);
+        self.send_history_command(EngineTabCommand::GoBack);
     }
 
-    /// Handle the Forward button: with a single forward branch go straight there; with several,
-    /// pop up a menu (anchored to `anchor`) asking which branch to follow.
+    /// Forward button: with a single forward branch go straight there; with several, pop up a
+    /// menu (anchored to `anchor`) asking which branch to follow.
     fn navigate_forward(&self, anchor: &Button) {
         let Some(tab_id) = self.active_tab_id() else {
             return;
@@ -852,49 +839,47 @@ impl BrowserWindow {
         };
         match children.as_slice() {
             [] => {}
-            [(id, _url)] => self.go_to_history_node(*id),
+            [_] => self.send_history_command(EngineTabCommand::GoForward { entry: None }),
             _ => self.show_forward_menu(anchor, children),
         }
     }
 
-    /// Navigate the active tab to a specific (forward) history node.
-    fn go_to_history_node(&self, node_id: HistoryNodeId) {
+    /// Navigate the active tab to a specific (forward) history entry.
+    fn go_to_history_entry(&self, entry: HistoryEntryId) {
+        self.send_history_command(EngineTabCommand::GoForward { entry: Some(entry) });
+    }
+
+    /// Send a history traversal command to the active tab's engine tab and mark it loading.
+    fn send_history_command(&self, cmd: EngineTabCommand) {
         let Some(tab_id) = self.active_tab_id() else {
             return;
         };
-        let url = {
+        let handle = {
             let mut manager = self.tab_manager.lock().unwrap();
             let Some(mut tab) = manager.get_tab(tab_id) else {
                 return;
             };
-            let Some(url) = tab.history_mut().go_to(node_id) else {
-                return;
-            };
-            self.stage_history_nav(&mut manager, tab_id, &mut tab, url.clone());
-            url
+            let handle = tab.tab_handle();
+            tab.set_loading(true);
+            manager.update_tab(tab_id, &tab);
+            handle
         };
-        self.finish_history_nav(tab_id, url);
-    }
-
-    /// Mark a navigation as history-driven (so its `Finished` event won't push a new node) and
-    /// store the updated tab. Runs while the manager lock is held by the caller.
-    fn stage_history_nav(&self, manager: &mut GosubTabManager, tab_id: TabId, tab: &mut GosubTab, url: url::Url) {
-        tab.set_suppress_history_push(true);
-        tab.set_url(url);
-        tab.set_loading(true);
-        manager.update_tab(tab_id, tab);
-    }
-
-    /// Shared tail of a history navigation, run after the manager lock has been released.
-    fn finish_history_nav(&self, tab_id: TabId, url: url::Url) {
+        let Some(handle) = handle else {
+            self.log("Tab has no engine handle yet");
+            return;
+        };
         self.refresh_tabs();
-        self.navigate_engine_tab(tab_id, url.as_str());
-        self.update_nav_buttons();
+        runtime().spawn(async move {
+            if let Err(e) = handle.send(cmd).await {
+                log::error!("history command failed: {e:?}");
+            }
+            let _ = handle.send(EngineTabCommand::ResumeDrawing { fps: 30 }).await;
+        });
     }
 
     /// Build and show a popover listing the forward branches of the active tab; picking one
     /// navigates to it.
-    fn show_forward_menu(&self, anchor: &Button, children: Vec<(HistoryNodeId, url::Url)>) {
+    fn show_forward_menu(&self, anchor: &Button, children: Vec<(HistoryEntryId, url::Url)>) {
         let vbox = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
         let popover = Popover::builder().build();
         popover.set_parent(anchor);
@@ -910,7 +895,7 @@ impl BrowserWindow {
             let popover_clone = popover.clone();
             item.connect_clicked(move |_| {
                 popover_clone.popdown();
-                window.imp().go_to_history_node(id);
+                window.imp().go_to_history_entry(id);
             });
             vbox.append(&item);
         }
@@ -1342,6 +1327,31 @@ impl BrowserWindow {
                     }
                 }
 
+                if let NavigationEvent::HistoryChanged { history } = event {
+                    // The engine also updates the address bar target: on a back/forward
+                    // traversal the tab's URL is the entry we moved to, even while it loads.
+                    let current_url = history
+                        .current
+                        .and_then(|id| history.entries.get(id.0))
+                        .map(|e| e.url.clone());
+                    let mut manager = self.tab_manager.lock().unwrap();
+                    if let Some(mut tab) = manager.get_tab(our_id) {
+                        tab.history_mut().update(history);
+                        if let Some(url) = &current_url {
+                            tab.set_url(url.clone());
+                        }
+                        manager.update_tab(our_id, &tab);
+                    }
+                    drop(manager);
+                    if self.active_tab_id() == Some(our_id) {
+                        if let Some(url) = &current_url {
+                            self.searchbar.set_text(url.as_str());
+                        }
+                        self.update_nav_buttons();
+                    }
+                    return;
+                }
+
                 if let NavigationEvent::Failed { url, error, .. } = &event {
                     self.on_navigation_failed(our_id, url, &error.to_string());
                     return;
@@ -1358,16 +1368,8 @@ impl BrowserWindow {
                         tab.set_loading(false);
                         tab.set_title(url.as_str());
                         need_favicon = tab.favicon().is_none();
-
-                        // Record history: a history-driven (back/forward) navigation only moved
-                        // the cursor, so don't push; any other navigation appends a new entry
-                        // (using the final URL, so server redirects collapse into one entry).
-                        if tab.suppress_history_push() {
-                            tab.set_suppress_history_push(false);
-                        } else {
-                            tab.history_mut().push(url.clone());
-                        }
-
+                        // Session history is recorded by the engine; it follows up with a
+                        // HistoryChanged event that refreshes the back/forward state.
                         manager.update_tab(our_id, &tab);
                     }
                     drop(manager);
