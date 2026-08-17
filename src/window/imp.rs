@@ -261,10 +261,8 @@ impl BrowserWindow {
             return;
         }
 
-        if Self::is_internal_url(&url) {
-            if Self::engine_rendered_internal(Self::internal_page_name(&url)) {
-                self.load_internal_html(tab_id, &url);
-            }
+        // The shell-rendered config page has nothing to reload.
+        if Self::is_shell_rendered(&url) {
             return;
         }
 
@@ -393,13 +391,11 @@ impl BrowserWindow {
                     let tab = manager.get_tab(tab_id).unwrap().clone();
                     drop(manager);
 
-                    // Shell-rendered internal pages get a GTK widget; everything else
-                    // (real URLs and engine-rendered internal pages like gosub://help)
-                    // gets an engine-backed render area, or the splash page.
-                    let shell_internal = Self::is_internal_url(tab.url())
-                        && !Self::engine_rendered_internal(Self::internal_page_name(tab.url()));
-                    let child: Widget = if shell_internal {
-                        self.build_internal_page(tab.url())
+                    // The shell-rendered config page gets a GTK widget; everything else
+                    // (real URLs and engine-served gosub:// pages) gets an engine-backed
+                    // render area, or the splash page.
+                    let child: Widget = if Self::is_shell_rendered(tab.url()) {
+                        self.build_shell_page()
                     } else if tab.has_engine_tab() {
                         self.build_render_area(&tab).upcast::<Widget>()
                     } else {
@@ -450,11 +446,8 @@ impl BrowserWindow {
 
     /// A navigation failed: clear the loading state and show the error page.
     fn on_navigation_failed(&self, our_id: TabId, url: &url::Url, error: &str) {
-        // Cancellations (stop button, gosub:// interception) are not errors.
+        // Cancellations (stop button) are not errors.
         if error.to_lowercase().contains("cancel") {
-            return;
-        }
-        if Self::is_internal_url(url) {
             return;
         }
 
@@ -531,7 +524,8 @@ impl BrowserWindow {
         let manager = self.tab_manager.lock().unwrap();
         if let Some(tab) = manager.get_tab(tab_id) {
             // New-tab pages (blank, home) get an empty address bar, ready to type into.
-            if Self::is_internal_url(tab.url()) && matches!(Self::internal_page_name(tab.url()), "blank" | "home") {
+            let page = gosub_engine::internal_pages::InternalPages::page_name(tab.url());
+            if matches!(tab.url().scheme(), "gosub" | "about") && matches!(page, "blank" | "home") {
                 self.searchbar.set_text("");
             } else {
                 self.searchbar.set_text(tab.url().as_str());
@@ -696,79 +690,25 @@ impl BrowserWindow {
         tab_label
     }
 
-    /// Internal pages (`gosub://…`, plus `about:` aliases) are rendered by the
-    /// shell and never sent to the engine.
-    fn is_internal_url(url: &url::Url) -> bool {
+    /// `gosub://` (and `about:`) pages are served by the engine's page registry like any
+    /// other navigation. The one exception is `gosub://config`: the engine's version is a
+    /// read-only dump (it cannot do forms yet), so Beacon renders its own editable GTK page
+    /// for it. Everything else - home, help, blank, version, history, unknown pages - goes
+    /// to the engine.
+    fn is_shell_rendered(url: &url::Url) -> bool {
         matches!(url.scheme(), "gosub" | "about")
+            && gosub_engine::internal_pages::InternalPages::page_name(url) == "config"
     }
 
-    /// Page name of an internal URL: `gosub://blank` → "blank" (host form),
-    /// `about:blank` → "blank" (opaque-path form).
-    fn internal_page_name(url: &url::Url) -> &str {
-        url.host_str().unwrap_or_else(|| url.path())
-    }
-
-    fn internal_title(url: &url::Url) -> &str {
-        match Self::internal_page_name(url) {
-            "help" => "Help",
-            "config" => "Engine settings",
-            // gosub://home is the new-tab page; its <title> confirms this once loaded.
-            _ => "New Tab",
-        }
-    }
-
-    /// Internal pages that go through the engine (via `LoadHtml`) instead of a
-    /// shell-built GTK widget.
-    fn engine_rendered_internal(name: &str) -> bool {
-        matches!(name, "help" | "home")
-    }
-
-    /// Send the bundled HTML for an engine-rendered internal page to the tab.
-    fn load_internal_html(&self, tab_id: TabId, url: &url::Url) {
-        let html = match Self::internal_page_name(url) {
-            "help" => include_str!("../../resources/help.html").to_string(),
-            "home" => include_str!("../../resources/home.html").to_string(),
-            _ => return,
-        };
-
-        let manager = self.tab_manager.lock().unwrap();
-        let Some(handle) = manager.get_tab(tab_id).and_then(|t| t.tab_handle()) else {
-            drop(manager);
-            self.log("Tab has no engine handle yet");
-            return;
-        };
-        drop(manager);
-
-        let base_url = url.to_string();
-        runtime().spawn(async move {
-            if let Err(e) = handle.send(EngineTabCommand::LoadHtml { html, base_url }).await {
-                log::error!("load_html failed: {e:?}");
-            }
-            let _ = handle.send(EngineTabCommand::ResumeDrawing { fps: 30 }).await;
-        });
-    }
-
-    /// Shell-rendered stand-ins until the engine serves gosub:// pages itself.
-    fn build_internal_page(&self, url: &url::Url) -> Widget {
-        match Self::internal_page_name(url) {
-            // gosub://config: about:config-style editor over the engine's settings store.
-            "config" => match self.engine.borrow().as_ref() {
-                Some(engine) => super::config_page::build(engine.settings().clone()),
-                None => {
-                    let label = gtk4::Label::new(Some("Engine not running"));
-                    label.set_hexpand(true);
-                    label.set_vexpand(true);
-                    label.upcast::<Widget>()
-                }
-            },
-            // gosub://blank (and about:blank, and unknown pages): plain white,
-            // like every browser's blank page regardless of theme.
-            _ => {
-                let page = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
-                page.set_hexpand(true);
-                page.set_vexpand(true);
-                page.add_css_class("blank-page");
-                page.upcast::<Widget>()
+    /// The shell-rendered `gosub://config` editor (see `is_shell_rendered`).
+    fn build_shell_page(&self) -> Widget {
+        match self.engine.borrow().as_ref() {
+            Some(engine) => super::config_page::build(engine.settings().clone()),
+            None => {
+                let label = gtk4::Label::new(Some("Engine not running"));
+                label.set_hexpand(true);
+                label.set_vexpand(true);
+                label.upcast::<Widget>()
             }
         }
     }
@@ -981,27 +921,24 @@ impl BrowserWindow {
                 };
 
                 // Update information in the given tab with the new url
-                let internal = Self::is_internal_url(&url);
-                let engine_internal = internal && Self::engine_rendered_internal(Self::internal_page_name(&url));
+                let shell = Self::is_shell_rendered(&url);
                 let mut manager = self.tab_manager.lock().unwrap();
                 let mut tab = manager.get_tab(tab_id).unwrap().clone();
 
                 tab.set_favicon(None);
-                tab.set_title(if internal { Self::internal_title(&url) } else { url.as_str() });
+                tab.set_title(if shell { "Engine settings" } else { url.as_str() });
                 tab.set_url(url.clone());
-                tab.set_loading(!internal || engine_internal);
+                tab.set_loading(!shell);
 
                 manager.update_tab(tab_id, &tab);
                 drop(manager);
 
                 self.refresh_tabs();
 
-                // Real URLs go to the engine as navigations; engine-rendered
-                // internal pages are pushed as HTML; the rest is pure shell.
-                if !internal {
+                // Everything but the shell-rendered config page is an engine navigation
+                // (gosub:// pages included - the engine serves them from its registry).
+                if !shell {
                     self.navigate_engine_tab(tab_id, url.as_str());
-                } else if engine_internal {
-                    self.load_internal_html(tab_id, &url);
                 }
             }
             Message::Log(msg) => {
@@ -1092,12 +1029,11 @@ impl BrowserWindow {
         self.engine_tab_map.borrow_mut().insert(handle.tab_id, tab_id);
         tab.set_tab_handle(handle);
 
-        let internal = Self::is_internal_url(&url);
-        let engine_internal = internal && Self::engine_rendered_internal(Self::internal_page_name(&url));
-        if internal {
-            tab.set_title(Self::internal_title(&url));
+        let shell = Self::is_shell_rendered(&url);
+        if shell {
+            tab.set_title("Engine settings");
         }
-        tab.set_loading(!internal || engine_internal);
+        tab.set_loading(!shell);
 
         // add tab to manager, and notify the tab has changed. This will update the
         // tab-bar during a refresh-tabs call.
@@ -1107,10 +1043,8 @@ impl BrowserWindow {
         drop(manager);
         self.refresh_tabs();
 
-        if !internal {
+        if !shell {
             self.navigate_engine_tab(tab_id, url.as_str());
-        } else if engine_internal {
-            self.load_internal_html(tab_id, &url);
         }
     }
 
@@ -1342,13 +1276,13 @@ impl BrowserWindow {
                     return;
                 };
 
-                // The engine cannot serve internal pages: when a link click makes it
-                // start a navigation to gosub://…, cancel the doomed fetch and route
-                // the URL through the shell's internal-page handling instead. Our own
-                // LoadHtml pushes also emit Started, but for those the tab's URL was
-                // already updated, so the equality check keeps them from looping.
+                // The engine serves gosub:// pages itself, except the one page Beacon
+                // renders as a GTK widget (gosub://config). A link to it clicked inside an
+                // engine page starts an engine navigation; cancel that and swap in the
+                // shell page instead. (LoadUrl already set the tab's URL for our own
+                // navigations, so the equality check keeps this from looping.)
                 if let NavigationEvent::Started { url, .. } = &event {
-                    if Self::is_internal_url(url) {
+                    if Self::is_shell_rendered(url) {
                         let (differs, handle) = {
                             let manager = self.tab_manager.lock().unwrap();
                             match manager.get_tab(our_id) {

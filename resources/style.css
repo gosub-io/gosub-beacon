@@ -140,11 +140,6 @@ box.bookmarks-bar button:hover {
 
 /* ── Content ─────────────────────────────────────────────────────────────── */
 
-/* Blank page (gosub://blank): white regardless of theme, like every browser. */
-box.blank-page {
-    background: #ffffff;
-}
-
 /* gosub://config: about:config-style settings editor. */
 box.config-page {
     background: @theme_bg_color;

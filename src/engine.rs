@@ -89,6 +89,16 @@ impl BrowserEngine {
             Err(e) => log::warn!("settings database {settings_db} unavailable, settings will not persist: {e:?}"),
         }
 
+        // Beacon-branded versions of the engine's built-in gosub://home and gosub://help.
+        // Everything else (blank, version, history, config dump, unknown pages) is the
+        // engine's own; gosub://config additionally gets a shell-rendered editor.
+        engine
+            .internal_pages()
+            .register_html("home", include_str!("../resources/home.html"));
+        engine
+            .internal_pages()
+            .register_html("help", include_str!("../resources/help.html"));
+
         // Identify as Beacon on the wire; the engine alone would send only its Gosub
         // token. Only seeded when nothing is stored, so a user-customized UA survives
         // restarts. Must land before start(), which reads the network settings once.
