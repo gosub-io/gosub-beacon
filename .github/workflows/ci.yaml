@@ -10,8 +10,9 @@ env:
   CARGO_TERM_COLOR: always
   # Beacon depends on the engine through relative path dependencies
   # (`../gosub-engine/crates/*`, see Cargo.toml), so CI checks the engine out as a
-  # sibling directory. Bump this when the engine work Beacon needs lands elsewhere.
-  ENGINE_REPO: gosub-io/gosub-engine
+  # sibling directory. The engine work Beacon needs lives on the `beacon` branch of
+  # jaytaph's fork until it is merged upstream; then switch to gosub-io/gosub-engine + main.
+  ENGINE_REPO: jaytaph/gosub-engine
   ENGINE_REF: beacon
 
 jobs:
@@ -24,7 +25,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          path: gtk-browser
+          path: gosub-beacon
       - uses: actions/checkout@v4
         with:
           repository: ${{ env.ENGINE_REPO }}
@@ -42,9 +43,9 @@ jobs:
             clang libclang-dev libgl-dev libegl-dev libfontconfig-dev libfreetype-dev
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: gtk-browser
+          workspaces: gosub-beacon
       - name: Build
-        working-directory: gtk-browser
+        working-directory: gosub-beacon
         run: cargo build --verbose --all
 
   test:
@@ -56,7 +57,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          path: gtk-browser
+          path: gosub-beacon
       - uses: actions/checkout@v4
         with:
           repository: ${{ env.ENGINE_REPO }}
@@ -74,9 +75,9 @@ jobs:
             clang libclang-dev libgl-dev libegl-dev libfontconfig-dev libfreetype-dev
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: gtk-browser
+          workspaces: gosub-beacon
       - name: Run tests
-        working-directory: gtk-browser
+        working-directory: gosub-beacon
         run: cargo test --verbose --all --no-fail-fast --all-targets
 
   clippy:
@@ -84,7 +85,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          path: gtk-browser
+          path: gosub-beacon
       - uses: actions/checkout@v4
         with:
           repository: ${{ env.ENGINE_REPO }}
@@ -102,9 +103,9 @@ jobs:
             clang libclang-dev libgl-dev libegl-dev libfontconfig-dev libfreetype-dev
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: gtk-browser
+          workspaces: gosub-beacon
       - name: Run Clippy
-        working-directory: gtk-browser
+        working-directory: gosub-beacon
         run: cargo clippy --all --tests -- -D warnings
 
   fmt:
