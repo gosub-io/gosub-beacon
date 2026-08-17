@@ -229,6 +229,13 @@ impl BrowserWindow {
         let Some(tab_id) = self.active_tab_id() else {
             return;
         };
+        self.reload_or_stop(tab_id);
+    }
+
+    /// Reload `tab_id` (a true `TabCommand::Reload`: keeps the history entry, restores scroll),
+    /// or stop it if it is still loading. Shell-rendered internal pages have nothing to
+    /// reload; engine-rendered ones get their HTML pushed again.
+    pub(crate) fn reload_or_stop(&self, tab_id: TabId) {
         let (loading, url, handle) = {
             let manager = self.tab_manager.lock().unwrap();
             match manager.get_tab(tab_id) {
@@ -254,8 +261,6 @@ impl BrowserWindow {
             return;
         }
 
-        // Shell-rendered internal pages have nothing to reload; engine-rendered
-        // ones get their HTML pushed again.
         if Self::is_internal_url(&url) {
             if Self::engine_rendered_internal(Self::internal_page_name(&url)) {
                 self.load_internal_html(tab_id, &url);

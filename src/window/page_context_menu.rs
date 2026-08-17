@@ -34,18 +34,7 @@ pub(crate) fn show(window: &super::BrowserWindow, tab_id: TabId, point: Point, h
     });
     add_action(&actions, "reload", {
         let window = window.clone();
-        move || {
-            let url = {
-                let manager = window.imp().tab_manager.lock().unwrap();
-                manager.get_tab(tab_id).map(|t| t.url().to_string())
-            };
-            if let Some(url) = url {
-                let sender = window.imp().get_sender();
-                runtime().spawn(async move {
-                    let _ = sender.send(Message::LoadUrl(tab_id, url)).await;
-                });
-            }
-        }
+        move || window.imp().reload_or_stop(tab_id)
     });
 
     if let Some(link) = hit.link_url.clone() {
