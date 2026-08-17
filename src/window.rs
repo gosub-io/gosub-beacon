@@ -76,11 +76,7 @@ impl BrowserWindow {
 
             let window_clone = window.clone();
             spawn_future_local(async move {
-                let initial_urls = [
-                    "https://gosub.io",
-                    "https://adayinthelifeof.nl",
-                    "https://news.ycombinator.com",
-                ];
+                let initial_urls = ["https://gosub.io", "https://adayinthelifeof.nl", "https://news.ycombinator.com"];
 
                 for url in initial_urls.iter() {
                     window_clone
@@ -127,7 +123,10 @@ impl BrowserWindow {
                 #[strong]
                 sender,
                 async move {
-                    sender.send(Message::OpenTab("gosub://home".into(), "New Tab".into())).await.unwrap();
+                    sender
+                        .send(Message::OpenTab("gosub://home".into(), "New Tab".into()))
+                        .await
+                        .unwrap();
                 }
             ));
         });

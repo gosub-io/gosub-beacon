@@ -14,8 +14,8 @@ use gtk4::graphene::Point;
 use gtk4::prelude::*;
 use gtk4::subclass::prelude::*;
 use gtk4::{
-    gdk, glib, Button, CompositeTemplate, Entry, GLArea, GestureClick, Image, Popover, PopoverMenu, PopoverMenuFlags,
-    ScrolledWindow, Settings, Stack, TemplateChild, TextView, ToggleButton, Widget,
+    gdk, glib, Button, CompositeTemplate, Entry, GLArea, GestureClick, Image, Popover, PopoverMenu, PopoverMenuFlags, ScrolledWindow,
+    Settings, Stack, TemplateChild, TextView, ToggleButton, Widget,
 };
 use log::info;
 use once_cell::sync::Lazy;
@@ -696,8 +696,7 @@ impl BrowserWindow {
     /// for it. Everything else - home, help, blank, version, history, unknown pages - goes
     /// to the engine.
     fn is_shell_rendered(url: &url::Url) -> bool {
-        matches!(url.scheme(), "gosub" | "about")
-            && gosub_engine::internal_pages::InternalPages::page_name(url) == "config"
+        matches!(url.scheme(), "gosub" | "about") && gosub_engine::internal_pages::InternalPages::page_name(url) == "config"
     }
 
     /// The shell-rendered `gosub://config` editor (see `is_shell_rendered`).
@@ -1059,13 +1058,7 @@ impl BrowserWindow {
         area.set_focusable(true);
 
         let engine_id = tab.engine_tab_id().expect("engine tab id");
-        let compositor = self
-            .engine
-            .borrow()
-            .as_ref()
-            .expect("engine initialised")
-            .compositor
-            .clone();
+        let compositor = self.engine.borrow().as_ref().expect("engine initialised").compositor.clone();
 
         // Skia's GL context wrapper: created once the area is realized (its GdkGLContext
         // exists from then on), dropped again on unrealize so it can't outlive the context.
@@ -1152,12 +1145,7 @@ impl BrowserWindow {
             motion.connect_motion(move |_c, x, y| {
                 let handle = motion_handle.clone();
                 runtime().spawn(async move {
-                    let _ = handle
-                        .send(EngineTabCommand::MouseMove {
-                            x: x as f32,
-                            y: y as f32,
-                        })
-                        .await;
+                    let _ = handle.send(EngineTabCommand::MouseMove { x: x as f32, y: y as f32 }).await;
                 });
             });
             area.add_controller(motion);
@@ -1305,10 +1293,7 @@ impl BrowserWindow {
                 if let NavigationEvent::HistoryChanged { history } = event {
                     // The engine also updates the address bar target: on a back/forward
                     // traversal the tab's URL is the entry we moved to, even while it loads.
-                    let current_url = history
-                        .current
-                        .and_then(|id| history.entries.get(id.0))
-                        .map(|e| e.url.clone());
+                    let current_url = history.current.and_then(|id| history.entries.get(id.0)).map(|e| e.url.clone());
                     let mut manager = self.tab_manager.lock().unwrap();
                     if let Some(mut tab) = manager.get_tab(our_id) {
                         tab.history_mut().update(history);

@@ -1,5 +1,4 @@
 use crate::engine::EngineTabId;
-use crate::fetcher::address_parser::GosubRenderMode;
 use gosub_engine::tab::TabHandle;
 use gtk4::gdk::Texture;
 use std::collections::{HashMap, VecDeque};
@@ -78,7 +77,6 @@ impl fmt::Display for TabId {
 
 #[derive(Clone)]
 pub struct GosubTab {
-    render_mode: GosubRenderMode,
     /// Tab is currently loading
     loading: bool,
     /// Id of the tab
@@ -113,7 +111,6 @@ impl Debug for GosubTab {
 impl GosubTab {
     pub fn new(url: Url, title: &str) -> Self {
         GosubTab {
-            render_mode: GosubRenderMode::Rendered,
             loading: false,
             id: TabId::new(),
             pinned: false,
@@ -125,13 +122,6 @@ impl GosubTab {
             content: String::new(),
             tab_handle: None,
         }
-    }
-
-    pub(crate) fn set_render_mode(&mut self, mode: GosubRenderMode) {
-        self.render_mode = mode;
-    }
-    pub(crate) fn render_mode(&self) -> GosubRenderMode {
-        self.render_mode.clone()
     }
 
     /// Returns the engine tab handle, if one has been attached.

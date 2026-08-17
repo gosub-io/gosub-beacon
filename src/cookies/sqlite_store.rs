@@ -69,7 +69,7 @@ impl StorageBackend for SqliteStorage {
         }
     }
 
-    fn get(&self, url: &Url) -> Option<Vec<Cookie>> {
+    fn get(&self, url: &Url) -> Option<Vec<Cookie<'_>>> {
         let domain = url.domain().unwrap().to_string();
         let path = url.path().to_string();
 

@@ -138,11 +138,7 @@ fn build_row(config: Config, info: SettingInfo, current: Setting) -> gtk4::ListB
         let key = key.clone();
         move |value: Setting| {
             let modified = value != default;
-            let result = if modified {
-                config.set(&key, value)
-            } else {
-                config.remove(&key)
-            };
+            let result = if modified { config.set(&key, value) } else { config.remove(&key) };
             match result {
                 Ok(()) => {
                     if modified {
@@ -173,9 +169,12 @@ fn build_row(config: Config, info: SettingInfo, current: Setting) -> gtk4::ListB
     row
 }
 
+/// Pushes a value into an editor widget without firing its change handler (used by reset).
+type EditorSetter = Box<dyn Fn(&Setting)>;
+
 /// An editor widget for `info`'s type/constraint, plus a setter that updates the widget
 /// without triggering `on_change` (used by reset).
-fn build_editor(info: &SettingInfo, current: &Setting, on_change: Rc<dyn Fn(Setting)>) -> (Widget, Box<dyn Fn(&Setting)>) {
+fn build_editor(info: &SettingInfo, current: &Setting, on_change: Rc<dyn Fn(Setting)>) -> (Widget, EditorSetter) {
     // Guard against the setter re-entering on_change through the widget's own signal.
     let suppress = Rc::new(std::cell::Cell::new(false));
 
@@ -260,7 +259,11 @@ fn build_editor(info: &SettingInfo, current: &Setting, on_change: Rc<dyn Fn(Sett
                         return;
                     }
                     let v = s.value_as_int() as isize;
-                    on_change(if unsigned { Setting::UInt(v.max(0) as usize) } else { Setting::SInt(v) });
+                    on_change(if unsigned {
+                        Setting::UInt(v.max(0) as usize)
+                    } else {
+                        Setting::SInt(v)
+                    });
                 }
             });
             let setter = {
@@ -342,12 +345,6 @@ fn setting_from_str(template: &Setting, text: &str) -> Setting {
         Setting::SInt(_) => Setting::SInt(text.parse().unwrap_or(0)),
         Setting::Float(_) => Setting::Float(text.parse().unwrap_or(0.0)),
         Setting::String(_) => Setting::String(text.to_string()),
-        Setting::Map(_) => Setting::Map(
-            text.split(',')
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(String::from)
-                .collect(),
-        ),
+        Setting::Map(_) => Setting::Map(text.split(',').map(str::trim).filter(|s| !s.is_empty()).map(String::from).collect()),
     }
 }
