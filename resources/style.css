@@ -185,6 +185,21 @@ label.config-desc {
     opacity: 0.75;
 }
 
+/* URL-bar completion popover. */
+list.completion-list {
+    background: transparent;
+}
+box.completion-row {
+    padding: 5px 10px;
+}
+label.completion-title {
+    font-size: 13px;
+}
+label.completion-url {
+    font-size: 12px;
+    opacity: 0.6;
+}
+
 /* Crashed-tab page. */
 box.crashed-page label.crashed-title {
     font-size: 20px;

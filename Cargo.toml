@@ -10,7 +10,7 @@ license = "MIT"
 # Local engine: main gosub-engine checkout. The engine owns networking,
 # cookies, storage and the render pipeline; rendering is consumed via the
 # compositor / tile cache.
-gosub_engine = { path = "../gosub-engine/crates/gosub_engine", features = ["sqlite_cookie_store"] }
+gosub_engine = { path = "../gosub-engine/crates/gosub_engine", features = ["sqlite_cookie_store", "sqlite_places"] }
 gosub_render_pipeline = { path = "../gosub-engine/crates/gosub_render_pipeline" }
 gosub_renderer_skia = { path = "../gosub-engine/crates/gosub_renderer_skia" }
 # Skia rasterizes tiles on the CPU; compositing happens on the GPU via GtkGLArea

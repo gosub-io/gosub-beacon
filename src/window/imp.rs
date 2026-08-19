@@ -89,6 +89,12 @@ pub struct BrowserWindow {
     pub statusbar: TemplateChild<gtk4::Label>,
     #[template_child]
     pub btn_downloads: TemplateChild<gtk4::MenuButton>,
+    #[template_child]
+    pub btn_bookmark: TemplateChild<Button>,
+    #[template_child]
+    pub bookmark_icon: TemplateChild<Image>,
+    #[template_child]
+    pub bookmarks_bar: TemplateChild<gtk4::Box>,
 
     // Other stuff that are non-widgets
     pub tab_manager: Arc<Mutex<GosubTabManager>>,
@@ -111,6 +117,8 @@ pub struct BrowserWindow {
     pub downloads: RefCell<Vec<DownloadEntry>>,
     /// List widget inside the downloads popover (built in `constructed`).
     downloads_list: RefCell<Option<gtk4::ListBox>>,
+    /// URL-bar completion popover and its list (built in `constructed`).
+    completion: RefCell<Option<(Popover, gtk4::ListBox)>>,
 }
 
 impl Default for BrowserWindow {
@@ -128,6 +136,9 @@ impl Default for BrowserWindow {
             log: TemplateChild::default(),
             statusbar: TemplateChild::default(),
             btn_downloads: TemplateChild::default(),
+            btn_bookmark: TemplateChild::default(),
+            bookmark_icon: TemplateChild::default(),
+            bookmarks_bar: TemplateChild::default(),
 
             tab_manager: Arc::new(Mutex::new(GosubTabManager::new())),
             sender: Arc::new(tx),
@@ -141,6 +152,7 @@ impl Default for BrowserWindow {
             next_download_id: Cell::new(1),
             downloads: RefCell::new(Vec::new()),
             downloads_list: RefCell::new(None),
+            completion: RefCell::new(None),
         }
     }
 }
@@ -181,6 +193,8 @@ impl ObjectImpl for BrowserWindow {
     fn constructed(&self) {
         self.parent_constructed();
         self.setup_downloads_popover();
+        self.setup_bookmark_button();
+        self.setup_url_completion();
         self.log("Browser created...");
     }
 }
@@ -191,19 +205,6 @@ impl ApplicationWindowImpl for BrowserWindow {}
 
 #[gtk4::template_callbacks]
 impl BrowserWindow {
-    /// Bookmarks-bar buttons carry their URL in the widget `name` property.
-    #[template_callback]
-    fn handle_bookmark_clicked(&self, btn: &Button) {
-        let url = btn.widget_name();
-        if !url.starts_with("http") {
-            return;
-        }
-        let Some(tab_id) = self.active_tab_id() else {
-            return;
-        };
-        let _ = self.get_sender().send_blocking(Message::LoadUrl(tab_id, url.to_string()));
-    }
-
     #[template_callback]
     fn handle_prev_clicked(&self, _btn: &Button) {
         self.navigate_back();
@@ -567,6 +568,7 @@ impl BrowserWindow {
         drop(manager);
         self.update_nav_buttons();
         self.update_reload_button();
+        self.update_bookmark_button();
     }
 
     /// A tab chip: toggle button in the strip whose child is the tab label.
@@ -904,6 +906,169 @@ impl BrowserWindow {
     /// Navigate the active tab to a specific (forward) history entry.
     fn go_to_history_entry(&self, entry: HistoryEntryId) {
         self.send_history_command(EngineTabCommand::GoForward { entry: Some(entry) });
+    }
+
+    /// The zone's places store (bookmarks + history), once the engine is up.
+    fn places(&self) -> Option<gosub_engine::places::PlacesHandle> {
+        self.engine.borrow().as_ref().map(|e| e.places())
+    }
+
+    /// Star button: toggles a bookmark for the active tab.
+    fn setup_bookmark_button(&self) {
+        let window = self.obj().clone();
+        self.btn_bookmark.connect_clicked(move |_| {
+            let imp = window.imp();
+            let Some(places) = imp.places() else { return };
+            let Some(tab_id) = imp.active_tab_id() else { return };
+            let (url, title) = {
+                let manager = imp.tab_manager.lock().unwrap();
+                match manager.get_tab(tab_id) {
+                    Some(tab) => (tab.url().to_string(), tab.title().to_string()),
+                    None => return,
+                }
+            };
+            if !url.starts_with("http") {
+                return; // internal pages are not bookmarkable
+            }
+            if places.is_bookmarked(&url) {
+                places.remove_bookmark(&url);
+            } else {
+                places.add_bookmark(&url, if title.is_empty() { &url } else { &title });
+            }
+            imp.update_bookmark_button();
+            imp.rebuild_bookmarks_bar();
+        });
+    }
+
+    /// Reflect the active tab's bookmark state in the star icon.
+    pub(crate) fn update_bookmark_button(&self) {
+        let bookmarked = self
+            .places()
+            .zip(self.active_tab_id())
+            .and_then(|(places, tab_id)| {
+                let manager = self.tab_manager.lock().unwrap();
+                manager.get_tab(tab_id).map(|tab| places.is_bookmarked(tab.url().as_str()))
+            })
+            .unwrap_or(false);
+        self.bookmark_icon
+            .set_icon_name(Some(if bookmarked { "starred-symbolic" } else { "non-starred-symbolic" }));
+    }
+
+    /// Rebuild the bookmarks bar from the store.
+    pub(crate) fn rebuild_bookmarks_bar(&self) {
+        let Some(places) = self.places() else { return };
+        while let Some(child) = self.bookmarks_bar.first_child() {
+            self.bookmarks_bar.remove(&child);
+        }
+        for bookmark in places.bookmarks() {
+            let button = Button::builder()
+                .label(if bookmark.title.is_empty() {
+                    &bookmark.url
+                } else {
+                    &bookmark.title
+                })
+                .has_frame(false)
+                .tooltip_text(&bookmark.url)
+                .build();
+            let window = self.obj().clone();
+            let url = bookmark.url.clone();
+            button.connect_clicked(move |_| {
+                let imp = window.imp();
+                let Some(tab_id) = imp.active_tab_id() else { return };
+                let _ = imp.get_sender().send_blocking(Message::LoadUrl(tab_id, url.clone()));
+            });
+            self.bookmarks_bar.append(&button);
+        }
+    }
+
+    /// URL-bar completion: a popover of visited pages matching what is being typed.
+    fn setup_url_completion(&self) {
+        let list = gtk4::ListBox::new();
+        list.set_selection_mode(gtk4::SelectionMode::None);
+        list.add_css_class("completion-list");
+        let scroller = gtk4::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk4::PolicyType::Never)
+            .vscrollbar_policy(gtk4::PolicyType::Automatic)
+            .propagate_natural_height(true)
+            .max_content_height(320)
+            .min_content_width(500)
+            .child(&list)
+            .build();
+        let popover = Popover::builder().child(&scroller).autohide(false).has_arrow(false).build();
+        popover.set_parent(&*self.searchbar);
+        *self.completion.borrow_mut() = Some((popover, list));
+
+        let window = self.obj().clone();
+        self.searchbar.connect_changed(move |entry| {
+            let imp = window.imp();
+            // Only complete while the user is typing, not on programmatic updates.
+            if !entry.has_focus() {
+                imp.hide_completion();
+                return;
+            }
+            imp.show_completion(entry.text().as_str());
+        });
+
+        // Leaving the address bar dismisses the suggestions.
+        let focus = gtk4::EventControllerFocus::new();
+        let window = self.obj().clone();
+        focus.connect_leave(move |_| window.imp().hide_completion());
+        self.searchbar.add_controller(focus);
+    }
+
+    fn hide_completion(&self) {
+        if let Some((popover, _)) = self.completion.borrow().as_ref() {
+            popover.popdown();
+        }
+    }
+
+    /// Populate and show the completion popover for `query`, or hide it when nothing matches.
+    fn show_completion(&self, query: &str) {
+        let query = query.trim();
+        let hits = match self.places() {
+            Some(places) if query.len() >= 2 => places.query_visited(query, 8),
+            _ => Vec::new(),
+        };
+        let completion = self.completion.borrow();
+        let Some((popover, list)) = completion.as_ref() else { return };
+        if hits.is_empty() {
+            popover.popdown();
+            return;
+        }
+
+        while let Some(row) = list.first_child() {
+            list.remove(&row);
+        }
+        for hit in hits {
+            let row = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+            row.add_css_class("completion-row");
+            let title = gtk4::Label::new(Some(if hit.title.is_empty() { &hit.url } else { &hit.title }));
+            title.set_halign(gtk4::Align::Start);
+            title.set_ellipsize(gtk4::pango::EllipsizeMode::End);
+            title.add_css_class("completion-title");
+            let url_label = gtk4::Label::new(Some(&hit.url));
+            url_label.set_halign(gtk4::Align::Start);
+            url_label.set_hexpand(true);
+            url_label.set_ellipsize(gtk4::pango::EllipsizeMode::Middle);
+            url_label.add_css_class("completion-url");
+            row.append(&title);
+            row.append(&url_label);
+
+            let click = gtk4::GestureClick::new();
+            let window = self.obj().clone();
+            let url = hit.url.clone();
+            click.connect_released(move |_, _, _, _| {
+                let imp = window.imp();
+                imp.hide_completion();
+                imp.searchbar.set_text(&url);
+                if let Some(tab_id) = imp.active_tab_id() {
+                    let _ = imp.get_sender().send_blocking(Message::LoadUrl(tab_id, url.clone()));
+                }
+            });
+            row.add_controller(click);
+            list.append(&row);
+        }
+        popover.popup();
     }
 
     /// Build the downloads popover once (a list inside a scroller on the toolbar button).
@@ -1527,6 +1692,9 @@ impl BrowserWindow {
             });
         }
 
+        // The bookmarks bar renders from the store as soon as the engine exists.
+        self.rebuild_bookmarks_bar();
+
         // Route engine events (navigation, redraw, …) to the window.
         if let Some(mut event_rx) = event_rx {
             let weak = self.obj().downgrade();
@@ -1636,6 +1804,7 @@ impl BrowserWindow {
                     }
                     self.refresh_tabs();
                     self.update_nav_buttons();
+                    self.update_bookmark_button();
                 }
             }
             // The engine fetched the page's icon (through its own fetcher, so with the

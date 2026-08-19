@@ -111,6 +111,18 @@
                             </object>
                         </child>
                         <child>
+                            <object class="GtkButton" id="btn_bookmark">
+                                <property name="has-frame">false</property>
+                                <property name="tooltip-text">Bookmark this page</property>
+                                <property name="valign">center</property>
+                                <child>
+                                    <object class="GtkImage" id="bookmark_icon">
+                                        <property name="icon-name">non-starred-symbolic</property>
+                                    </object>
+                                </child>
+                            </object>
+                        </child>
+                        <child>
                             <object class="GtkButton" id="btn_view_source">
                                 <property name="has-frame">false</property>
                                 <property name="tooltip-text">View source</property>
@@ -147,36 +159,12 @@
 
                 <!-- Row 5: slim bookmarks strip -->
                 <child>
-                    <object class="GtkBox">
+                    <object class="GtkBox" id="bookmarks_bar">
                         <property name="orientation">horizontal</property>
                         <property name="spacing">2</property>
                         <style>
                             <class name="bookmarks-bar"/>
                         </style>
-                        <child>
-                            <object class="GtkButton">
-                                <property name="has-frame">false</property>
-                                <property name="label">Gosub</property>
-                                <property name="name">https://gosub.io</property>
-                                <signal name="clicked" handler="handle_bookmark_clicked" swapped="true"/>
-                            </object>
-                        </child>
-                        <child>
-                            <object class="GtkButton">
-                                <property name="has-frame">false</property>
-                                <property name="label">GitHub</property>
-                                <property name="name">https://github.com/gosub-io</property>
-                                <signal name="clicked" handler="handle_bookmark_clicked" swapped="true"/>
-                            </object>
-                        </child>
-                        <child>
-                            <object class="GtkButton">
-                                <property name="has-frame">false</property>
-                                <property name="label">Hacker News</property>
-                                <property name="name">https://news.ycombinator.com</property>
-                                <signal name="clicked" handler="handle_bookmark_clicked" swapped="true"/>
-                            </object>
-                        </child>
                     </object>
                 </child>
 

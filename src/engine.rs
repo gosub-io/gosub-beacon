@@ -12,6 +12,7 @@ use gtk4::prelude::*;
 
 use gosub_engine::cookies::SqliteCookieStore;
 use gosub_engine::events::EngineEvent;
+use gosub_engine::places::SqlitePlaces;
 use gosub_engine::storage::{InMemorySessionStore, PartitionPolicy, SqliteLocalStore, StorageService};
 use gosub_engine::tab::{TabDefaults, TabHandle};
 use gosub_engine::zone::{Zone, ZoneConfig, ZoneId, ZoneServices};
@@ -51,6 +52,8 @@ pub type EngineTabId = gosub_engine::tab::TabId;
 /// Created once per browser window. The engine itself runs on the shared tokio runtime;
 /// this struct lives on the GTK main thread.
 pub struct BrowserEngine {
+    /// Bookmarks + visited history store, shared with the engine's zone.
+    places: gosub_engine::places::PlacesHandle,
     /// Kept alive so the engine keeps running for the lifetime of the window.
     #[allow(dead_code)]
     engine: GosubEngine<AppConfig>,
@@ -130,6 +133,47 @@ impl BrowserEngine {
             .into();
 
         let local_db = data_dir.join("local-storage.db").to_string_lossy().into_owned();
+
+        // Bookmarks + visited history. The engine records visits; Beacon queries the same
+        // handle directly (star button, bookmarks bar, URL-bar completion).
+        let places: gosub_engine::places::PlacesHandle =
+            Arc::new(SqlitePlaces::new(data_dir.join("places.db")).map_err(|e| anyhow::anyhow!("places: {e:?}"))?);
+        if places.bookmarks().is_empty() {
+            for (url, title) in [
+                ("https://gosub.io", "Gosub"),
+                ("https://github.com/gosub-io", "GitHub"),
+                ("https://news.ycombinator.com", "Hacker News"),
+            ] {
+                places.add_bookmark(url, title);
+            }
+        }
+
+        // gosub://bookmarks: rendered from the live store on every request.
+        engine.internal_pages().register("bookmarks", {
+            let places = places.clone();
+            Arc::new(move |_req: &gosub_engine::internal_pages::PageRequest<'_>| {
+                let mut body = String::from(
+                    "<h1>Bookmarks</h1><p class=\"sub\">The star button in the toolbar adds and removes bookmarks.</p><table>",
+                );
+                for b in places.bookmarks() {
+                    let url = html_escape(&b.url);
+                    body.push_str(&format!(
+                        "<tr><td><a href=\"{url}\">{}</a></td><td class=\"muted\"><code>{url}</code></td></tr>",
+                        html_escape(&b.title)
+                    ));
+                }
+                body.push_str("</table>");
+                Some(gosub_engine::internal_pages::PageResponse::html(format!(
+                    "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Bookmarks</title><style>\
+                     body{{margin:0;padding:32px 40px;font-family:sans-serif;font-size:14px}}\
+                     h1{{font-size:24px;margin:0 0 4px 0}} .sub{{color:#5c6675;margin:0 0 20px 0}}\
+                     table{{border-collapse:collapse}} td{{padding:4px 14px 4px 0}}\
+                     a{{color:#1d5fd1}} .muted{{color:#8a94a6}} code{{font-family:monospace;font-size:12px}}\
+                     </style></head><body>{body}</body></html>"
+                )))
+            })
+        });
+
         let zone_services = ZoneServices {
             storage: Arc::new(StorageService::new(
                 Arc::new(SqliteLocalStore::new(&local_db).map_err(|e| anyhow::anyhow!("local store: {e:?}"))?),
@@ -138,6 +182,7 @@ impl BrowserEngine {
             cookie_store: Some(cookie_store),
             cookie_jar: None,
             partition_policy: PartitionPolicy::None,
+            places: Some(places.clone()),
         };
 
         let zone = engine
@@ -145,12 +190,18 @@ impl BrowserEngine {
             .map_err(|e| anyhow::anyhow!("create_zone: {e:?}"))?;
 
         Ok(Self {
+            places,
             engine,
             zone,
             compositor,
             redraw_rx: Some(rx_redraw),
             event_rx: Some(event_rx),
         })
+    }
+
+    /// Bookmarks + visited history (star button, bookmarks bar, URL completion).
+    pub fn places(&self) -> gosub_engine::places::PlacesHandle {
+        self.places.clone()
     }
 
     /// The engine's settings store (backs the `gosub://config` page).
@@ -314,4 +365,19 @@ pub fn render_frame_gl(
 
     dc.flush_surface(&mut surface);
     dc.submit(skia_safe::gpu::SyncCpu::No);
+}
+
+/// Minimal HTML escaping for the bookmarks page.
+fn html_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            _ => out.push(c),
+        }
+    }
+    out
 }
