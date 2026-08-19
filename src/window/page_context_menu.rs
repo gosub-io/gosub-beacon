@@ -40,8 +40,17 @@ pub(crate) fn show(window: &super::BrowserWindow, tab_id: TabId, point: Point, h
     if let Some(link) = hit.link_url.clone() {
         let section = Menu::new();
         section.append(Some("Open Link in New Tab"), Some("page.open-link-new-tab"));
+        section.append(Some("Save Link As…"), Some("page.save-link-as"));
         section.append(Some("Copy Link Address"), Some("page.copy-link"));
         menu.append_section(None, &section);
+        add_action(&actions, "save-link-as", {
+            let window = window.clone();
+            let link = link.clone();
+            move || {
+                let name = link.rsplit('/').next().filter(|s| !s.is_empty()).unwrap_or("download");
+                window.imp().save_download_as(tab_id, link.clone(), name);
+            }
+        });
         add_action(&actions, "open-link-new-tab", {
             let window = window.clone();
             let link = link.clone();

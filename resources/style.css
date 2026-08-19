@@ -185,6 +185,31 @@ label.config-desc {
     opacity: 0.75;
 }
 
+/* Downloads popover. */
+list.downloads-list {
+    background: transparent;
+}
+label.downloads-empty {
+    padding: 12px 16px;
+    opacity: 0.6;
+}
+box.download-row {
+    padding: 8px 12px;
+    border-bottom: 1px solid alpha(@theme_fg_color, 0.08);
+}
+label.download-name {
+    font-weight: bold;
+    font-size: 13px;
+}
+label.download-status {
+    font-size: 11px;
+    opacity: 0.7;
+}
+label.download-failed {
+    font-size: 11px;
+    color: #c01c28;
+}
+
 /* Hover-URL bubble overlaid on the viewport (bottom-left, Firefox style). */
 label.status-bubble {
     background: @theme_bg_color;

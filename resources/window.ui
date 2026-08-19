@@ -123,6 +123,14 @@
                             </object>
                         </child>
                         <child>
+                            <object class="GtkMenuButton" id="btn_downloads">
+                                <property name="has-frame">false</property>
+                                <property name="tooltip-text">Downloads</property>
+                                <property name="icon-name">folder-download-symbolic</property>
+                                <property name="valign">center</property>
+                            </object>
+                        </child>
+                        <child>
                             <object class="GtkToggleButton">
                                 <property name="has-frame">false</property>
                                 <property name="tooltip-text">Dark mode</property>

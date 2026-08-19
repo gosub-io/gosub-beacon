@@ -47,6 +47,23 @@ impl<T: IsA<Widget>> WidgetExtTabId for T {
     }
 }
 
+/// One download this session, as shown in the downloads popover.
+pub struct DownloadEntry {
+    pub id: u64,
+    pub filename: String,
+    pub path: std::path::PathBuf,
+    pub received: u64,
+    pub total: Option<u64>,
+    pub state: DownloadState,
+}
+
+#[derive(PartialEq)]
+pub enum DownloadState {
+    Running,
+    Finished,
+    Failed(String),
+}
+
 #[derive(CompositeTemplate)]
 #[template(resource = "/io/gosub/beacon/ui/window.ui")]
 pub struct BrowserWindow {
@@ -70,6 +87,8 @@ pub struct BrowserWindow {
     pub log: TemplateChild<TextView>,
     #[template_child]
     pub statusbar: TemplateChild<gtk4::Label>,
+    #[template_child]
+    pub btn_downloads: TemplateChild<gtk4::MenuButton>,
 
     // Other stuff that are non-widgets
     pub tab_manager: Arc<Mutex<GosubTabManager>>,
@@ -86,6 +105,12 @@ pub struct BrowserWindow {
     pub pending_hit_tests: RefCell<HashMap<u64, (TabId, Point)>>,
     /// Source of hit-test tokens.
     pub next_hit_test_token: Cell<u64>,
+    /// Source of download ids.
+    pub next_download_id: Cell<u64>,
+    /// Session downloads, newest last; rendered into the downloads popover.
+    pub downloads: RefCell<Vec<DownloadEntry>>,
+    /// List widget inside the downloads popover (built in `constructed`).
+    downloads_list: RefCell<Option<gtk4::ListBox>>,
 }
 
 impl Default for BrowserWindow {
@@ -102,6 +127,7 @@ impl Default for BrowserWindow {
             log_scroller: TemplateChild::default(),
             log: TemplateChild::default(),
             statusbar: TemplateChild::default(),
+            btn_downloads: TemplateChild::default(),
 
             tab_manager: Arc::new(Mutex::new(GosubTabManager::new())),
             sender: Arc::new(tx),
@@ -112,6 +138,9 @@ impl Default for BrowserWindow {
             engine_tab_map: Rc::new(RefCell::new(HashMap::new())),
             pending_hit_tests: RefCell::new(HashMap::new()),
             next_hit_test_token: Cell::new(1),
+            next_download_id: Cell::new(1),
+            downloads: RefCell::new(Vec::new()),
+            downloads_list: RefCell::new(None),
         }
     }
 }
@@ -151,6 +180,7 @@ impl ObjectImpl for BrowserWindow {
 
     fn constructed(&self) {
         self.parent_constructed();
+        self.setup_downloads_popover();
         self.log("Browser created...");
     }
 }
@@ -799,6 +829,168 @@ impl BrowserWindow {
         self.send_history_command(EngineTabCommand::GoForward { entry: Some(entry) });
     }
 
+    /// Build the downloads popover once (a list inside a scroller on the toolbar button).
+    fn setup_downloads_popover(&self) {
+        let list = gtk4::ListBox::new();
+        list.set_selection_mode(gtk4::SelectionMode::None);
+        list.add_css_class("downloads-list");
+        let scroller = gtk4::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk4::PolicyType::Never)
+            .vscrollbar_policy(gtk4::PolicyType::Automatic)
+            .propagate_natural_height(true)
+            .max_content_height(400)
+            .min_content_width(340)
+            .child(&list)
+            .build();
+        let popover = Popover::builder().child(&scroller).build();
+        self.btn_downloads.set_popover(Some(&popover));
+        *self.downloads_list.borrow_mut() = Some(list);
+        self.refresh_downloads();
+    }
+
+    /// Re-render the downloads popover from `self.downloads` (newest first).
+    pub(crate) fn refresh_downloads(&self) {
+        let list_ref = self.downloads_list.borrow();
+        let Some(list) = list_ref.as_ref() else { return };
+        while let Some(row) = list.first_child() {
+            list.remove(&row);
+        }
+
+        let downloads = self.downloads.borrow();
+        if downloads.is_empty() {
+            let empty = gtk4::Label::new(Some("No downloads yet"));
+            empty.add_css_class("downloads-empty");
+            list.append(&empty);
+            return;
+        }
+
+        for entry in downloads.iter().rev() {
+            let row = gtk4::Box::new(gtk4::Orientation::Vertical, 2);
+            row.add_css_class("download-row");
+
+            let top = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+            let name = gtk4::Label::new(Some(&entry.filename));
+            name.set_halign(gtk4::Align::Start);
+            name.set_hexpand(true);
+            name.set_ellipsize(gtk4::pango::EllipsizeMode::Middle);
+            name.add_css_class("download-name");
+            top.append(&name);
+            if entry.state == DownloadState::Finished {
+                let open = Button::with_label("Open");
+                open.set_has_frame(false);
+                open.add_css_class("download-open");
+                let path = entry.path.clone();
+                let window = self.obj().clone();
+                open.connect_clicked(move |_| {
+                    let launcher = gtk4::FileLauncher::new(Some(&gtk4::gio::File::for_path(&path)));
+                    launcher.launch(Some(&window), gtk4::gio::Cancellable::NONE, |result| {
+                        if let Err(e) = result {
+                            log::warn!("open download failed: {e}");
+                        }
+                    });
+                });
+                top.append(&open);
+            }
+            row.append(&top);
+
+            match &entry.state {
+                DownloadState::Running => {
+                    let bar = gtk4::ProgressBar::new();
+                    if let Some(total) = entry.total.filter(|t| *t > 0) {
+                        bar.set_fraction(entry.received as f64 / total as f64);
+                    }
+                    row.append(&bar);
+                    let status = gtk4::Label::new(Some(&match entry.total {
+                        Some(total) => format!("{} of {}", human_bytes(entry.received), human_bytes(total)),
+                        None => format!("{} so far…", human_bytes(entry.received)),
+                    }));
+                    status.set_halign(gtk4::Align::Start);
+                    status.add_css_class("download-status");
+                    row.append(&status);
+                }
+                DownloadState::Finished => {
+                    let status = gtk4::Label::new(Some(&format!("{} — {}", human_bytes(entry.received), entry.path.display())));
+                    status.set_halign(gtk4::Align::Start);
+                    status.set_ellipsize(gtk4::pango::EllipsizeMode::Middle);
+                    status.add_css_class("download-status");
+                    row.append(&status);
+                }
+                DownloadState::Failed(error) => {
+                    let status = gtk4::Label::new(Some(&format!("Failed: {error}")));
+                    status.set_halign(gtk4::Align::Start);
+                    status.set_wrap(true);
+                    status.add_css_class("download-failed");
+                    row.append(&status);
+                }
+            }
+            list.append(&row);
+        }
+    }
+
+    /// Record a new running download and update the popover.
+    pub(crate) fn add_download(&self, id: u64, path: &std::path::Path) {
+        let filename = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "download".into());
+        self.downloads.borrow_mut().push(DownloadEntry {
+            id,
+            filename,
+            path: path.to_path_buf(),
+            received: 0,
+            total: None,
+            state: DownloadState::Running,
+        });
+        self.refresh_downloads();
+    }
+
+    /// Apply an engine download event to the matching entry and update the popover.
+    fn update_download(&self, id: u64, apply: impl FnOnce(&mut DownloadEntry)) {
+        {
+            let mut downloads = self.downloads.borrow_mut();
+            let Some(entry) = downloads.iter_mut().find(|e| e.id == id) else {
+                return;
+            };
+            apply(entry);
+        }
+        self.refresh_downloads();
+    }
+
+    /// Ask the user where to save `url` (native save dialog, prefilled with
+    /// `suggested_name`), then start the engine download on `tab_id`'s handle.
+    pub(crate) fn save_download_as(&self, tab_id: TabId, url: String, suggested_name: &str) {
+        let handle = {
+            let manager = self.tab_manager.lock().unwrap();
+            manager.get_tab(tab_id).and_then(|t| t.tab_handle())
+        };
+        let Some(handle) = handle else {
+            self.log("Tab has no engine handle for the download");
+            return;
+        };
+
+        let dialog = gtk4::FileDialog::builder().initial_name(suggested_name).build();
+        let window = self.obj().clone();
+        dialog.save(Some(&*self.obj()), gtk4::gio::Cancellable::NONE, move |result| {
+            // Cancelling the dialog just drops the offer.
+            let Ok(file) = result else { return };
+            let Some(path) = file.path() else { return };
+            let id = window.imp().next_download_id.get();
+            window.imp().next_download_id.set(id + 1);
+            window.imp().log(&format!("Download #{id}: {url} → {}", path.display()));
+            window.imp().add_download(id, &path);
+            let handle = handle.clone();
+            runtime().spawn(async move {
+                let _ = handle
+                    .send(EngineTabCommand::StartDownload {
+                        id: gosub_engine::events::DownloadId(id),
+                        url,
+                        target_path: path,
+                    })
+                    .await;
+            });
+        });
+    }
+
     /// Send a history traversal command to the active tab's engine tab and mark it loading.
     pub(crate) fn send_history_command(&self, cmd: EngineTabCommand) {
         let Some(tab_id) = self.active_tab_id() else {
@@ -1378,6 +1570,46 @@ impl BrowserWindow {
                 let _ = self.get_sender().send_blocking(Message::FaviconLoaded(our_id, favicon));
             }
             // Answer to a right-click's QueryHitTest: build the page context menu from it.
+            // A navigation turned out to be a download: ask where to save it, then hand
+            // the engine the chosen path.
+            EngineEvent::DownloadRequested {
+                tab_id,
+                url,
+                suggested_filename,
+                total_bytes,
+                ..
+            } => {
+                let Some(our_id) = self.engine_tab_map.borrow().get(&tab_id).copied() else {
+                    return;
+                };
+                let size = total_bytes.map(|b| format!(" ({b} bytes)")).unwrap_or_default();
+                self.log(&format!("Download offered: {suggested_filename}{size}"));
+                self.save_download_as(our_id, url.to_string(), &suggested_filename);
+            }
+            EngineEvent::DownloadProgress {
+                id,
+                received_bytes,
+                total_bytes,
+                ..
+            } => {
+                self.update_download(id.0, |e| {
+                    e.received = received_bytes;
+                    e.total = total_bytes;
+                });
+            }
+            EngineEvent::DownloadFinished {
+                id, path, received_bytes, ..
+            } => {
+                self.log(&format!("Download #{} finished: {} ({received_bytes} bytes)", id.0, path.display()));
+                self.update_download(id.0, |e| {
+                    e.received = received_bytes;
+                    e.state = DownloadState::Finished;
+                });
+            }
+            EngineEvent::DownloadFailed { id, error, .. } => {
+                self.log(&format!("Download #{} FAILED: {error}", id.0));
+                self.update_download(id.0, |e| e.state = DownloadState::Failed(error.clone()));
+            }
             EngineEvent::HitTestResult { token, hit, .. } => {
                 let Some((tab_id, point)) = self.pending_hit_tests.borrow_mut().remove(&token.0) else {
                     return;
@@ -1478,4 +1710,20 @@ fn engine_modifiers(state: gdk::ModifierType) -> gosub_engine::events::Modifiers
         m |= Modifiers::META;
     }
     m
+}
+
+/// Compact human byte count for the downloads popover (e.g. "3.4 MB").
+fn human_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1000.0 && unit < UNITS.len() - 1 {
+        value /= 1000.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} B")
+    } else {
+        format!("{value:.1} {}", UNITS[unit])
+    }
 }
