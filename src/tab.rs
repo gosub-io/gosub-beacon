@@ -89,6 +89,8 @@ pub struct GosubTab {
     url: Url,
     /// Mirror of the engine's session history for this tab (back/forward state)
     history: History,
+    /// Panic message when the engine worker for this tab crashed.
+    crashed: Option<String>,
     /// Title of the tab
     title: String,
     /// Loaded favicon of the tab
@@ -117,6 +119,7 @@ impl GosubTab {
             private: false,
             url,
             history: History::default(),
+            crashed: None,
             title: title.to_string(),
             favicon: None,
             content: String::new(),
@@ -141,6 +144,16 @@ impl GosubTab {
 
     pub fn set_tab_handle(&mut self, handle: TabHandle) {
         self.tab_handle = Some(handle);
+    }
+
+    /// Panic message when the tab's engine worker crashed; `None` while healthy.
+    /// A crashed tab keeps its (dead) handle until `set_crashed(None)` after a revive.
+    pub fn crashed(&self) -> Option<&str> {
+        self.crashed.as_deref()
+    }
+
+    pub fn set_crashed(&mut self, error: Option<String>) {
+        self.crashed = error;
     }
 
     pub fn is_loading(&self) -> bool {

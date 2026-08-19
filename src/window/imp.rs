@@ -424,7 +424,9 @@ impl BrowserWindow {
                     // The shell-rendered config page gets a GTK widget; everything else
                     // (real URLs and engine-served gosub:// pages) gets an engine-backed
                     // render area, or the splash page.
-                    let child: Widget = if Self::is_shell_rendered(tab.url()) {
+                    let child: Widget = if tab.crashed().is_some() {
+                        self.build_crashed_page(&tab)
+                    } else if Self::is_shell_rendered(tab.url()) {
                         self.build_shell_page()
                     } else if tab.has_engine_tab() {
                         self.build_render_area(&tab).upcast::<Widget>()
@@ -727,6 +729,81 @@ impl BrowserWindow {
     /// to the engine.
     fn is_shell_rendered(url: &url::Url) -> bool {
         matches!(url.scheme(), "gosub" | "about") && gosub_engine::internal_pages::InternalPages::page_name(url) == "config"
+    }
+
+    /// Sad-tab page for a crashed engine worker, with a Reload that recreates the tab.
+    fn build_crashed_page(&self, tab: &GosubTab) -> Widget {
+        let page = gtk4::Box::new(gtk4::Orientation::Vertical, 12);
+        page.set_hexpand(true);
+        page.set_vexpand(true);
+        page.set_halign(gtk4::Align::Center);
+        page.set_valign(gtk4::Align::Center);
+        page.add_css_class("crashed-page");
+
+        let title = gtk4::Label::new(Some("This tab crashed"));
+        title.add_css_class("crashed-title");
+        page.append(&title);
+
+        if let Some(error) = tab.crashed() {
+            let detail = gtk4::Label::new(Some(error));
+            detail.set_wrap(true);
+            detail.set_max_width_chars(60);
+            detail.add_css_class("crashed-detail");
+            page.append(&detail);
+        }
+
+        let reload = Button::with_label("Reload Tab");
+        reload.set_halign(gtk4::Align::Center);
+        reload.add_css_class("suggested-action");
+        let window = self.obj().clone();
+        let tab_id = tab.id();
+        reload.connect_clicked(move |_| {
+            window.imp().revive_tab(tab_id);
+        });
+        page.append(&reload);
+
+        page.upcast::<Widget>()
+    }
+
+    /// Recreate the engine tab behind a crashed shell tab and reload its URL.
+    fn revive_tab(&self, tab_id: TabId) {
+        let url = {
+            let manager = self.tab_manager.lock().unwrap();
+            match manager.get_tab(tab_id) {
+                Some(tab) => tab.url().to_string(),
+                None => return,
+            }
+        };
+
+        let handle = {
+            let mut eng = self.engine.borrow_mut();
+            let Some(eng) = eng.as_mut() else {
+                self.log("Engine not ready");
+                return;
+            };
+            let viewport = {
+                let (w, h) = (self.content_stack.width(), self.content_stack.height());
+                (w > 0 && h > 0).then_some((w as u32, h as u32))
+            };
+            match eng.create_tab(runtime(), "New Tab", viewport) {
+                Ok(h) => h,
+                Err(e) => {
+                    self.log(&format!("Failed to recreate engine tab: {e}"));
+                    return;
+                }
+            }
+        };
+
+        self.engine_tab_map.borrow_mut().insert(handle.tab_id, tab_id);
+        let mut manager = self.tab_manager.lock().unwrap();
+        if let Some(mut tab) = manager.get_tab(tab_id) {
+            tab.set_tab_handle(handle);
+            tab.set_crashed(None);
+            manager.update_tab(tab_id, &tab);
+        }
+        drop(manager);
+        self.refresh_tabs();
+        let _ = self.get_sender().send_blocking(Message::LoadUrl(tab_id, url));
     }
 
     /// The shell-rendered `gosub://config` editor (see `is_shell_rendered`).
@@ -1630,6 +1707,24 @@ impl BrowserWindow {
                 if let Some(area) = self.render_areas.borrow().get(&our_id) {
                     area.set_cursor_from_name(Some(name));
                 }
+            }
+            // The tab's engine worker died. Mark the tab crashed: its page becomes the
+            // sad-tab widget with a Reload button that recreates the engine tab.
+            EngineEvent::TabCrashed { tab_id, error, .. } => {
+                let Some(our_id) = self.engine_tab_map.borrow_mut().remove(&tab_id) else {
+                    return;
+                };
+                self.log(&format!("Tab crashed: {error}"));
+                self.render_areas.borrow_mut().remove(&our_id);
+                let mut manager = self.tab_manager.lock().unwrap();
+                if let Some(mut tab) = manager.get_tab(our_id) {
+                    tab.set_loading(false);
+                    tab.set_crashed(Some(error));
+                    manager.update_tab(our_id, &tab);
+                }
+                drop(manager);
+                self.refresh_tabs();
+                self.update_nav_buttons();
             }
             // Focus moved inside the page. Nothing to do yet - this becomes the IME /
             // on-screen-keyboard trigger once text editing lands.

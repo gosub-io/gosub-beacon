@@ -185,6 +185,17 @@ label.config-desc {
     opacity: 0.75;
 }
 
+/* Crashed-tab page. */
+box.crashed-page label.crashed-title {
+    font-size: 20px;
+    font-weight: bold;
+}
+box.crashed-page label.crashed-detail {
+    font-family: monospace;
+    font-size: 12px;
+    opacity: 0.7;
+}
+
 /* Downloads popover. */
 list.downloads-list {
     background: transparent;
