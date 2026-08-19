@@ -1154,7 +1154,11 @@ impl BrowserWindow {
             let click = gtk4::GestureClick::new();
             click.set_button(gdk::BUTTON_PRIMARY);
             let click_handle = handle.clone();
-            click.connect_pressed(move |_g, _n, x, y| {
+            click.connect_pressed(move |g, _n, x, y| {
+                // Keys should go to the page after a click on it.
+                if let Some(widget) = g.widget() {
+                    widget.grab_focus();
+                }
                 let handle = click_handle.clone();
                 runtime().spawn(async move {
                     let _ = handle
@@ -1167,6 +1171,30 @@ impl BrowserWindow {
                 });
             });
             area.add_controller(click);
+
+            // Keyboard -> engine. Shortcuts with Control/Alt/Super are the shell's (Ctrl+T
+            // and friends) and propagate to GTK; everything else is the page's: focus
+            // traversal (Tab), link activation (Enter), and scrolling keys.
+            let keys = gtk4::EventControllerKey::new();
+            let key_handle = handle.clone();
+            keys.connect_key_pressed(move |_c, keyval, _keycode, state| {
+                if state.intersects(gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::ALT_MASK | gdk::ModifierType::SUPER_MASK) {
+                    return glib::Propagation::Proceed;
+                }
+                let Some(key) = web_key_name(keyval) else {
+                    return glib::Propagation::Proceed;
+                };
+                let modifiers = engine_modifiers(state);
+                let handle = key_handle.clone();
+                // Web `code` (physical key) is approximated with the logical name until a
+                // scancode map exists; the engine only reads `key` today.
+                let code = key.clone();
+                runtime().spawn(async move {
+                    let _ = handle.send(EngineTabCommand::KeyDown { key, code, modifiers }).await;
+                });
+                glib::Propagation::Stop
+            });
+            area.add_controller(keys);
 
             // Secondary click -> ask the engine what is under the pointer; the context menu
             // is built from its HitTestResult (see handle_engine_event).
@@ -1371,6 +1399,11 @@ impl BrowserWindow {
                     area.set_cursor_from_name(Some(name));
                 }
             }
+            // Focus moved inside the page. Nothing to do yet - this becomes the IME /
+            // on-screen-keyboard trigger once text editing lands.
+            EngineEvent::FocusChanged { focused, editable, .. } => {
+                log::debug!("page focus changed: focused={focused} editable={editable}");
+            }
             EngineEvent::TitleChanged { tab_id, title } => {
                 let Some(our_id) = self.engine_tab_map.borrow().get(&tab_id).copied() else {
                     return;
@@ -1401,4 +1434,48 @@ impl BrowserWindow {
             _ => {}
         }
     }
+}
+
+/// Map a GDK keyval to the web [`KeyboardEvent.key`] name the engine expects.
+/// `None` for keys that have neither a named mapping nor a printable character.
+fn web_key_name(key: gdk::Key) -> Option<String> {
+    use gdk::Key;
+    let named = match key {
+        Key::Return | Key::KP_Enter => "Enter",
+        // Shift+Tab arrives as ISO_Left_Tab; the SHIFT modifier carries the direction.
+        Key::Tab | Key::ISO_Left_Tab => "Tab",
+        Key::Escape => "Escape",
+        Key::BackSpace => "Backspace",
+        Key::Delete => "Delete",
+        Key::Up => "ArrowUp",
+        Key::Down => "ArrowDown",
+        Key::Left => "ArrowLeft",
+        Key::Right => "ArrowRight",
+        Key::Page_Up => "PageUp",
+        Key::Page_Down => "PageDown",
+        Key::Home => "Home",
+        Key::End => "End",
+        Key::space => " ",
+        _ => return key.to_unicode().filter(|c| !c.is_control()).map(|c| c.to_string()),
+    };
+    Some(named.to_string())
+}
+
+/// Map GDK modifier state to the engine's [`Modifiers`] flags.
+fn engine_modifiers(state: gdk::ModifierType) -> gosub_engine::events::Modifiers {
+    use gosub_engine::events::Modifiers;
+    let mut m = Modifiers::empty();
+    if state.contains(gdk::ModifierType::SHIFT_MASK) {
+        m |= Modifiers::SHIFT;
+    }
+    if state.contains(gdk::ModifierType::CONTROL_MASK) {
+        m |= Modifiers::CONTROL;
+    }
+    if state.contains(gdk::ModifierType::ALT_MASK) {
+        m |= Modifiers::ALT;
+    }
+    if state.contains(gdk::ModifierType::SUPER_MASK) {
+        m |= Modifiers::META;
+    }
+    m
 }
