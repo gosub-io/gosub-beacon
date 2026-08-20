@@ -655,6 +655,7 @@ impl BrowserWindow {
             self.obj().set_title(Some(&format!("{} — Gosub Beacon", tab.title())));
         }
         drop(manager);
+        self.searchbar.set_progress_fraction(0.0);
         self.update_nav_buttons();
         self.update_reload_button();
         self.update_bookmark_button();
@@ -1863,6 +1864,9 @@ impl BrowserWindow {
                 // shell page instead. (LoadUrl already set the tab's URL for our own
                 // navigations, so the equality check keeps this from looping.)
                 if let NavigationEvent::Started { url, .. } = &event {
+                    if self.active_tab_id() == Some(our_id) && !Self::is_shell_rendered(url) {
+                        self.searchbar.set_progress_fraction(0.05);
+                    }
                     if Self::is_shell_rendered(url) {
                         let (differs, handle) = {
                             let manager = self.tab_manager.lock().unwrap();
@@ -1881,6 +1885,25 @@ impl BrowserWindow {
                         }
                         return;
                     }
+                }
+
+                // Load progress for the active tab, drawn as the address bar's fill
+                // (GtkEntry's built-in progress underline).
+                if let NavigationEvent::Progress {
+                    received_bytes,
+                    expected_length,
+                    ..
+                } = &event
+                {
+                    if self.active_tab_id() == Some(our_id) {
+                        let fraction = match expected_length {
+                            Some(total) if *total > 0 => (*received_bytes as f64 / *total as f64).clamp(0.05, 0.98),
+                            // Unknown length: park mid-way rather than pretending precision.
+                            _ => 0.5,
+                        };
+                        self.searchbar.set_progress_fraction(fraction);
+                    }
+                    return;
                 }
 
                 if let NavigationEvent::HistoryChanged { history } = event {
@@ -1905,7 +1928,19 @@ impl BrowserWindow {
                     return;
                 }
 
+                // Load ended without a page change (stop button, download offer):
+                // clear the progress fill.
+                if let NavigationEvent::Cancelled { .. } = &event {
+                    if self.active_tab_id() == Some(our_id) {
+                        self.searchbar.set_progress_fraction(0.0);
+                    }
+                    return;
+                }
+
                 if let NavigationEvent::Failed { url, error, .. } = &event {
+                    if self.active_tab_id() == Some(our_id) {
+                        self.searchbar.set_progress_fraction(0.0);
+                    }
                     self.on_navigation_failed(our_id, url, &error.to_string());
                     return;
                 }
@@ -1915,6 +1950,9 @@ impl BrowserWindow {
                 }
 
                 if let NavigationEvent::Finished { url, .. } = event {
+                    if self.active_tab_id() == Some(our_id) {
+                        self.searchbar.set_progress_fraction(0.0);
+                    }
                     let mut manager = self.tab_manager.lock().unwrap();
                     if let Some(mut tab) = manager.get_tab(our_id) {
                         tab.set_loading(false);
