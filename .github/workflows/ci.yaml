@@ -10,10 +10,10 @@ env:
   CARGO_TERM_COLOR: always
   # Beacon depends on the engine through relative path dependencies
   # (`../gosub-engine/crates/*`, see Cargo.toml), so CI checks the engine out as a
-  # sibling directory. The engine work Beacon needs lives on the `beacon` branch of
-  # jaytaph's fork until it is merged upstream; then switch to gosub-io/gosub-engine + main.
-  ENGINE_REPO: jaytaph/gosub-engine
-  ENGINE_REF: beacon
+  # sibling directory. The engine work Beacon needs lives on the `beacon-updates`
+  # branch until it is merged; then switch ENGINE_REF to main.
+  ENGINE_REPO: gosub-io/gosub-engine
+  ENGINE_REF: beacon-updates
 
 jobs:
   build:

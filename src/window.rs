@@ -78,8 +78,7 @@ impl BrowserWindow {
             spawn_future_local(async move {
                 // URLs on the command line become the startup tabs; without any, a
                 // default set opens.
-                let mut initial_urls: Vec<String> =
-                    std::env::args().skip(1).filter(|a| !a.starts_with('-')).collect();
+                let mut initial_urls: Vec<String> = std::env::args().skip(1).filter(|a| !a.starts_with('-')).collect();
                 if initial_urls.is_empty() {
                     initial_urls = ["https://gosub.io", "https://adayinthelifeof.nl", "https://news.ycombinator.com"]
                         .map(String::from)
