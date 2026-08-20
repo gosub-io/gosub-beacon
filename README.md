@@ -36,7 +36,8 @@ Not working yet: JavaScript, forms and text input, text selection.
 
 Beacon uses path dependencies into the engine, so check out
 [gosub-engine](https://github.com/gosub-io/gosub-engine) next to this repository
-(`../gosub-engine`), currently on the `beacon-updates` branch.
+(`../gosub-engine`), on the `beacon` branch (upstream main plus engine work Beacon
+needs that has not merged yet).
 
 Dependencies on Debian/Ubuntu, or similar on other systems:
 
