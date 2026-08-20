@@ -125,6 +125,8 @@ pub struct BrowserWindow {
     downloads_list: RefCell<Option<gtk4::ListBox>>,
     /// URL-bar completion popover and its list (built in `constructed`).
     completion: RefCell<Option<(Popover, gtk4::ListBox)>>,
+    /// Per-tab page zoom, shared with each render area's input/draw closures.
+    tab_zoom: RefCell<HashMap<TabId, Rc<Cell<f64>>>>,
 }
 
 impl Default for BrowserWindow {
@@ -160,6 +162,7 @@ impl Default for BrowserWindow {
             downloads: RefCell::new(Vec::new()),
             downloads_list: RefCell::new(None),
             completion: RefCell::new(None),
+            tab_zoom: RefCell::new(HashMap::new()),
         }
     }
 }
@@ -655,6 +658,15 @@ impl BrowserWindow {
             self.obj().set_title(Some(&format!("{} — Gosub Beacon", tab.title())));
         }
         drop(manager);
+        // The raster DPR is a process-wide atomic: re-store it for this tab's zoom.
+        {
+            let zoom_level = self.tab_zoom.borrow().get(&tab_id).map(|z| z.get()).unwrap_or(1.0);
+            if let Some(area) = self.render_areas.borrow().get(&tab_id) {
+                use gosub_render_pipeline::render::DEVICE_PIXEL_RATIO;
+                let raster_dpr = ((crate::engine::render_dpr(area) as f64 * zoom_level).ceil() as u32).clamp(1, 4);
+                DEVICE_PIXEL_RATIO.store(raster_dpr, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
         self.searchbar.set_progress_fraction(0.0);
         self.update_nav_buttons();
         self.update_reload_button();
@@ -1000,7 +1012,7 @@ impl BrowserWindow {
     }
 
     /// The tab id of the currently visible stack page, if any.
-    fn active_tab_id(&self) -> Option<TabId> {
+    pub(crate) fn active_tab_id(&self) -> Option<TabId> {
         self.content_stack.visible_child()?.get_tab_id()
     }
 
@@ -1064,6 +1076,60 @@ impl BrowserWindow {
             }
             imp.update_bookmark_button();
             imp.rebuild_bookmarks_bar();
+        });
+    }
+
+    /// Standard zoom ladder, matching mainstream browsers.
+    const ZOOM_LEVELS: &'static [f64] = &[0.25, 0.33, 0.5, 0.67, 0.75, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 4.0, 5.0];
+
+    /// Step the tab's zoom up (`+1`) or down (`-1`) along the ladder.
+    pub(crate) fn zoom_step(&self, tab_id: TabId, direction: i32) {
+        let current = self.tab_zoom.borrow().get(&tab_id).map(|z| z.get()).unwrap_or(1.0);
+        let pos = Self::ZOOM_LEVELS.iter().position(|z| (*z - current).abs() < 1e-3).unwrap_or(6); // 1.0
+        let next = pos.saturating_add_signed(direction as isize).min(Self::ZOOM_LEVELS.len() - 1);
+        self.set_zoom(tab_id, Self::ZOOM_LEVELS[next]);
+    }
+
+    /// Apply `zoom` to the tab: re-store the raster DPR, resend the (shrunken) CSS
+    /// viewport, and repaint. The GL composite corrects stale tiles in the meantime.
+    pub(crate) fn set_zoom(&self, tab_id: TabId, zoom_level: f64) {
+        let zoom_level = zoom_level.clamp(0.25, 5.0);
+        let Some(cell) = self.tab_zoom.borrow().get(&tab_id).cloned() else {
+            return;
+        };
+        if (cell.get() - zoom_level).abs() < 1e-3 {
+            return;
+        }
+        cell.set(zoom_level);
+        self.log(&format!("Zoom: {:.0}%", zoom_level * 100.0));
+
+        let (area, handle) = {
+            let areas = self.render_areas.borrow();
+            let manager = self.tab_manager.lock().unwrap();
+            (areas.get(&tab_id).cloned(), manager.get_tab(tab_id).and_then(|t| t.tab_handle()))
+        };
+        let (Some(area), Some(handle)) = (area, handle) else { return };
+
+        use gosub_render_pipeline::render::DEVICE_PIXEL_RATIO;
+        let scale = crate::engine::render_dpr(&area) as f64;
+        let raster_dpr = ((scale * zoom_level).ceil() as u32).clamp(1, 4);
+        DEVICE_PIXEL_RATIO.store(raster_dpr, std::sync::atomic::Ordering::Relaxed);
+        let eff = scale * zoom_level;
+        let (vw, vh) = (
+            (area.width() as f64 * scale / eff) as u32,
+            (area.height() as f64 * scale / eff) as u32,
+        );
+        area.queue_render();
+        runtime().spawn(async move {
+            let _ = handle
+                .send(EngineTabCommand::SetViewport {
+                    x: 0,
+                    y: 0,
+                    width: vw,
+                    height: vh,
+                })
+                .await;
+            let _ = handle.send(EngineTabCommand::ResumeDrawing { fps: 30 }).await;
         });
     }
 
@@ -1616,6 +1682,14 @@ impl BrowserWindow {
         let engine_id = tab.engine_tab_id().expect("engine tab id");
         let compositor = self.engine.borrow().as_ref().expect("engine initialised").compositor.clone();
 
+        // Page zoom for this tab; survives render-area rebuilds via the map.
+        let zoom = self
+            .tab_zoom
+            .borrow_mut()
+            .entry(tab.id())
+            .or_insert_with(|| Rc::new(Cell::new(1.0)))
+            .clone();
+
         // Skia's GL context wrapper: created once the area is realized (its GdkGLContext
         // exists from then on), dropped again on unrealize so it can't outlive the context.
         let dc_holder: Rc<RefCell<Option<skia_safe::gpu::DirectContext>>> = Rc::new(RefCell::new(None));
@@ -1643,13 +1717,22 @@ impl BrowserWindow {
 
         area.connect_render({
             let dc_holder = dc_holder.clone();
+            let zoom = zoom.clone();
             move |area, _ctx| {
                 let mut dc_ref = dc_holder.borrow_mut();
                 let Some(dc) = dc_ref.as_mut() else {
                     return glib::Propagation::Stop;
                 };
                 let scale = crate::engine::render_dpr(area) as i32;
-                render_frame_gl(&compositor, engine_id, dc, area.width() * scale, area.height() * scale);
+                let target_scale = scale as f64 * zoom.get();
+                render_frame_gl(
+                    &compositor,
+                    engine_id,
+                    dc,
+                    area.width() * scale,
+                    area.height() * scale,
+                    target_scale,
+                );
                 glib::Propagation::Stop
             }
         });
@@ -1660,28 +1743,33 @@ impl BrowserWindow {
             // resolution — otherwise HiDPI/fractional-scale displays get a 1x
             // buffer upscaled by the compositor (blurry text).
             let resize_handle = handle.clone();
+            let resize_zoom = zoom.clone();
             let resize_last_viewport = self.last_viewport.clone();
             area.connect_resize(move |area, w, h| {
                 use gosub_render_pipeline::render::DEVICE_PIXEL_RATIO;
-                let dpr = crate::engine::render_dpr(area);
-                DEVICE_PIXEL_RATIO.store(dpr, std::sync::atomic::Ordering::Relaxed);
-                // GtkGLArea's resize reports PHYSICAL pixels; the engine viewport is
-                // logical (CSS) px — the DPR handles physical rasterization separately.
-                let (vw, vh) = (w / dpr as i32, h / dpr as i32);
-                if vw <= 0 || vh <= 0 {
+                let z = resize_zoom.get();
+                // Rasterize at ceil(display scale × zoom) so zoomed-in pages stay sharp;
+                // capped because tile memory grows with its square.
+                let raster_dpr = ((crate::engine::render_dpr(area) as f64 * z).ceil() as u32).clamp(1, 4);
+                DEVICE_PIXEL_RATIO.store(raster_dpr, std::sync::atomic::Ordering::Relaxed);
+                // GtkGLArea's resize reports PHYSICAL pixels; the engine lays out in CSS
+                // px, which shrink as the zoom grows.
+                let eff = crate::engine::render_dpr(area) as f64 * z;
+                let (vw, vh) = ((w as f64 / eff) as u32, (h as f64 / eff) as u32);
+                if vw == 0 || vh == 0 {
                     return;
                 }
                 // Record it so tabs whose own GLArea has never been allocated are sized by
                 // this exact formula rather than a second, subtly different one.
-                resize_last_viewport.set(Some((vw as u32, vh as u32)));
+                resize_last_viewport.set(Some((vw, vh)));
                 let handle = resize_handle.clone();
                 runtime().spawn(async move {
                     let _ = handle
                         .send(EngineTabCommand::SetViewport {
                             x: 0,
                             y: 0,
-                            width: vw as u32,
-                            height: vh as u32,
+                            width: vw,
+                            height: vh,
                         })
                         .await;
                 });
@@ -1690,10 +1778,20 @@ impl BrowserWindow {
             // Scroll -> forward to the engine; it re-renders and notifies us to repaint.
             let scroll = gtk4::EventControllerScroll::new(gtk4::EventControllerScrollFlags::BOTH_AXES);
             let scroll_handle = handle.clone();
-            scroll.connect_scroll(move |_c, dx, dy| {
+            let scroll_zoom = zoom.clone();
+            let scroll_window = self.obj().clone();
+            let scroll_tab_id = tab.id();
+            scroll.connect_scroll(move |c, dx, dy| {
+                // Ctrl+wheel zooms instead of scrolling, like every browser.
+                if c.current_event_state().contains(gdk::ModifierType::CONTROL_MASK) {
+                    scroll_window.imp().zoom_step(scroll_tab_id, if dy < 0.0 { 1 } else { -1 });
+                    return glib::Propagation::Stop;
+                }
                 let handle = scroll_handle.clone();
-                let delta_x = dx as f32 * 40.0;
-                let delta_y = dy as f32 * 40.0;
+                // The engine scrolls in CSS px, which cover more screen when zoomed in.
+                let z = scroll_zoom.get() as f32;
+                let delta_x = dx as f32 * 40.0 / z;
+                let delta_y = dy as f32 * 40.0 / z;
                 runtime().spawn(async move {
                     let _ = handle.send(EngineTabCommand::MouseScroll { delta_x, delta_y }).await;
                 });
@@ -1705,8 +1803,11 @@ impl BrowserWindow {
             // a `HoverUrl` event back to us.
             let motion = gtk4::EventControllerMotion::new();
             let motion_handle = handle.clone();
+            let motion_zoom = zoom.clone();
             motion.connect_motion(move |_c, x, y| {
                 let handle = motion_handle.clone();
+                let z = motion_zoom.get();
+                let (x, y) = (x / z, y / z);
                 runtime().spawn(async move {
                     let _ = handle.send(EngineTabCommand::MouseMove { x: x as f32, y: y as f32 }).await;
                 });
@@ -1717,12 +1818,15 @@ impl BrowserWindow {
             let click = gtk4::GestureClick::new();
             click.set_button(gdk::BUTTON_PRIMARY);
             let click_handle = handle.clone();
+            let click_zoom = zoom.clone();
             click.connect_pressed(move |g, _n, x, y| {
                 // Keys should go to the page after a click on it.
                 if let Some(widget) = g.widget() {
                     widget.grab_focus();
                 }
                 let handle = click_handle.clone();
+                let z = click_zoom.get();
+                let (x, y) = (x / z, y / z);
                 runtime().spawn(async move {
                     let _ = handle
                         .send(EngineTabCommand::MouseDown {
@@ -1764,6 +1868,7 @@ impl BrowserWindow {
             let right = gtk4::GestureClick::new();
             right.set_button(gdk::BUTTON_SECONDARY);
             let right_handle = handle.clone();
+            let right_zoom = zoom.clone();
             let window = self.obj().clone();
             let our_tab_id = tab.id();
             right.connect_pressed(move |gesture, _n, x, y| {
@@ -1777,11 +1882,13 @@ impl BrowserWindow {
                 };
                 imp.pending_hit_tests.borrow_mut().insert(token, (our_tab_id, p));
                 let handle = right_handle.clone();
+                let z = right_zoom.get();
+                let (qx, qy) = (x / z, y / z);
                 runtime().spawn(async move {
                     let _ = handle
                         .send(EngineTabCommand::QueryHitTest {
-                            x: x as f32,
-                            y: y as f32,
+                            x: qx as f32,
+                            y: qy as f32,
                             token: gosub_engine::events::HitTestToken(token),
                         })
                         .await;

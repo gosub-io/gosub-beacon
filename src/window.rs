@@ -125,6 +125,9 @@ impl BrowserWindow {
         app.set_accels_for_action("app.open-new-tab", &["<Primary>T"]);
         app.set_accels_for_action("app.close-tab", &["<Primary>W"]);
         app.set_accels_for_action("app.toggle-log", &["<Primary>L"]);
+        app.set_accels_for_action("app.zoom-in", &["<Primary>equal", "<Primary>plus", "<Primary>KP_Add"]);
+        app.set_accels_for_action("app.zoom-out", &["<Primary>minus", "<Primary>KP_Subtract"]);
+        app.set_accels_for_action("app.zoom-reset", &["<Primary>0", "<Primary>KP_0"]);
     }
 
     fn connect_actions(app: &Application, window: &Self) {
@@ -157,6 +160,28 @@ impl BrowserWindow {
             ));
         });
         app.add_action(&new_tab_action);
+
+        // Page zoom on the active tab.
+        for (name, direction) in [("zoom-in", 1), ("zoom-out", -1)] {
+            let window_clone = window.clone();
+            let action = SimpleAction::new(name, None);
+            action.connect_activate(move |_, _| {
+                let imp = window_clone.imp();
+                if let Some(tab_id) = imp.active_tab_id() {
+                    imp.zoom_step(tab_id, direction);
+                }
+            });
+            app.add_action(&action);
+        }
+        let window_clone = window.clone();
+        let zoom_reset = SimpleAction::new("zoom-reset", None);
+        zoom_reset.connect_activate(move |_, _| {
+            let imp = window_clone.imp();
+            if let Some(tab_id) = imp.active_tab_id() {
+                imp.set_zoom(tab_id, 1.0);
+            }
+        });
+        app.add_action(&zoom_reset);
 
         // Tab switching (chip clicks) is handled by `imp::BrowserWindow::activate_tab`,
         // which also syncs the address bar and nav buttons.

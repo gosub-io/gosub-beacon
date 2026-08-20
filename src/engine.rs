@@ -292,6 +292,7 @@ pub fn render_frame_gl(
     dc: &mut skia_safe::gpu::DirectContext,
     phys_w: i32,
     phys_h: i32,
+    target_scale: f64,
 ) {
     if phys_w <= 0 || phys_h <= 0 {
         return;
@@ -323,6 +324,17 @@ pub fn render_frame_gl(
     {
         let canvas = surface.canvas();
         canvas.clear(skia_safe::Color4f::new(1.0, 1.0, 1.0, 1.0));
+
+        if let Some(ExternalHandle::TileCache { dpr: tile_dpr, .. }) = compositor.frame_for(tab_id) {
+            // `target_scale` is the physical-px-per-CSS-px the shell wants on screen
+            // (display scale × page zoom). Tiles arrive rasterized at `tile_dpr`; the
+            // difference is bridged here, which also keeps stale tiles (rasterized at the
+            // previous zoom's dpr) at the correct on-screen size until fresh ones land.
+            let correction = target_scale / tile_dpr.max(1) as f64;
+            if (correction - 1.0).abs() > 1e-3 {
+                canvas.scale((correction as f32, correction as f32));
+            }
+        }
 
         if let Some(ExternalHandle::TileCache {
             dpr,
