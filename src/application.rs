@@ -63,7 +63,7 @@ impl Application {
     pub fn new() -> Self {
         glib::Object::builder()
             .property("application-id", APP_ID)
-            .property("resource-base-path", Some("/io/gosub/browser-gtk"))
+            .property("resource-base-path", Some("/io/gosub/beacon"))
             .build()
     }
 
@@ -104,11 +104,12 @@ impl Application {
             self,
             "show-about",
             clone!(
-                #[weak(rename_to=_app)]
+                #[weak(rename_to=app)]
                 self,
                 move |_, _| {
                     info!(target: "gtk", "Show about dialog action triggered");
                     let about = About::create_dialog();
+                    about.set_transient_for(app.active_window().as_ref());
                     about.present();
                 }
             )
@@ -139,7 +140,6 @@ impl Application {
 
     pub fn run(&self) {
         info!("Application started");
-        sourceview5::init();
         ApplicationExtManual::run(self);
     }
 }

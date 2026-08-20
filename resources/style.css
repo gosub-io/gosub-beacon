@@ -1,8 +1,248 @@
-/*notebook stack {*/
-/*    background-color: #ccc;*/
-/*}*/
+/* About dialog: text overlaid on the artwork's white region, so the color is
+   fixed regardless of light/dark theme. */
+.about-info-line {
+    color: #14213d;
+    font-size: 13px;
+}
+.about-info-link {
+    padding: 0;
+    margin-top: 3px;
+    font-size: 13px;
+}
+.about-credits-heading {
+    color: #14213d;
+    font-size: 13px;
+    font-weight: bold;
+}
+.about-credits-name {
+    color: #44506b;
+    font-size: 12px;
+}
+/* The credits column sits on the artwork; keep the scroller transparent. */
+scrolledwindow.about-credits-scroller,
+scrolledwindow.about-credits-scroller > viewport {
+    background: transparent;
+}
 
-/* This should only work for the splashscreen, not all windows */
-/*window {*/
-/*    background-color: rgba(0, 0, 0, 0); !* Fully transparent background *!*/
-/*}*/
+/* ── Headerbar ───────────────────────────────────────────────────────────── */
+
+headerbar {
+    min-height: 34px;
+    padding: 0 4px;
+}
+headerbar .title {
+    font-size: 13px;
+}
+menubar.header-menubar {
+    background: transparent;
+}
+menubar.header-menubar > item {
+    padding: 4px 8px;
+    border-radius: 6px;
+    box-shadow: none;
+}
+/* Quiet rounded highlight instead of the theme's colored underline. */
+menubar.header-menubar > item:hover,
+menubar.header-menubar > item:selected {
+    background: alpha(@theme_fg_color, 0.08);
+    color: @theme_fg_color;
+    box-shadow: none;
+    border: none;
+}
+
+/* ── Tab row + chips ─────────────────────────────────────────────────────── */
+
+box.tab-row {
+    padding: 2px 6px;
+    background: alpha(@theme_fg_color, 0.04);
+    border-bottom: 1px solid alpha(@theme_fg_color, 0.08);
+}
+button.tab-chip {
+    margin: 0;
+    padding: 1px 8px;
+    min-height: 20px;
+    border-radius: 7px;
+    background: transparent;
+    transition: background 150ms ease;
+}
+button.tab-chip:hover {
+    background: alpha(@theme_fg_color, 0.07);
+}
+button.tab-chip:checked {
+    background: alpha(@theme_fg_color, 0.13);
+}
+button.tab-chip:checked:hover {
+    background: alpha(@theme_fg_color, 0.16);
+}
+button.tab-chip.pinned {
+    padding: 2px 6px;
+}
+
+/* Close button: appears on hover/active tabs only, circular hover halo. */
+button.tab-chip button.tab-close {
+    padding: 0;
+    min-width: 16px;
+    min-height: 16px;
+    border-radius: 50%;
+    background: transparent;
+    opacity: 0;
+    transition: opacity 150ms ease, background 150ms ease;
+}
+button.tab-chip:hover button.tab-close,
+button.tab-chip:checked button.tab-close {
+    opacity: 1;
+}
+button.tab-chip button.tab-close:hover {
+    background: alpha(@theme_fg_color, 0.15);
+}
+
+/* New-tab (+) button next to the strip. */
+button.new-tab {
+    padding: 0 6px;
+    min-height: 20px;
+    border-radius: 8px;
+    background: transparent;
+    transition: background 150ms ease;
+}
+button.new-tab:hover {
+    background: alpha(@theme_fg_color, 0.07);
+}
+
+/* ── Address bar / toolbar ───────────────────────────────────────────────── */
+
+entry.address-bar {
+    border-radius: 8px;
+    padding: 1px 8px;
+    min-height: 26px;
+    font-size: 13px;
+}
+box.nav-toolbar button {
+    min-height: 26px;
+    min-width: 26px;
+    padding: 2px 5px;
+}
+
+/* ── Bookmarks strip ─────────────────────────────────────────────────────── */
+
+box.bookmarks-bar {
+    padding: 0 8px 2px 8px;
+    border-bottom: 1px solid alpha(@theme_fg_color, 0.08);
+}
+box.bookmarks-bar button {
+    padding: 1px 8px;
+    border-radius: 6px;
+    font-size: 12px;
+    background: transparent;
+}
+box.bookmarks-bar button:hover {
+    background: alpha(@theme_fg_color, 0.07);
+}
+
+/* ── Content ─────────────────────────────────────────────────────────────── */
+
+/* gosub://config: about:config-style settings editor. */
+box.config-page {
+    background: @theme_bg_color;
+}
+box.config-header {
+    padding: 12px 16px 6px 16px;
+}
+label.config-title {
+    font-size: 16px;
+    font-weight: bold;
+}
+label.config-notice {
+    padding: 0 16px 8px 16px;
+    font-size: 12px;
+    opacity: 0.7;
+}
+list.config-list {
+    background: transparent;
+}
+list.config-list > row {
+    border-bottom: 1px solid alpha(@theme_fg_color, 0.08);
+}
+grid.config-row {
+    padding: 8px 16px;
+}
+label.config-key {
+    font-family: monospace;
+    font-size: 13px;
+}
+label.config-key.modified {
+    font-weight: bold;
+    color: @accent_color;
+}
+label.config-type {
+    font-size: 11px;
+    opacity: 0.6;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: alpha(@theme_fg_color, 0.06);
+}
+label.config-desc {
+    font-size: 12px;
+    opacity: 0.75;
+}
+
+/* URL-bar completion popover. */
+list.completion-list {
+    background: transparent;
+}
+box.completion-row {
+    padding: 5px 10px;
+}
+label.completion-title {
+    font-size: 13px;
+}
+label.completion-url {
+    font-size: 12px;
+    opacity: 0.6;
+}
+
+/* Crashed-tab page. */
+box.crashed-page label.crashed-title {
+    font-size: 20px;
+    font-weight: bold;
+}
+box.crashed-page label.crashed-detail {
+    font-family: monospace;
+    font-size: 12px;
+    opacity: 0.7;
+}
+
+/* Downloads popover. */
+list.downloads-list {
+    background: transparent;
+}
+label.downloads-empty {
+    padding: 12px 16px;
+    opacity: 0.6;
+}
+box.download-row {
+    padding: 8px 12px;
+    border-bottom: 1px solid alpha(@theme_fg_color, 0.08);
+}
+label.download-name {
+    font-weight: bold;
+    font-size: 13px;
+}
+label.download-status {
+    font-size: 11px;
+    opacity: 0.7;
+}
+label.download-failed {
+    font-size: 11px;
+    color: #c01c28;
+}
+
+/* Hover-URL bubble overlaid on the viewport (bottom-left, Firefox style). */
+label.status-bubble {
+    background: @theme_bg_color;
+    color: @theme_fg_color;
+    border-top: 1px solid alpha(@theme_fg_color, 0.15);
+    border-right: 1px solid alpha(@theme_fg_color, 0.15);
+    border-radius: 0 6px 0 0;
+    padding: 2px 10px;
+    font-size: 12px;
+}

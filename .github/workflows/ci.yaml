@@ -8,108 +8,114 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # Beacon depends on the engine through relative path dependencies
+  # (`../gosub-engine/crates/*`, see Cargo.toml), so CI checks the engine out as a
+  # sibling directory. The `beacon` branch is the long-lived integration branch for
+  # Beacon: upstream main plus whatever engine work Beacon needs that has not merged
+  # yet. Feature branches (beacon-updates etc.) are merged into it as they are pushed,
+  # and it is re-synced by merging upstream main into it after engine PRs land.
+  ENGINE_REPO: jaytaph/gosub-engine
+  ENGINE_REF: beacon
 
 jobs:
-  cache:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - name: Cache cargo
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo
-          key: ${{ runner.os }}-cargo-registry-${{ matrix.rust_version }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ matrix.os }}-cargo-registry-${{ matrix.rust_version }}-
-      - name: Cargo update
-        run: cargo update
-
   build:
     runs-on: ubuntu-24.04
-    needs: cache
     strategy:
       fail-fast: false
       matrix:
-        rust_version: [ stable, nightly, 1.79.0 ]
-        os: [ ubuntu-24.04 ]
-#        rust_version: [ stable, beta, nightly, 1.79.0, "stable minus 1 release", "stable minus 2 releases" ]
-#        os: [ ubuntu-24.04, windows-latest, macos-latest ]
+        rust_version: [ stable ]
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: gosub-beacon
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.ENGINE_REPO }}
+          ref: ${{ env.ENGINE_REF }}
+          path: gosub-engine
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ matrix.rust_version }}
       - name: Install dependencies
-        run: sudo apt update -y && sudo apt install libgtk-4-dev libglib2.0-dev libsqlite3-dev libgtksourceview-5-dev -y
-      - name: Cache cargo
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            ~/work/gtk-browser/gtk-browser/target
-          key: ${{ matrix.os }}-cargo-target-${{ matrix.rust_version }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ matrix.os }}-cargo-registry-${{ matrix.rust_version }}-
-      - name: Build
         run: |
-          cargo build --verbose --all
+          sudo apt update -y
+          sudo apt install -y \
+            libgtk-4-dev libglib2.0-dev libcairo2-dev libgdk-pixbuf-2.0-dev libpango1.0-dev \
+            libsqlite3-dev libssl-dev pkg-config \
+            clang libclang-dev libgl-dev libegl-dev libfontconfig-dev libfreetype-dev
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: gosub-beacon
+      - name: Build
+        working-directory: gosub-beacon
+        run: cargo build --verbose --all
 
   test:
     runs-on: ubuntu-24.04
-    needs: cache
     strategy:
       fail-fast: false
       matrix:
-        rust_version: [ stable, nightly, 1.79.0 ]
-        os: [ ubuntu-24.04 ]
-#        rust_version: [ stable, beta, nightly, 1.79.0, "stable minus 1 release", "stable minus 2 releases" ]
-#        os: [ ubuntu-24.04, windows-latest, macos-latest ]
+        rust_version: [ stable ]
     steps:
       - uses: actions/checkout@v4
-      - name: Install dependencies
-        run: sudo apt update -y && sudo apt install libgtk-4-dev libglib2.0-dev libsqlite3-dev libgtksourceview-5-dev -y
+        with:
+          path: gosub-beacon
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.ENGINE_REPO }}
+          ref: ${{ env.ENGINE_REF }}
+          path: gosub-engine
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ matrix.rust_version }}
-      - name: Cache cargo
-        uses: actions/cache/restore@v4
+      - name: Install dependencies
+        run: |
+          sudo apt update -y
+          sudo apt install -y \
+            libgtk-4-dev libglib2.0-dev libcairo2-dev libgdk-pixbuf-2.0-dev libpango1.0-dev \
+            libsqlite3-dev libssl-dev pkg-config \
+            clang libclang-dev libgl-dev libegl-dev libfontconfig-dev libfreetype-dev
+      - uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/work/gtk-browser/gtk-browser/target
-          key: ${{ matrix.os }}-cargo-target-${{ matrix.rust_version }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ matrix.os }}-cargo-registry-${{ matrix.rust_version }}-
+          workspaces: gosub-beacon
       - name: Run tests
+        working-directory: gosub-beacon
         run: cargo test --verbose --all --no-fail-fast --all-targets
 
   clippy:
     runs-on: ubuntu-24.04
-    needs: cache
-    strategy:
-      fail-fast: false
-      matrix:
-        rust_version: [ stable, nightly ]
-        os: [ ubuntu-24.04 ]
-#        rust_version: [ stable, beta, nightly, 1.79.0, "stable minus 1 release", "stable minus 2 releases" ]
-#        os: [ ubuntu-24.04, windows-latest, macos-latest ]
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: gosub-beacon
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.ENGINE_REPO }}
+          ref: ${{ env.ENGINE_REF }}
+          path: gosub-engine
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
       - name: Install dependencies
-        run: sudo apt update -y && sudo apt install libgtk-4-dev libglib2.0-dev libsqlite3-dev libgtksourceview-5-dev -y
-      - uses: dtolnay/rust-toolchain@master
+        run: |
+          sudo apt update -y
+          sudo apt install -y \
+            libgtk-4-dev libglib2.0-dev libcairo2-dev libgdk-pixbuf-2.0-dev libpango1.0-dev \
+            libsqlite3-dev libssl-dev pkg-config \
+            clang libclang-dev libgl-dev libegl-dev libfontconfig-dev libfreetype-dev
+      - uses: Swatinem/rust-cache@v2
         with:
-          toolchain: ${{ matrix.rust_version }}
-      - name: Cache cargo
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            ~/work/gtk-browser/gtk-browser/target
-          key: ${{ matrix.os }}-cargo-target-${{ matrix.rust_version }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ matrix.os }}-cargo-registry-${{ matrix.rust_version }}-
+          workspaces: gosub-beacon
       - name: Run Clippy
+        working-directory: gosub-beacon
         run: cargo clippy --all --tests -- -D warnings
 
   fmt:
     runs-on: ubuntu-24.04
-    needs: cache
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
       - name: Run fmt
         run: cargo fmt --check --all

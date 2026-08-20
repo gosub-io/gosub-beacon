@@ -1,13 +1,14 @@
 use gtk4::glib;
 use gtk4::glib::{clone, spawn_future_local};
 
+mod config_page;
 mod imp;
 mod message;
+mod page_context_menu;
 mod tab_context_menu;
 
 use crate::application::Application;
 use crate::runtime;
-use crate::window::imp::WidgetExtTabId;
 use crate::window::message::Message;
 use gtk4::gio;
 use gtk4::gio::SimpleAction;
@@ -31,14 +32,21 @@ impl BrowserWindow {
         window.set_decorated(true);
         window.set_default_size(1024, 768);
 
-        let builder = gtk4::Builder::from_resource("/io/gosub/browser-gtk/ui/main_menu.ui");
+        let builder = gtk4::Builder::from_resource("/io/gosub/beacon/ui/main_menu.ui");
         let menubar = builder.object::<gio::MenuModel>("app-menu").expect("Could not find app-menu");
 
-        app.set_menubar(Some(&menubar));
-        window.set_show_menubar(true);
+        // The menubar lives inside the headerbar (left of the tab strip) instead
+        // of occupying its own row.
+        window.set_show_menubar(false);
+        let menu_bar = gtk4::PopoverMenuBar::from_model(Some(&menubar));
+        menu_bar.add_css_class("header-menubar");
+        window.imp().headerbar.pack_start(&menu_bar);
 
         Self::connect_actions(app, &window);
         Self::connect_accelerators(app, &window);
+
+        // Start the engine and wire its redraw/event notifications before opening any tabs.
+        window.imp().init_engine();
 
         // Spawn handler
         let window_clone = window.clone();
@@ -56,27 +64,39 @@ impl BrowserWindow {
             }
         });
 
-        // Refresh tabs on startup
-        let window_clone = window.clone();
-        spawn_future_local(async move {
-            let initial_urls = [
-                "https://gosub.io",
-                "https://gosub.io/test.html",
-                // We use source: as render mode, as we do not generate HTML output for gopher sites
-                "source:gopher://gopher.meulie.net",
-            ];
-
-            for url in initial_urls.iter() {
-                window_clone
-                    .imp()
-                    .get_sender()
-                    .send(Message::OpenTab(url.to_string(), "New Tab".to_string()))
-                    .await
-                    .unwrap();
+        // Open the startup tabs only once the window is mapped, i.e. it has a real
+        // allocated size. Creating tabs before then makes GTK measure the tab-label
+        // icons against a zero-sized parent, producing `width 0, height -9`
+        // allocation warnings.
+        let opened = std::rc::Rc::new(std::cell::Cell::new(false));
+        window.connect_map(move |window| {
+            if opened.replace(true) {
+                return;
             }
 
-            // Refresh tabs on startup
-            window_clone.imp().get_sender().send(Message::RefreshTabs()).await.unwrap();
+            let window_clone = window.clone();
+            spawn_future_local(async move {
+                // URLs on the command line become the startup tabs; without any, a
+                // default set opens.
+                let mut initial_urls: Vec<String> = std::env::args().skip(1).filter(|a| !a.starts_with('-')).collect();
+                if initial_urls.is_empty() {
+                    initial_urls = ["https://gosub.io", "https://adayinthelifeof.nl", "https://news.ycombinator.com"]
+                        .map(String::from)
+                        .to_vec();
+                }
+
+                for url in initial_urls.iter() {
+                    window_clone
+                        .imp()
+                        .get_sender()
+                        .send(Message::OpenTab(url.to_string(), "New Tab".to_string()))
+                        .await
+                        .unwrap();
+                }
+
+                // Refresh tabs on startup
+                window_clone.imp().get_sender().send(Message::RefreshTabs()).await.unwrap();
+            });
         });
 
         window
@@ -110,50 +130,16 @@ impl BrowserWindow {
                 #[strong]
                 sender,
                 async move {
-                    sender.send(Message::OpenTab("about:blank".into(), "New Tab".into())).await.unwrap();
+                    sender
+                        .send(Message::OpenTab("gosub://home".into(), "New Tab".into()))
+                        .await
+                        .unwrap();
                 }
             ));
         });
         app.add_action(&new_tab_action);
 
-        let tab_bar = window.imp().tab_bar.clone();
-        tab_bar.connect_page_added({
-            let window_clone = window.clone();
-            move |_notebook, _, page_num| {
-                window_clone
-                    .imp()
-                    .log(format!("[result] added a tab on page {}", page_num).as_str());
-            }
-        });
-
-        tab_bar.connect_page_removed({
-            let window_clone = window.clone();
-            move |_notebook, _widget, page_num| {
-                window_clone.imp().log(format!("[result] removed tab: {}", page_num).as_str());
-            }
-        });
-
-        tab_bar.connect_page_reordered({
-            let window_clone = window.clone();
-            move |_notebook, page, page_num| {
-                window_clone
-                    .imp()
-                    .log(format!("[result] reordered tab: [{:?}] to {}", page.get_tab_id(), page_num).as_str());
-            }
-        });
-
-        tab_bar.connect_switch_page({
-            let window_clone = window.clone();
-            move |_notebook, page, page_num| {
-                window_clone.imp().log(format!("[result] switched to tab: {}", page_num).as_str());
-
-                if let Some(tab_id) = page.get_tab_id() {
-                    let manager = window_clone.imp().tab_manager.lock().unwrap();
-                    let tab = manager.get_tab(tab_id).unwrap();
-                    window_clone.imp().searchbar.set_text(tab.url().as_str());
-                    drop(manager);
-                }
-            }
-        });
+        // Tab switching (chip clicks) is handled by `imp::BrowserWindow::activate_tab`,
+        // which also syncs the address bar and nav buttons.
     }
 }

@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Problem loading page</title>
+    <style>
+        body {
+            background-color: #ffffff;
+            color: #14213d;
+            font-family: Cantarell, "DejaVu Sans", sans-serif;
+            margin: 0;
+            padding: 60px 80px;
+        }
+        h1 { font-size: 26px; margin: 0 0 8px 0; }
+        .url {
+            font-family: monospace;
+            font-size: 15px;
+            color: #1a5fb4;
+            margin-bottom: 24px;
+        }
+        .detail {
+            background-color: #f4f6f8;
+            border: 1px solid #e0e4e8;
+            border-radius: 8px;
+            padding: 12px 16px;
+            font-family: monospace;
+            font-size: 13px;
+            color: #6b2020;
+            margin-bottom: 28px;
+        }
+        .hints { color: #4b5563; font-size: 14px; }
+        .hints div { margin-bottom: 6px; }
+        .footer {
+            margin-top: 48px;
+            padding-top: 12px;
+            border-top: 1px solid #e5e7eb;
+            color: #9aa3af;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Beacon can&#8217;t reach this page</h1>
+    <div class="url">{{URL}}</div>
+
+    <div class="detail">{{ERROR}}</div>
+
+    <div class="hints">
+        <div>&#8226; Check the address for typos</div>
+        <div>&#8226; Check your network connection</div>
+        <div>&#8226; The site may be temporarily unavailable &#8212; try reloading</div>
+    </div>
+
+    <div class="footer">Gosub Beacon</div>
+</body>
+</html>

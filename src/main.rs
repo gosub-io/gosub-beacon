@@ -2,7 +2,6 @@ mod application;
 mod cookies;
 mod dialog;
 pub mod engine;
-mod eventloop;
 #[allow(dead_code)]
 mod fetcher;
 mod tab;
@@ -11,12 +10,12 @@ mod window;
 use crate::application::Application;
 use crate::fetcher::Fetcher;
 use gtk4::gdk::Display;
-use gtk4::prelude::ApplicationExt;
+use gtk4::prelude::{ApplicationExt, ApplicationExtManual};
 use gtk4::{gio, CssProvider};
 use std::sync::OnceLock;
 use tokio::runtime::Runtime;
 
-const APP_ID: &str = "io.gosub.browser-gtk";
+const APP_ID: &str = "io.gosub.beacon";
 
 fn runtime() -> &'static Runtime {
     static RUNTIME: OnceLock<Runtime> = OnceLock::new();
@@ -42,13 +41,16 @@ fn main() {
     });
 
     gtk4::init().unwrap();
-    sourceview5::init();
 
     gio::resources_register_include!("gosub.gresource").expect("Failed to register resources.");
 
     let app = Application::new();
     app.connect_startup(|_| load_css());
-    app.run();
+    // Keep GTK away from argv: URLs passed on the command line become the startup
+    // tabs (see BrowserWindow::new), which plain `app.run()` would reject as unknown
+    // options.
+    let argv0: Vec<String> = std::env::args().take(1).collect();
+    app.run_with_args(&argv0);
 }
 
 fn load_css() {

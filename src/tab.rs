@@ -1,14 +1,45 @@
-use crate::engine::GosubEngineConfig;
-use crate::fetcher::address_parser::GosubRenderMode;
-use gosub_engine::prelude::HasTreeDrawer;
+use crate::engine::EngineTabId;
+use gosub_engine::tab::TabHandle;
 use gtk4::gdk::Texture;
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::fmt::Debug;
 use std::str::FromStr;
-use std::sync::{Arc, Mutex};
 use url::Url;
 use uuid::Uuid;
+
+pub use gosub_engine::tab::{HistoryEntryId, HistorySnapshot};
+
+/// Session history lives in the engine (a tree: back = parent, forward = children); the shell
+/// only mirrors the latest [`HistorySnapshot`] it was sent so the back/forward buttons and the
+/// forward-branch menu can update without a round-trip. Empty until the first
+/// `HistoryChanged` event arrives.
+#[derive(Clone, Debug, Default)]
+pub struct History {
+    snapshot: Option<HistorySnapshot>,
+}
+
+impl History {
+    pub fn update(&mut self, snapshot: HistorySnapshot) {
+        self.snapshot = Some(snapshot);
+    }
+
+    pub fn can_go_back(&self) -> bool {
+        self.snapshot.as_ref().is_some_and(|s| s.can_go_back)
+    }
+
+    pub fn can_go_forward(&self) -> bool {
+        self.snapshot.as_ref().is_some_and(|s| !s.forward.is_empty())
+    }
+
+    /// Forward branches of the current entry (preferred first), as `(id, url)` pairs.
+    pub fn forward_children(&self) -> Vec<(HistoryEntryId, Url)> {
+        self.snapshot
+            .as_ref()
+            .map(|s| s.forward.iter().map(|e| (e.id, e.url.clone())).collect())
+            .unwrap_or_default()
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
 pub struct TabId(Uuid);
@@ -46,7 +77,6 @@ impl fmt::Display for TabId {
 
 #[derive(Clone)]
 pub struct GosubTab {
-    render_mode: GosubRenderMode,
     /// Tab is currently loading
     loading: bool,
     /// Id of the tab
@@ -57,16 +87,18 @@ pub struct GosubTab {
     private: bool,
     /// URL that is loaded into the tab
     url: Url,
-    /// History of the tab
-    history: Vec<Url>,
+    /// Mirror of the engine's session history for this tab (back/forward state)
+    history: History,
+    /// Panic message when the engine worker for this tab crashed.
+    crashed: Option<String>,
     /// Title of the tab
     title: String,
     /// Loaded favicon of the tab
     favicon: Option<Texture>,
     /// Actual content (HTML) of the tab
     content: String,
-    /// Drawer
-    drawer: Arc<Mutex<Option<<GosubEngineConfig as HasTreeDrawer>::TreeDrawer>>>,
+    /// Handle to the engine-side tab that drives navigation and rendering.
+    tab_handle: Option<TabHandle>,
 }
 
 impl Debug for GosubTab {
@@ -81,37 +113,47 @@ impl Debug for GosubTab {
 impl GosubTab {
     pub fn new(url: Url, title: &str) -> Self {
         GosubTab {
-            render_mode: GosubRenderMode::Rendered,
             loading: false,
             id: TabId::new(),
             pinned: false,
             private: false,
             url,
-            history: Vec::new(),
+            history: History::default(),
+            crashed: None,
             title: title.to_string(),
             favicon: None,
             content: String::new(),
-            drawer: Arc::new(Mutex::new(None)),
+            tab_handle: None,
         }
     }
 
-    pub(crate) fn set_render_mode(&mut self, mode: GosubRenderMode) {
-        self.render_mode = mode;
-    }
-    pub(crate) fn render_mode(&self) -> GosubRenderMode {
-        self.render_mode.clone()
+    /// Returns the engine tab handle, if one has been attached.
+    pub fn tab_handle(&self) -> Option<TabHandle> {
+        self.tab_handle.clone()
     }
 
-    pub fn has_drawer(&self) -> bool {
-        self.drawer.lock().unwrap().is_some()
+    /// Returns the engine-side tab id, if a handle has been attached.
+    pub fn engine_tab_id(&self) -> Option<EngineTabId> {
+        self.tab_handle.as_ref().map(|h| h.tab_id)
     }
 
-    pub fn drawer(&self) -> Arc<Mutex<Option<<GosubEngineConfig as HasTreeDrawer>::TreeDrawer>>> {
-        self.drawer.clone()
+    /// Returns true once this tab is backed by an engine tab.
+    pub fn has_engine_tab(&self) -> bool {
+        self.tab_handle.is_some()
     }
 
-    pub fn set_drawer(&mut self, drawer: <GosubEngineConfig as HasTreeDrawer>::TreeDrawer) {
-        self.drawer = Arc::new(Mutex::new(Some(drawer)));
+    pub fn set_tab_handle(&mut self, handle: TabHandle) {
+        self.tab_handle = Some(handle);
+    }
+
+    /// Panic message when the tab's engine worker crashed; `None` while healthy.
+    /// A crashed tab keeps its (dead) handle until `set_crashed(None)` after a revive.
+    pub fn crashed(&self) -> Option<&str> {
+        self.crashed.as_deref()
+    }
+
+    pub fn set_crashed(&mut self, error: Option<String>) {
+        self.crashed = error;
     }
 
     pub fn is_loading(&self) -> bool {
@@ -158,12 +200,12 @@ impl GosubTab {
         self.url = url
     }
 
-    pub fn add_to_history(&mut self, url: Url) {
-        self.history.push(url);
+    pub fn history(&self) -> &History {
+        &self.history
     }
 
-    pub fn pop_history(&mut self) -> Option<Url> {
-        self.history.pop()
+    pub fn history_mut(&mut self) -> &mut History {
+        &mut self.history
     }
 
     pub fn set_title(&mut self, title: &str) {

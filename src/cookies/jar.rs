@@ -6,7 +6,7 @@ use url::Url;
 
 pub trait StorageBackend: Send + Sync {
     fn store(&self, url: &Url, value: &Cookie);
-    fn get(&self, url: &Url) -> Option<Vec<Cookie>>;
+    fn get(&self, url: &Url) -> Option<Vec<Cookie<'_>>>;
 }
 
 pub struct CookieJar {

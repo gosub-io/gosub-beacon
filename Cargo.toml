@@ -1,26 +1,37 @@
 [package]
-name = "gosub-gtk"
+name = "gosub-beacon"
 version = "0.1.0"
 edition = "2021"
 authors = ["Gosub Community <info@gosub.io>"]
-description = "Gosub browser using GTK"
+description = "Gosub Beacon — a web browser built on the Gosub engine"
 license = "MIT"
 
 [dependencies]
-gosub_engine = { version = "0.1.2", registry = "gosub" }
+# Local engine: main gosub-engine checkout. The engine owns networking,
+# cookies, storage and the render pipeline; rendering is consumed via the
+# compositor / tile cache.
+gosub_engine = { path = "../gosub-engine/crates/gosub_engine", features = ["sqlite_cookie_store", "sqlite_places"] }
+gosub_render_pipeline = { path = "../gosub-engine/crates/gosub_render_pipeline" }
+gosub_renderer_skia = { path = "../gosub-engine/crates/gosub_renderer_skia" }
+# Skia rasterizes tiles on the CPU; compositing happens on the GPU via GtkGLArea
+# (see src/engine.rs). Version must match the engine workspace's skia-safe.
+skia-safe = { version = "0.99.0", features = ["gl"] }
+parking_lot = "0.12"
 gtk-macros = "0.3"
-gtk4 = { version = "0.9.5", features = ["v4_6", "v4_14"] }
+# gtk4 must match the version the engine's `gtk4` feature pins (gtk4-sys uses `links`,
+# so only one gtk4 version can be in the dependency graph).
+gtk4 = { version = "0.11.1", features = ["v4_6", "v4_14"] }
 chrono = { version = "0.4.39", features = [] }
 uuid = { version = "1.11.0", features = ["v4", "v7"] }
 log = "0.4.22"
 once_cell = "1.5"
 colog = "1.3.0"
-tokio = { version = "1.42.0", features = ["rt-multi-thread"] }
+tokio = { version = "1.42.0", features = ["rt-multi-thread", "macros", "sync", "time"] }
 async-channel = "2.3.1"
 url = "2.5.2"
-rusqlite = "0.32.1"
+# Match the engine's rusqlite (libsqlite3-sys `links = "sqlite3"` allows only one version).
+rusqlite = "0.39"
 cookie = "0.18.1"
-sourceview5 = { version = "0.9.1", features = ["gtk_v4_6"] }
 anyhow = "1.0.95"
 thiserror = "2.0.9"
 futures-core = "0.3.31"
@@ -42,6 +53,21 @@ proto-http = []     # Enables the HTTP(s) protocol (required)
 proto-ftp = []      # Enables the FTP protocol (ftp://)
 proto-gopher = [ "dep:gophermap" ]   # Enables the Gopher protocol (gopher://)
 
+# EGL is how Skia binds the GL context on Wayland/X11; macOS uses CGL natively.
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+skia-safe = { version = "0.99.0", features = ["gl", "egl"] }
+
 [build-dependencies]
-glib-build-tools = "0.20.0"
+glib-build-tools = "0.21.0"
+
+# Dev builds must stay fast enough to actually browse with: the engine's render
+# pipeline and the frame blit in src/engine.rs are per-pixel CPU work that is
+# unusable at opt-level 0. Dependencies (including the engine path deps, which
+# do not inherit the engine workspace's own profile) get full optimization;
+# the beacon crate itself gets light optimization to keep rebuilds quick.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 2
 
