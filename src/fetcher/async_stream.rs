@@ -139,13 +139,27 @@ mod tests {
         let rt = Builder::new_current_thread().enable_all().build().unwrap();
 
         rt.block_on(async move {
-            let stream = reqwest::get("http://httpbin.org/stream-bytes/100000").await.unwrap().bytes_stream();
+            // Local one-shot server: the test used to stream from httpbin.org, which
+            // made it fail whenever that service had a bad day.
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            tokio::spawn(async move {
+                use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf).await;
+                let body = vec![0xAB_u8; 100000];
+                let head = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+                stream.write_all(head.as_bytes()).await.unwrap();
+                stream.write_all(&body).await.unwrap();
+            });
 
-            println!("requested, streaming");
+            let stream = reqwest::get(format!("http://127.0.0.1:{port}/")).await.unwrap().bytes_stream();
 
             let bytes = AsyncStream::new(stream, None).bytes().await.unwrap();
 
             assert_eq!(bytes.len(), 100000);
+            assert!(bytes.iter().all(|b| *b == 0xAB));
         });
     }
 }
