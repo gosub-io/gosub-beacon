@@ -266,3 +266,22 @@ label.status-bubble {
     padding: 2px 10px;
     font-size: 12px;
 }
+
+/* Private windows carry a purple-tinted chrome so they are unmistakable. */
+window.private-window headerbar {
+    background: #3d2a55;
+    color: #e8e0f5;
+}
+window.private-window box.tab-row {
+    background: #2e2040;
+    border-bottom: 1px solid #4d3a66;
+}
+window.private-window box.tab-row button.tab-chip {
+    color: #d8ccee;
+}
+window.private-window box.tab-row button.tab-chip:checked {
+    background: alpha(#ffffff, 0.16);
+}
+window.private-window menubar.header-menubar > item {
+    color: #e8e0f5;
+}

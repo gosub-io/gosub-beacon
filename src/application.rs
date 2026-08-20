@@ -36,7 +36,8 @@ mod imp {
                 return;
             }
 
-            let window = BrowserWindow::new(&obj);
+            let private = std::env::args().any(|a| a == "--private");
+            let window = BrowserWindow::new(&obj, private);
             window.present();
         }
 
@@ -69,7 +70,7 @@ impl Application {
 
     pub fn window(&self) -> BrowserWindow {
         self.active_window()
-            .map_or_else(|| BrowserWindow::new(self), |w| w.downcast().unwrap())
+            .map_or_else(|| BrowserWindow::new(self, false), |w| w.downcast().unwrap())
     }
 
     fn setup_actions(&self) {

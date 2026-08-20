@@ -70,7 +70,13 @@ pub struct BrowserEngine {
 impl BrowserEngine {
     /// Build and start the engine. Must be called with `rt` as the active tokio runtime
     /// for engine tasks to spawn correctly.
-    pub fn new(rt: &Runtime) -> anyhow::Result<Self> {
+    ///
+    /// A `private` engine backs a private-browsing window: cookies, local storage and
+    /// session storage live in memory only, and the engine records no visited history.
+    /// Settings are still read from (and written to) the shared store, and the persistent
+    /// bookmarks/history remain readable for the UI (bookmarks bar, URL completion) —
+    /// matching what mainstream browsers do in private mode.
+    pub fn new(rt: &Runtime, private: bool) -> anyhow::Result<Self> {
         let _guard = rt.enter();
 
         let (tx_redraw, rx_redraw) = mpsc::unbounded_channel::<()>();
@@ -128,17 +134,13 @@ impl BrowserEngine {
             .build()
             .map_err(|e| anyhow::anyhow!("ZoneConfig: {e:?}"))?;
 
-        let cookie_store: gosub_engine::cookies::CookieStoreHandle = SqliteCookieStore::new(data_dir.join("cookies.db"))
-            .map_err(|e| anyhow::anyhow!("cookie store: {e:?}"))?
-            .into();
-
         let local_db = data_dir.join("local-storage.db").to_string_lossy().into_owned();
 
         // Bookmarks + visited history. The engine records visits; Beacon queries the same
         // handle directly (star button, bookmarks bar, URL-bar completion).
         let places: gosub_engine::places::PlacesHandle =
             Arc::new(SqlitePlaces::new(data_dir.join("places.db")).map_err(|e| anyhow::anyhow!("places: {e:?}"))?);
-        if places.bookmarks().is_empty() {
+        if !private && places.bookmarks().is_empty() {
             for (url, title) in [
                 ("https://gosub.io", "Gosub"),
                 ("https://github.com/gosub-io", "GitHub"),
@@ -174,15 +176,32 @@ impl BrowserEngine {
             })
         });
 
-        let zone_services = ZoneServices {
-            storage: Arc::new(StorageService::new(
-                Arc::new(SqliteLocalStore::new(&local_db).map_err(|e| anyhow::anyhow!("local store: {e:?}"))?),
-                Arc::new(InMemorySessionStore::new()),
-            )),
-            cookie_store: Some(cookie_store),
-            cookie_jar: None,
-            partition_policy: PartitionPolicy::None,
-            places: Some(places.clone()),
+        let zone_services = if private {
+            // Everything in memory, nothing recorded: gone when the window closes.
+            ZoneServices {
+                storage: Arc::new(StorageService::new(
+                    Arc::new(gosub_engine::storage::InMemoryLocalStore::new()),
+                    Arc::new(InMemorySessionStore::new()),
+                )),
+                cookie_store: None,
+                cookie_jar: Some(gosub_engine::cookies::DefaultCookieJar::new().into()),
+                partition_policy: PartitionPolicy::None,
+                places: None,
+            }
+        } else {
+            let cookie_store: gosub_engine::cookies::CookieStoreHandle = SqliteCookieStore::new(data_dir.join("cookies.db"))
+                .map_err(|e| anyhow::anyhow!("cookie store: {e:?}"))?
+                .into();
+            ZoneServices {
+                storage: Arc::new(StorageService::new(
+                    Arc::new(SqliteLocalStore::new(&local_db).map_err(|e| anyhow::anyhow!("local store: {e:?}"))?),
+                    Arc::new(InMemorySessionStore::new()),
+                )),
+                cookie_store: Some(cookie_store),
+                cookie_jar: None,
+                partition_policy: PartitionPolicy::None,
+                places: Some(places.clone()),
+            }
         };
 
         let zone = engine

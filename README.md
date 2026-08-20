@@ -18,6 +18,8 @@ Currently working:
 - internal pages: gosub://home, help, version, history, bookmarks and a settings
   editor on gosub://config
 - favicons, cursor shapes, error pages, a JSON viewer
+- private windows (Ctrl+Shift+P): in-memory cookies and storage, no history recorded
+- page zoom (Ctrl+±/0, Ctrl+wheel)
 - crashed tabs show a reload page instead of taking the browser down
 
 Not working yet: JavaScript, forms and text input, text selection.
@@ -29,6 +31,7 @@ Not working yet: JavaScript, forms and text input, text selection.
 | ![Hacker News](./docs/screenshots/hacker-news.png) | ![debian.org](./docs/screenshots/debian-org.png) |
 | ![JSON viewer](./docs/screenshots/json-viewer.png) | ![Engine settings](./docs/screenshots/settings.png) |
 | ![Internal pages](./docs/screenshots/internal-pages.png) | ![Error page](./docs/screenshots/error-page.png) |
+| ![Private window](./docs/screenshots/private-window.png) | ![Bookmarks](./docs/screenshots/bookmarks.png) |
 
 [All screenshots](./docs/screenshots/)
 

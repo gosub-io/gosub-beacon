@@ -127,6 +127,8 @@ pub struct BrowserWindow {
     completion: RefCell<Option<(Popover, gtk4::ListBox)>>,
     /// Per-tab page zoom, shared with each render area's input/draw closures.
     tab_zoom: RefCell<HashMap<TabId, Rc<Cell<f64>>>>,
+    /// Whether this is a private-browsing window (ephemeral engine, no history recording).
+    pub private: Cell<bool>,
 }
 
 impl Default for BrowserWindow {
@@ -163,6 +165,7 @@ impl Default for BrowserWindow {
             downloads_list: RefCell::new(None),
             completion: RefCell::new(None),
             tab_zoom: RefCell::new(HashMap::new()),
+            private: Cell::new(false),
         }
     }
 }
@@ -655,7 +658,8 @@ impl BrowserWindow {
             } else {
                 self.searchbar.set_text(tab.url().as_str());
             }
-            self.obj().set_title(Some(&format!("{} — Gosub Beacon", tab.title())));
+            let suffix = if self.private.get() { " (Private)" } else { "" };
+            self.obj().set_title(Some(&format!("{} — Gosub Beacon{suffix}", tab.title())));
         }
         drop(manager);
         // The raster DPR is a process-wide atomic: re-store it for this tab's zoom.
@@ -1903,7 +1907,7 @@ impl BrowserWindow {
 
     /// Start the engine and wire its redraw/event notifications into the GTK main loop.
     pub fn init_engine(&self) {
-        let mut engine = match BrowserEngine::new(runtime()) {
+        let mut engine = match BrowserEngine::new(runtime(), self.private.get()) {
             Ok(e) => e,
             Err(e) => {
                 self.log(format!("Failed to start engine: {e}").as_str());

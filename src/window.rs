@@ -25,8 +25,13 @@ glib::wrapper! {
 }
 
 impl BrowserWindow {
-    pub fn new(app: &Application) -> Self {
+    pub fn new(app: &Application, private: bool) -> Self {
         let window: Self = glib::Object::builder().property("application", app).build();
+        window.imp().private.set(private);
+        if private {
+            window.add_css_class("private-window");
+            window.set_title(Some("Gosub Beacon (Private)"));
+        }
 
         window.set_resizable(true);
         window.set_decorated(true);
@@ -92,11 +97,14 @@ impl BrowserWindow {
                     return glib::ControlFlow::Continue;
                 }
                 let window_clone = wait_window.clone();
+                let private = window_clone.imp().private.get();
                 spawn_future_local(async move {
                     // URLs on the command line become the startup tabs; without any, a
-                    // default set opens.
+                    // default set opens. A private window starts on the home page only.
                     let mut initial_urls: Vec<String> = std::env::args().skip(1).filter(|a| !a.starts_with('-')).collect();
-                    if initial_urls.is_empty() {
+                    if private {
+                        initial_urls = vec!["gosub://home".to_string()];
+                    } else if initial_urls.is_empty() {
                         initial_urls = ["https://gosub.io", "https://adayinthelifeof.nl", "https://news.ycombinator.com"]
                             .map(String::from)
                             .to_vec();
@@ -128,57 +136,83 @@ impl BrowserWindow {
         app.set_accels_for_action("app.zoom-in", &["<Primary>equal", "<Primary>plus", "<Primary>KP_Add"]);
         app.set_accels_for_action("app.zoom-out", &["<Primary>minus", "<Primary>KP_Subtract"]);
         app.set_accels_for_action("app.zoom-reset", &["<Primary>0", "<Primary>KP_0"]);
+        app.set_accels_for_action("app.new-private-window", &["<Primary><Shift>P"]);
     }
 
-    fn connect_actions(app: &Application, window: &Self) {
+    /// The window app actions should act on: the focused one (multi-window safe).
+    fn action_target(app: &Application) -> Option<Self> {
+        app.active_window().and_then(|w| w.downcast::<Self>().ok())
+    }
+
+    fn connect_actions(app: &Application, _window: &Self) {
+        // Registered on every window construction; re-registration overwrites the
+        // previous action, which is harmless since they all resolve the active window
+        // at activation time.
         let logwindow_action = SimpleAction::new("toggle-log", None);
         logwindow_action.connect_activate({
-            let window_clone = window.clone();
+            let app = app.clone();
             move |_, _| {
-                window_clone
-                    .imp()
-                    .log_scroller
-                    .set_visible(!window_clone.imp().log_scroller.get_visible());
+                let Some(window) = BrowserWindow::action_target(&app) else { return };
+                window.imp().log_scroller.set_visible(!window.imp().log_scroller.get_visible());
             }
         });
         app.add_action(&logwindow_action);
 
         // Create new tab
-        let window_clone = window.clone();
         let new_tab_action = SimpleAction::new("open-new-tab", None);
-        new_tab_action.connect_activate(move |_, _| {
-            let sender = window_clone.imp().sender.clone();
-            runtime().spawn(clone!(
-                #[strong]
-                sender,
-                async move {
-                    sender
-                        .send(Message::OpenTab("gosub://home".into(), "New Tab".into()))
-                        .await
-                        .unwrap();
-                }
-            ));
+        new_tab_action.connect_activate({
+            let app = app.clone();
+            move |_, _| {
+                let Some(window) = BrowserWindow::action_target(&app) else { return };
+                let sender = window.imp().sender.clone();
+                runtime().spawn(clone!(
+                    #[strong]
+                    sender,
+                    async move {
+                        sender
+                            .send(Message::OpenTab("gosub://home".into(), "New Tab".into()))
+                            .await
+                            .unwrap();
+                    }
+                ));
+            }
         });
         app.add_action(&new_tab_action);
 
+        // New private window.
+        let private_action = SimpleAction::new("new-private-window", None);
+        private_action.connect_activate({
+            let app = app.clone();
+            move |_, _| {
+                BrowserWindow::new(&app, true).present();
+            }
+        });
+        app.add_action(&private_action);
+
         // Page zoom on the active tab.
         for (name, direction) in [("zoom-in", 1), ("zoom-out", -1)] {
-            let window_clone = window.clone();
             let action = SimpleAction::new(name, None);
-            action.connect_activate(move |_, _| {
-                let imp = window_clone.imp();
-                if let Some(tab_id) = imp.active_tab_id() {
-                    imp.zoom_step(tab_id, direction);
+            action.connect_activate({
+                let app = app.clone();
+                move |_, _| {
+                    let Some(window) = BrowserWindow::action_target(&app) else { return };
+                    let imp = window.imp();
+                    if let Some(tab_id) = imp.active_tab_id() {
+                        imp.zoom_step(tab_id, direction);
+                    }
                 }
             });
             app.add_action(&action);
         }
-        let window_clone = window.clone();
         let zoom_reset = SimpleAction::new("zoom-reset", None);
-        zoom_reset.connect_activate(move |_, _| {
-            let imp = window_clone.imp();
-            if let Some(tab_id) = imp.active_tab_id() {
-                imp.set_zoom(tab_id, 1.0);
+        zoom_reset.connect_activate({
+            let app = app.clone();
+            move |_, _| {
+                let Some(window) = BrowserWindow::action_target(&app) else { return };
+                let imp = window.imp();
+                if let Some(tab_id) = imp.active_tab_id() {
+                    imp.set_zoom(tab_id, 1.0);
+                }
             }
         });
         app.add_action(&zoom_reset);

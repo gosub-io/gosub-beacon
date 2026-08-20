@@ -9,6 +9,10 @@
                     <attribute name="action">app.open-new-tab</attribute>
                 </item>
                 <item>
+                    <attribute name="label">New Private Window</attribute>
+                    <attribute name="action">app.new-private-window</attribute>
+                </item>
+                <item>
                     <attribute name="label">Open</attribute>
                     <attribute name="action">app.open</attribute>
                 </item>
