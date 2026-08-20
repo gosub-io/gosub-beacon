@@ -1,28 +1,60 @@
 # Gosub Beacon — GTK browser
 
-This is a prototype of a GTK browser written in Rust. It is a work in progress and is not intended to be used as a real browser bur merely as a test to see how well the Gosub engine can be implemented in a real-life applicaiton.
+Beacon is a GTK4 browser built on the [Gosub engine](https://github.com/gosub-io/gosub-engine).
+The engine does the actual work (networking, cookies, storage, history, rendering); Beacon
+is the native chrome around it. It exists to test the engine in a real application, so
+don't expect a daily driver — but basic browsing works.
 
-Do not expect anything to work. The browser is not functional at the moment.
+![Gosub Beacon with three tabs loaded](./docs/screenshots/beacon-2026-08.png)
 
-![Screenshot of the browser](./docs/screenshots/initial-screen.png)
+Currently working:
 
-[More screenshots](./docs/screenshots/)
+- page loading and rendering (Skia rasterization, GPU compositing via GtkGLArea)
+- tabs, back/forward with a tree-shaped session history
+- bookmarks and visited history in sqlite, with a bookmarks bar and URL-bar completion
+- downloads with a save dialog and a progress popover
+- keyboard: Tab focus traversal, Enter on links, scrolling keys
+- right-click context menu (open/copy link, image, save link as)
+- internal pages: gosub://home, help, version, history, bookmarks and a settings
+  editor on gosub://config
+- favicons, cursor shapes, error pages, a JSON viewer
+- crashed tabs show a reload page instead of taking the browser down
 
-### Installing dependencies:
+Not working yet: JavaScript, forms and text input, text selection.
+
+## More screenshots
+
+| | |
+|---|---|
+| ![Hacker News](./docs/screenshots/hacker-news.png) | ![debian.org](./docs/screenshots/debian-org.png) |
+| ![JSON viewer](./docs/screenshots/json-viewer.png) | ![Engine settings](./docs/screenshots/settings.png) |
+| ![Internal pages](./docs/screenshots/internal-pages.png) | ![Error page](./docs/screenshots/error-page.png) |
+
+[All screenshots](./docs/screenshots/)
+
+## Building
+
+Beacon uses path dependencies into the engine, so check out
+[gosub-engine](https://github.com/gosub-io/gosub-engine) next to this repository
+(`../gosub-engine`), currently on the `beacon-updates` branch.
+
+Dependencies on Debian/Ubuntu, or similar on other systems:
 
 ```bash
-sudo apt install libgtk-4-dev
+sudo apt install libgtk-4-dev libglib2.0-dev libcairo2-dev libgdk-pixbuf-2.0-dev \
+                 libpango1.0-dev libsqlite3-dev libssl-dev pkg-config \
+                 clang libclang-dev libgl-dev libegl-dev libfontconfig-dev libfreetype-dev
 ```
 
-or similar on your linux system. There is no support for anything non-debian/ubuntu at the 
-moment, but it should be easy to add support for other linux systems.
+Linux only for now. macOS and Windows shells will consume the engine's C API instead of
+this GTK code, but help with either is welcome.
 
-Currently, there is no macOS or Windows support. However, it should be possible to run the browser under WSL2.
-
-Any help with adding support for other systems is welcome.
-
-### Running the browser:
+## Running
 
 ```bash
-cargo run
+cargo run                          # opens the default startup tabs
+cargo run -- https://example.com   # URLs on the command line become the startup tabs
 ```
+
+Profile data (cookies, local storage, bookmarks/history, settings) ends up in
+`~/.local/share/gosub-beacon`.

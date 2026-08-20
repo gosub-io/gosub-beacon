@@ -76,7 +76,15 @@ impl BrowserWindow {
 
             let window_clone = window.clone();
             spawn_future_local(async move {
-                let initial_urls = ["https://gosub.io", "https://adayinthelifeof.nl", "https://news.ycombinator.com"];
+                // URLs on the command line become the startup tabs; without any, a
+                // default set opens.
+                let mut initial_urls: Vec<String> =
+                    std::env::args().skip(1).filter(|a| !a.starts_with('-')).collect();
+                if initial_urls.is_empty() {
+                    initial_urls = ["https://gosub.io", "https://adayinthelifeof.nl", "https://news.ycombinator.com"]
+                        .map(String::from)
+                        .to_vec();
+                }
 
                 for url in initial_urls.iter() {
                     window_clone

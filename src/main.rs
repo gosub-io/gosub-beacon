@@ -10,7 +10,7 @@ mod window;
 use crate::application::Application;
 use crate::fetcher::Fetcher;
 use gtk4::gdk::Display;
-use gtk4::prelude::ApplicationExt;
+use gtk4::prelude::{ApplicationExt, ApplicationExtManual};
 use gtk4::{gio, CssProvider};
 use std::sync::OnceLock;
 use tokio::runtime::Runtime;
@@ -46,7 +46,11 @@ fn main() {
 
     let app = Application::new();
     app.connect_startup(|_| load_css());
-    app.run();
+    // Keep GTK away from argv: URLs passed on the command line become the startup
+    // tabs (see BrowserWindow::new), which plain `app.run()` would reject as unknown
+    // options.
+    let argv0: Vec<String> = std::env::args().take(1).collect();
+    app.run_with_args(&argv0);
 }
 
 fn load_css() {
