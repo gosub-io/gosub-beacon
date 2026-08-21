@@ -4,6 +4,7 @@ mod dialog;
 pub mod engine;
 #[allow(dead_code)]
 mod fetcher;
+mod session;
 mod tab;
 mod window;
 

@@ -13,6 +13,10 @@ pub enum Message {
     /// Refresh tabs
     RefreshTabs(),
 
+    /// Apply session flags after the restored tabs opened: which insertion-order
+    /// indices are pinned, and which one becomes active.
+    RestoreSession { pinned: Vec<usize>, active: Option<usize> },
+
     /// Pins a tab
     PinTab(TabId),
     /// Unpins a tab
@@ -35,6 +39,9 @@ impl Debug for Message {
             Message::OpenTabRight(tab_id, url, title) => write!(f, "OpenTabRight({:?}, {} {})", tab_id, url, title),
             Message::LoadUrl(tab_id, url) => write!(f, "LoadUrl({:?}, {})", tab_id, url),
             Message::RefreshTabs() => write!(f, "RefreshTabs()"),
+            Message::RestoreSession { pinned, active } => {
+                write!(f, "RestoreSession(pinned: {:?}, active: {:?})", pinned, active)
+            }
             Message::Log(msg) => write!(f, "Log({})", msg),
             Message::PinTab(tab_id) => write!(f, "PinTab({:?})", tab_id),
             Message::UnpinTab(tab_id) => write!(f, "UnpinTab({:?})", tab_id),

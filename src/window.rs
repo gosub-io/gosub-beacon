@@ -99,15 +99,22 @@ impl BrowserWindow {
                 let window_clone = wait_window.clone();
                 let private = window_clone.imp().private.get();
                 spawn_future_local(async move {
-                    // URLs on the command line become the startup tabs; without any, a
-                    // default set opens. A private window starts on the home page only.
+                    // URLs on the command line become the startup tabs; without any, the
+                    // previous session is restored (falling back to a default set). A
+                    // private window starts on the home page only.
                     let mut initial_urls: Vec<String> = std::env::args().skip(1).filter(|a| !a.starts_with('-')).collect();
+                    let mut session = Vec::new();
                     if private {
                         initial_urls = vec!["gosub://home".to_string()];
                     } else if initial_urls.is_empty() {
-                        initial_urls = ["https://gosub.io", "https://adayinthelifeof.nl", "https://news.ycombinator.com"]
-                            .map(String::from)
-                            .to_vec();
+                        session = crate::session::load();
+                        initial_urls = if session.is_empty() {
+                            ["https://gosub.io", "https://adayinthelifeof.nl", "https://news.ycombinator.com"]
+                                .map(String::from)
+                                .to_vec()
+                        } else {
+                            session.iter().map(|t| t.url.clone()).collect()
+                        };
                     }
 
                     for url in initial_urls.iter() {
@@ -121,6 +128,18 @@ impl BrowserWindow {
 
                     // Refresh tabs on startup
                     window_clone.imp().get_sender().send(Message::RefreshTabs()).await.unwrap();
+
+                    // Re-apply the restored session's pin flags and active tab.
+                    if !session.is_empty() {
+                        let pinned = (0..session.len()).filter(|i| session[*i].pinned).collect();
+                        let active = session.iter().position(|t| t.active);
+                        window_clone
+                            .imp()
+                            .get_sender()
+                            .send(Message::RestoreSession { pinned, active })
+                            .await
+                            .unwrap();
+                    }
                 });
                 glib::ControlFlow::Break
             });
@@ -132,6 +151,7 @@ impl BrowserWindow {
     fn connect_accelerators(app: &Application, _window: &Self) {
         app.set_accels_for_action("app.open-new-tab", &["<Primary>T"]);
         app.set_accels_for_action("app.close-tab", &["<Primary>W"]);
+        app.set_accels_for_action("app.reopen-closed-tab", &["<Primary><Shift>T"]);
         app.set_accels_for_action("app.toggle-log", &["<Primary>L"]);
         app.set_accels_for_action("app.zoom-in", &["<Primary>equal", "<Primary>plus", "<Primary>KP_Add"]);
         app.set_accels_for_action("app.zoom-out", &["<Primary>minus", "<Primary>KP_Subtract"]);
@@ -178,6 +198,28 @@ impl BrowserWindow {
             }
         });
         app.add_action(&new_tab_action);
+
+        // Close the active tab (Ctrl+W).
+        let close_tab_action = SimpleAction::new("close-tab", None);
+        close_tab_action.connect_activate({
+            let app = app.clone();
+            move |_, _| {
+                let Some(window) = BrowserWindow::action_target(&app) else { return };
+                window.imp().close_active_tab();
+            }
+        });
+        app.add_action(&close_tab_action);
+
+        // Reopen the most recently closed tab (Ctrl+Shift+T).
+        let reopen_action = SimpleAction::new("reopen-closed-tab", None);
+        reopen_action.connect_activate({
+            let app = app.clone();
+            move |_, _| {
+                let Some(window) = BrowserWindow::action_target(&app) else { return };
+                window.imp().reopen_closed_tab();
+            }
+        });
+        app.add_action(&reopen_action);
 
         // New private window.
         let private_action = SimpleAction::new("new-private-window", None);

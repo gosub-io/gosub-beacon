@@ -127,6 +127,8 @@ pub struct BrowserWindow {
     completion: RefCell<Option<(Popover, gtk4::ListBox)>>,
     /// Per-tab page zoom, shared with each render area's input/draw closures.
     tab_zoom: RefCell<HashMap<TabId, Rc<Cell<f64>>>>,
+    /// Recently closed tabs as (url, strip position), newest last (Ctrl+Shift+T pops).
+    closed_tabs: RefCell<Vec<(String, usize)>>,
     /// Whether this is a private-browsing window (ephemeral engine, no history recording).
     pub private: Cell<bool>,
 }
@@ -165,6 +167,7 @@ impl Default for BrowserWindow {
             downloads_list: RefCell::new(None),
             completion: RefCell::new(None),
             tab_zoom: RefCell::new(HashMap::new()),
+            closed_tabs: RefCell::new(Vec::new()),
             private: Cell::new(false),
         }
     }
@@ -352,12 +355,82 @@ impl BrowserWindow {
     }
 
     pub(crate) fn close_tab(&self, tab_id: TabId) {
+        // Remember the tab for "Reopen Closed Tab" (url + strip position).
+        let position = self.chips().iter().position(|c| c.get_tab_id() == Some(tab_id));
+
         let mut manager = self.tab_manager.lock().unwrap();
         if manager.tab_count() == 1 {
+            drop(manager);
             self.log("Cannot close the last tab");
             return;
         }
+        if let Some(tab) = manager.get_tab(tab_id) {
+            let mut closed = self.closed_tabs.borrow_mut();
+            closed.push((tab.url().to_string(), position.unwrap_or(usize::MAX)));
+            let overflow = closed.len().saturating_sub(25);
+            closed.drain(..overflow);
+        }
+        let handle = manager.get_tab(tab_id).and_then(|t| t.tab_handle());
         manager.remove_tab(tab_id);
+        drop(manager);
+
+        // Shut down the engine worker behind the tab and drop our references.
+        if let Some(handle) = handle {
+            self.engine_tab_map.borrow_mut().remove(&handle.tab_id);
+            runtime().spawn(async move {
+                let _ = handle.send(EngineTabCommand::CloseTab).await;
+            });
+        }
+        self.tab_zoom.borrow_mut().remove(&tab_id);
+        self.refresh_tabs();
+    }
+
+    /// Close the currently active tab (Ctrl+W / app.close-tab).
+    pub(crate) fn close_active_tab(&self) {
+        if let Some(tab_id) = self.active_tab_id() {
+            self.close_tab(tab_id);
+        }
+    }
+
+    /// Whether "Reopen Closed Tab" has anything to reopen.
+    pub(crate) fn has_closed_tabs(&self) -> bool {
+        !self.closed_tabs.borrow().is_empty()
+    }
+
+    /// Reopen the most recently closed tab at its old position (Ctrl+Shift+T).
+    pub(crate) fn reopen_closed_tab(&self) {
+        let Some((url, position)) = self.closed_tabs.borrow_mut().pop() else {
+            return;
+        };
+        let position = (position != usize::MAX).then_some(position);
+        if let Some(tab_id) = self.open_tab(position, &url, "New Tab") {
+            self.activate_tab(tab_id);
+        }
+    }
+
+    /// Persist which tabs are open, so the next start can restore them. Called after
+    /// every tab mutation; private windows leave no trace.
+    pub(crate) fn save_session(&self) {
+        if self.private.get() {
+            return;
+        }
+        let active = self.active_tab_id();
+        let manager = self.tab_manager.lock().unwrap();
+        let tabs: Vec<crate::session::SessionTab> = manager
+            .order()
+            .iter()
+            .filter_map(|id| {
+                manager.get_tab(*id).map(|t| crate::session::SessionTab {
+                    url: t.url().to_string(),
+                    pinned: t.is_pinned(),
+                    active: Some(*id) == active,
+                })
+            })
+            .collect();
+        drop(manager);
+        if !tabs.is_empty() {
+            crate::session::save(&tabs);
+        }
     }
 
     pub(crate) fn refresh_tabs(&self) {
@@ -479,6 +552,7 @@ impl BrowserWindow {
 
         // Loading state may have changed for the active tab.
         self.update_reload_button();
+        self.save_session();
     }
 
     /// Swap the reload button between reload and stop based on the active
@@ -675,6 +749,7 @@ impl BrowserWindow {
         self.update_nav_buttons();
         self.update_reload_button();
         self.update_bookmark_button();
+        self.save_session();
     }
 
     /// A tab chip: a `Box` holding the label toggle and, beside it, the close button.
@@ -1533,6 +1608,23 @@ impl BrowserWindow {
             Message::RefreshTabs() => {
                 self.refresh_tabs();
             }
+            Message::RestoreSession { pinned, active } => {
+                // Snapshot insertion order before pinning: pin_tab reorders, but the
+                // saved indices refer to the order the tabs were opened in.
+                let order = self.tab_manager.lock().unwrap().order();
+                {
+                    let mut manager = self.tab_manager.lock().unwrap();
+                    for index in pinned {
+                        if let Some(id) = order.get(index) {
+                            manager.pin_tab(*id);
+                        }
+                    }
+                }
+                self.refresh_tabs();
+                if let Some(id) = active.and_then(|i| order.get(i)) {
+                    self.activate_tab(*id);
+                }
+            }
             Message::OpenTab(url, title) => {
                 self.open_tab(None, &url, &title);
             }
@@ -1626,10 +1718,10 @@ impl BrowserWindow {
 
     /// Opens a new tab at the given position, with the given URL and title. If the position is None,
     /// the tab will be added at the end of the tab-bar.
-    fn open_tab(&self, position: Option<usize>, url_str: &str, title: &str) {
+    fn open_tab(&self, position: Option<usize>, url_str: &str, title: &str) -> Option<TabId> {
         let Ok((_render_mode, url)) = GosubAddressParser::parse(url_str) else {
             self.log("Cannot parse URL");
-            return;
+            return None;
         };
 
         let mut tab = GosubTab::new(url.clone(), title);
@@ -1640,14 +1732,14 @@ impl BrowserWindow {
             let mut eng = self.engine.borrow_mut();
             let Some(eng) = eng.as_mut() else {
                 self.log("Engine not ready");
-                return;
+                return None;
             };
             let viewport = self.viewport_for_new_tab();
             match eng.create_tab(runtime(), title, viewport) {
                 Ok(h) => h,
                 Err(e) => {
                     self.log(format!("Failed to create engine tab: {e}").as_str());
-                    return;
+                    return None;
                 }
             }
         };
@@ -1671,6 +1763,7 @@ impl BrowserWindow {
         if !shell {
             self.navigate_engine_tab(tab_id, url.as_str());
         }
+        Some(tab_id)
     }
 
     /// Build a GL area that composites the engine's tile frames for `tab` on the GPU,

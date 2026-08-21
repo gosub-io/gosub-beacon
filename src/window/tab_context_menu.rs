@@ -138,9 +138,13 @@ pub(crate) fn setup_context_menu_actions(action_group: &SimpleActionGroup, windo
     action_group.add_action(&close_tab);
 
     // Reopen Closed Tab
+    let window_clone = window.clone();
     let reopen_closed_tab = SimpleAction::new("reopen", None);
+    if !window.imp().has_closed_tabs() {
+        reopen_closed_tab.set_enabled(false);
+    }
     reopen_closed_tab.connect_activate(move |_, _| {
-        // @todo: implement reopen closed tab
+        window_clone.imp().reopen_closed_tab();
     });
     action_group.add_action(&reopen_closed_tab);
 
@@ -246,8 +250,6 @@ pub(crate) fn build_context_menu(tab_info: TabInfo) -> Menu {
     submenu.append(Some("Close Other Tabs"), Some("tab.close-others"));
     section.append_submenu(Some("Close Other Tabs"), &submenu);
 
-    // @todo: we should only be allowed to reopen closed tab, after we have closed one..
-    // this functionality is not yet implemented
     section.append(Some("Reopen Closed Tab"), Some("tab.reopen"));
     menu.append_section(None, &section);
 

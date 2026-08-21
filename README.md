@@ -11,6 +11,8 @@ Currently working:
 
 - page loading and rendering (Skia rasterization, GPU compositing via GtkGLArea)
 - tabs, back/forward with a tree-shaped session history
+- session restore: the previous session's tabs reopen on start; Ctrl+Shift+T
+  reopens a closed tab
 - bookmarks and visited history in sqlite, with a bookmarks bar and URL-bar completion
 - downloads with a save dialog and a progress popover
 - keyboard: Tab focus traversal, Enter on links, scrolling keys
