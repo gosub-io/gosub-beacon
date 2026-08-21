@@ -20,6 +20,7 @@ Currently working:
 - internal pages: gosub://home, help, version, history, bookmarks and a settings
   editor on gosub://config
 - favicons, cursor shapes, error pages, a JSON viewer
+- view-source: with syntax highlighting and line numbers, in a tab
 - file:// URLs: local pages load their own subresources, directories get an index
   page, and a filesystem path typed in the address bar just works
 - private windows (Ctrl+Shift+P): in-memory cookies and storage, no history recorded

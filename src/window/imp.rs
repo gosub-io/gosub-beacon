@@ -1,5 +1,5 @@
 use crate::engine::{render_frame_gl, BrowserEngine, EngineTabId};
-use crate::fetcher::address_parser::GosubAddressParser;
+use crate::fetcher::address_parser::{GosubAddressParser, GosubRenderMode};
 use crate::tab::{GosubTab, GosubTabManager, HistoryEntryId, TabCommand, TabId};
 use crate::window::message::Message;
 use crate::window::tab_context_menu::{build_context_menu, setup_context_menu_actions, TabInfo};
@@ -27,6 +27,15 @@ use std::sync::Mutex;
 
 // Create a static Quark as a unique key
 static TAB_ID_QUARK: Lazy<Quark> = Lazy::new(|| Quark::from_str("tab_id"));
+
+/// Whether a render mode shows page source; `Some(true)` means unhighlighted (`raw:`).
+fn source_mode(mode: &GosubRenderMode) -> Option<bool> {
+    match mode {
+        GosubRenderMode::Source => Some(false),
+        GosubRenderMode::RawSource => Some(true),
+        _ => None,
+    }
+}
 
 pub trait WidgetExtTabId {
     fn set_tab_id(&self, tab_id: TabId);
@@ -245,18 +254,13 @@ impl BrowserWindow {
             }
         };
 
-        // The engine does not expose the page source, so re-fetch the URL.
+        // Source renders in its own tab next to this one, browser-style. The engine
+        // does not expose the fetched bytes, so the source is re-fetched.
         let sender = self.get_sender();
         runtime().spawn(async move {
-            match fetcher::fetch_url_body(url.clone()).await {
-                Ok(bytes) => {
-                    let content = String::from_utf8_lossy(&bytes).to_string();
-                    let _ = sender.send(Message::ShowSource(url.to_string(), content)).await;
-                }
-                Err(e) => {
-                    let _ = sender.send(Message::Log(format!("View source failed: {e}"))).await;
-                }
-            }
+            let _ = sender
+                .send(Message::OpenTabRight(tab_id, format!("view-source:{url}"), "View source".into()))
+                .await;
         });
     }
 
@@ -310,6 +314,13 @@ impl BrowserWindow {
 
         // The shell-rendered config page has nothing to reload.
         if Self::is_shell_rendered(&url) {
+            return;
+        }
+
+        // The engine can't refetch a view-source: page (the shell built it); re-run the
+        // source flow instead.
+        if matches!(url.scheme(), "view-source" | "raw") {
+            let _ = self.get_sender().send_blocking(Message::LoadUrl(tab_id, url.to_string()));
             return;
         }
 
@@ -406,6 +417,58 @@ impl BrowserWindow {
         if let Some(tab_id) = self.open_tab(position, &url, "New Tab") {
             self.activate_tab(tab_id);
         }
+    }
+
+    /// Show the source of `inner` in the tab: fetch it, build the line-numbered page
+    /// and push it via `LoadHtml`. `raw` skips highlighting (the `raw:` prefix).
+    fn load_view_source(&self, tab_id: TabId, inner: &url::Url, raw: bool) {
+        let prefix = if raw { "raw:" } else { "view-source:" };
+        let display = url::Url::parse(&format!("{prefix}{inner}")).unwrap_or_else(|_| inner.clone());
+
+        let mut manager = self.tab_manager.lock().unwrap();
+        let Some(mut tab) = manager.get_tab(tab_id) else {
+            return;
+        };
+        tab.set_favicon(None);
+        tab.set_title(display.as_str());
+        tab.set_url(display.clone());
+        tab.set_loading(false);
+        manager.update_tab(tab_id, &tab);
+        let handle = tab.tab_handle();
+        drop(manager);
+        self.refresh_tabs();
+
+        let Some(handle) = handle else {
+            return;
+        };
+        let sender = self.get_sender();
+        let inner = inner.clone();
+        runtime().spawn(async move {
+            let result: Result<Vec<u8>, String> = if inner.scheme() == "file" {
+                match inner.to_file_path() {
+                    Ok(path) => std::fs::read(&path).map_err(|e| e.to_string()),
+                    Err(()) => Err("not a local file path".into()),
+                }
+            } else {
+                fetcher::fetch_url_body(inner.clone()).await.map_err(|e| format!("{e:?}"))
+            };
+            match result {
+                Ok(bytes) => {
+                    let source = String::from_utf8_lossy(&bytes);
+                    let html = super::source_page::build(inner.as_str(), &source, !raw);
+                    let _ = handle
+                        .send(EngineTabCommand::LoadHtml {
+                            html,
+                            base_url: display.to_string(),
+                        })
+                        .await;
+                    let _ = handle.send(EngineTabCommand::ResumeDrawing { fps: 30 }).await;
+                }
+                Err(e) => {
+                    let _ = sender.send(Message::Log(format!("View source failed: {e}"))).await;
+                }
+            }
+        });
     }
 
     /// Persist which tabs are open, so the next start can restore them. Called after
@@ -1560,30 +1623,6 @@ impl BrowserWindow {
         popover.popup();
     }
 
-    /// Open a read-only monospace window showing the fetched page source.
-    fn show_source_window(&self, url: &str, content: &str) {
-        let buffer = gtk4::TextBuffer::builder().text(content).build();
-        let view = TextView::builder()
-            .buffer(&buffer)
-            .editable(false)
-            .cursor_visible(false)
-            .monospace(true)
-            .wrap_mode(gtk4::WrapMode::None)
-            .build();
-
-        let scrolled = ScrolledWindow::builder().hexpand(true).vexpand(true).child(&view).build();
-
-        let parent = self.obj();
-        let window = gtk4::Window::builder()
-            .transient_for(&*parent)
-            .title(format!("Source: {url}"))
-            .default_width(800)
-            .default_height(600)
-            .child(&scrolled)
-            .build();
-        window.present();
-    }
-
     /// Enable/disable the back and forward buttons based on the active tab's history.
     pub(crate) fn update_nav_buttons(&self) {
         let (back, forward) = match self.active_tab_id() {
@@ -1637,10 +1676,16 @@ impl BrowserWindow {
             Message::LoadUrl(tab_id, url_str) => {
                 self.log(format!("Loading URL: {}", url_str).as_str());
 
-                let Ok((_view_mode, url)) = GosubAddressParser::parse(url_str.as_str()) else {
+                let Ok((view_mode, url)) = GosubAddressParser::parse(url_str.as_str()) else {
                     self.log("Cannot parse URL");
                     return;
                 };
+
+                // `view-source:`/`raw:` addresses render the target's source in-tab.
+                if let Some(raw) = source_mode(&view_mode) {
+                    self.load_view_source(tab_id, &url, raw);
+                    return;
+                }
 
                 // Update information in the given tab with the new url
                 let shell = Self::is_shell_rendered(&url);
@@ -1665,9 +1710,6 @@ impl BrowserWindow {
             }
             Message::Log(msg) => {
                 self.log(msg.as_str());
-            }
-            Message::ShowSource(url, content) => {
-                self.show_source_window(&url, &content);
             }
             Message::PinTab(tab_id) => {
                 let mut manager = self.tab_manager.lock().unwrap();
@@ -1719,7 +1761,7 @@ impl BrowserWindow {
     /// Opens a new tab at the given position, with the given URL and title. If the position is None,
     /// the tab will be added at the end of the tab-bar.
     fn open_tab(&self, position: Option<usize>, url_str: &str, title: &str) -> Option<TabId> {
-        let Ok((_render_mode, url)) = GosubAddressParser::parse(url_str) else {
+        let Ok((render_mode, url)) = GosubAddressParser::parse(url_str) else {
             self.log("Cannot parse URL");
             return None;
         };
@@ -1760,7 +1802,9 @@ impl BrowserWindow {
         drop(manager);
         self.refresh_tabs();
 
-        if !shell {
+        if let Some(raw) = source_mode(&render_mode) {
+            self.load_view_source(tab_id, &url, raw);
+        } else if !shell {
             self.navigate_engine_tab(tab_id, url.as_str());
         }
         Some(tab_id)

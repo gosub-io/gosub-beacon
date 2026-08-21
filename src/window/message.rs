@@ -25,9 +25,6 @@ pub enum Message {
     /// Single message to print in the log
     Log(String),
 
-    /// Show the fetched page source (url, source) in a viewer window
-    ShowSource(String, String),
-
     /// Raw favicon bytes fetched for a tab (decoded on the GTK thread)
     FaviconLoaded(TabId, Vec<u8>),
 }
@@ -45,7 +42,6 @@ impl Debug for Message {
             Message::Log(msg) => write!(f, "Log({})", msg),
             Message::PinTab(tab_id) => write!(f, "PinTab({:?})", tab_id),
             Message::UnpinTab(tab_id) => write!(f, "UnpinTab({:?})", tab_id),
-            Message::ShowSource(url, content) => write!(f, "ShowSource({}, {} bytes)", url, content.len()),
             Message::FaviconLoaded(tab_id, bytes) => write!(f, "FaviconLoaded({:?}, {} bytes)", tab_id, bytes.len()),
         }
     }
