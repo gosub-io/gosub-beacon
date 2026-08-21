@@ -104,13 +104,33 @@ impl GosubAddressParser {
         match Url::parse(address) {
             Ok(url) => Ok((mode, url)),
             Err(url::ParseError::RelativeUrlWithoutBase) => {
-                // dbg!("NO MATCH: ", address);
+                // A filesystem path typed straight into the address bar becomes file://.
+                if let Some(url) = Self::file_url_for_path(address) {
+                    return Ok((mode, url));
+                }
                 match Self::parse(&format!("{}{}", DEFAULT_SCHEME, address)) {
                     Ok((_, url)) => Ok((mode, url)),
                     Err(e) => Err(e),
                 }
             }
             Err(e) => Err(anyhow::anyhow!("Cannot parse URL: {}", e)),
+        }
+    }
+
+    /// Turn an absolute (`/...`) or home-relative (`~/...`) filesystem path into a
+    /// `file://` URL. Anything else returns `None` and goes through the web fallback.
+    fn file_url_for_path(address: &str) -> Option<Url> {
+        let path = if let Some(rest) = address.strip_prefix("~/") {
+            std::path::PathBuf::from(std::env::var_os("HOME")?).join(rest)
+        } else if address.starts_with('/') {
+            std::path::PathBuf::from(address)
+        } else {
+            return None;
+        };
+        if std::fs::metadata(&path).map(|m| m.is_dir()).unwrap_or(false) {
+            Url::from_directory_path(&path).ok()
+        } else {
+            Url::from_file_path(&path).ok()
         }
     }
 }
@@ -169,5 +189,9 @@ mod tests {
 
         test_40: ("about:blank", GosubRenderMode::Rendered, "about", "", "blank"),
         test_41: ("source:about:blank", GosubRenderMode::Source, "about", "", "blank"),
+
+        test_50: ("file:///etc/hostname", GosubRenderMode::Rendered, "file", "", "/etc/hostname"),
+        test_51: ("/no/such/file.html", GosubRenderMode::Rendered, "file", "", "/no/such/file.html"),
+        test_52: ("/tmp", GosubRenderMode::Rendered, "file", "", "/tmp/"),
     }
 }

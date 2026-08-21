@@ -18,6 +18,8 @@ Currently working:
 - internal pages: gosub://home, help, version, history, bookmarks and a settings
   editor on gosub://config
 - favicons, cursor shapes, error pages, a JSON viewer
+- file:// URLs: local pages load their own subresources, directories get an index
+  page, and a filesystem path typed in the address bar just works
 - private windows (Ctrl+Shift+P): in-memory cookies and storage, no history recorded
 - page zoom (Ctrl+±/0, Ctrl+wheel)
 - crashed tabs show a reload page instead of taking the browser down
