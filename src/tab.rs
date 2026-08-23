@@ -265,7 +265,7 @@ impl GosubTabManager {
     }
 
     pub(crate) fn commands(&mut self) -> Vec<TabCommand> {
-        self.commands.drain(..).collect()
+        std::mem::take(&mut self.commands)
     }
 
     pub(crate) fn tab_count(&self) -> usize {
