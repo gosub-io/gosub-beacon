@@ -59,3 +59,56 @@ cargo run -- https://example.com   # URLs on the command line become the startup
 
 Profile data (cookies, local storage, bookmarks/history, settings) ends up in
 `~/.local/share/gosub-beacon`.
+
+### Running in a container
+
+To (re-)create a docker/podman image, you can use the supplied [Dockerfile](./Dockerfile) to build a local image with dependencies installed.
+
+#### Building a image
+
+First build the image.
+
+```shell
+# docker
+docker build --tag gosub-beacon .
+# podman
+podman build --tag gosub-beacon .
+```
+
+#### Running the image
+
+Run this image using Wayland (X11 should also work)
+
+```shell
+# docker
+docker run --rm -it \
+       --user="$(id -u):$(id -g)" \
+       --workdir=/tmp \
+       \
+       -e WAYLAND_DISPLAY="$WAYLAND_DISPLAY" \
+       -e DISPLAY="$DISPLAY" \
+       \
+       -e XDG_RUNTIME_DIR=/tmp/runtime \
+       -v tmpfs:/tmp/runtime \
+       -v /tmp/.X11-unix:/tmp/.X11-unix:ro \
+       -v "$XDG_RUNTIME_DIR"/"$WAYLAND_DISPLAY":/tmp/runtime/"$WAYLAND_DISPLAY":ro \
+       \
+       gosub-beacon
+
+# podman
+podman run --rm -it \
+       --userns=keep-id \
+       --workdir=/tmp \
+       \
+       -e WAYLAND_DISPLAY="$WAYLAND_DISPLAY" \
+       -e DISPLAY="$DISPLAY" \
+       \
+       -e XDG_RUNTIME_DIR=/tmp/runtime \
+       -v tmpfs:/tmp/runtime \
+       -v /tmp/.X11-unix:/tmp/.X11-unix:ro \
+       -v "$XDG_RUNTIME_DIR"/"$WAYLAND_DISPLAY":/tmp/runtime/"$WAYLAND_DISPLAY":ro \
+       \
+       gosub-beacon
+
+```
+
