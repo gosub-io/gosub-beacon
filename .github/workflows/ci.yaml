@@ -10,11 +10,12 @@ env:
   CARGO_TERM_COLOR: always
   # Beacon depends on the engine through relative path dependencies
   # (`../gosub-engine/crates/*`, see Cargo.toml), so CI checks the engine out as a
-  # sibling directory. The `beacon` branch is the long-lived integration branch for
-  # Beacon: upstream main plus whatever engine work Beacon needs that has not merged
-  # yet. Feature branches (beacon-updates etc.) are merged into it as they are pushed,
-  # and it is re-synced by merging upstream main into it after engine PRs land.
-  ENGINE_REPO: jaytaph/gosub-engine
+  # sibling directory. `beacon` is a long-lived branch on the canonical engine repo.
+  # It follows gosub-io/gosub-engine main, and additionally carries any engine work
+  # Beacon needs that has not landed on main yet -- so Beacon always compiles while
+  # the engine's own main stays stable. Keep it in sync by merging main into it after
+  # engine PRs land, and drop beacon-only commits once they merge upstream.
+  ENGINE_REPO: gosub-io/gosub-engine
   ENGINE_REF: beacon
 
 jobs:
