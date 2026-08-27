@@ -105,6 +105,12 @@ pub struct BrowserWindow {
     pub engine: Rc<RefCell<Option<BrowserEngine>>>,
     /// Per-tab GL areas, so the redraw loop can request repaints.
     pub render_areas: Rc<RefCell<HashMap<TabId, GLArea>>>,
+    /// Last viewport (CSS px) a GLArea resize computed, in exactly the form the engine expects.
+    /// A hidden `GtkStack` page is never allocated, so a background tab's own GLArea never
+    /// emits `::resize`; without this, such a tab would be sized by a second, different
+    /// formula (`content_stack` logical px) and every switch to it would land a differing
+    /// `SetViewport`, which drops the whole tile cache and re-lays-out the page.
+    pub last_viewport: Rc<Cell<Option<(u32, u32)>>>,
     /// Maps engine tab ids back to our tab ids (for routing engine events).
     pub engine_tab_map: Rc<RefCell<HashMap<EngineTabId, TabId>>>,
     /// Right-clicks awaiting the engine's hit-test answer: token → (tab, window point).
@@ -146,6 +152,7 @@ impl Default for BrowserWindow {
 
             engine: Rc::new(RefCell::new(None)),
             render_areas: Rc::new(RefCell::new(HashMap::new())),
+            last_viewport: Rc::new(Cell::new(None)),
             engine_tab_map: Rc::new(RefCell::new(HashMap::new())),
             pending_hit_tests: RefCell::new(HashMap::new()),
             next_hit_test_token: Cell::new(1),
@@ -546,10 +553,55 @@ impl BrowserWindow {
 
     /// Make `tab_id` the visible tab: check its chip, show its page, and sync
     /// the address bar and nav buttons (the old notebook switch-page handler).
+    /// Viewport (CSS px) for a tab whose own GLArea has not been allocated yet.
+    ///
+    /// Prefers the value a real GLArea `::resize` produced, so every tab is sized by the one
+    /// formula the engine will later be told; falls back to the content area's logical size,
+    /// and finally to `None`, which lets the engine apply its own non-zero fallback. It must
+    /// never report a zero size: that used to reach the engine as a 0x0 viewport.
+    fn viewport_for_new_tab(&self) -> Option<(u32, u32)> {
+        if let Some(vp) = self.last_viewport.get() {
+            return Some(vp);
+        }
+        let (w, h) = (self.content_stack.width(), self.content_stack.height());
+        (w > 0 && h > 0).then_some((w as u32, h as u32))
+    }
+
+    /// Push the current viewport to `tab_id` before it is shown.
+    ///
+    /// A hidden `GtkStack` page is never allocated, so this tab's GLArea has never emitted
+    /// `::resize` and the engine may still hold a stale size for it. Sending the size now means
+    /// the GLArea's first resize is a no-op in the engine (`vp == desired_viewport`) instead of
+    /// a change that drops the tile cache and re-lays-out the whole page mid-switch.
+    fn sync_viewport_for(&self, tab_id: TabId) {
+        let Some((vw, vh)) = self.viewport_for_new_tab() else {
+            return;
+        };
+        let manager = self.tab_manager.lock().unwrap();
+        let handle = manager.get_tab(tab_id).and_then(|t| t.tab_handle());
+        drop(manager);
+        let Some(handle) = handle else {
+            return;
+        };
+        runtime().spawn(async move {
+            let _ = handle
+                .send(EngineTabCommand::SetViewport {
+                    x: 0,
+                    y: 0,
+                    width: vw,
+                    height: vh,
+                })
+                .await;
+        });
+    }
+
     pub(crate) fn activate_tab(&self, tab_id: TabId) {
         for chip in self.chips() {
             chip.set_active(chip.get_tab_id() == Some(tab_id));
         }
+        // Correct the engine's viewport for this tab BEFORE it is shown, so its GLArea's
+        // first-ever resize does not land as a change and trigger a full re-layout.
+        self.sync_viewport_for(tab_id);
         if let Some(page) = self.page_for_tab(tab_id) {
             self.content_stack.set_visible_child(&page);
         }
@@ -783,10 +835,7 @@ impl BrowserWindow {
                 self.log("Engine not ready");
                 return;
             };
-            let viewport = {
-                let (w, h) = (self.content_stack.width(), self.content_stack.height());
-                (w > 0 && h > 0).then_some((w as u32, h as u32))
-            };
+            let viewport = self.viewport_for_new_tab();
             match eng.create_tab(runtime(), "New Tab", viewport) {
                 Ok(h) => h,
                 Err(e) => {
@@ -1445,12 +1494,7 @@ impl BrowserWindow {
                 self.log("Engine not ready");
                 return;
             };
-            // Size new tabs to the visible content area so background tabs render at
-            // the right size before they are first shown (see BrowserEngine::create_tab).
-            let viewport = {
-                let (w, h) = (self.content_stack.width(), self.content_stack.height());
-                (w > 0 && h > 0).then_some((w as u32, h as u32))
-            };
+            let viewport = self.viewport_for_new_tab();
             match eng.create_tab(runtime(), title, viewport) {
                 Ok(h) => h,
                 Err(e) => {
@@ -1538,6 +1582,7 @@ impl BrowserWindow {
             // resolution — otherwise HiDPI/fractional-scale displays get a 1x
             // buffer upscaled by the compositor (blurry text).
             let resize_handle = handle.clone();
+            let resize_last_viewport = self.last_viewport.clone();
             area.connect_resize(move |area, w, h| {
                 use gosub_render_pipeline::render::DEVICE_PIXEL_RATIO;
                 let dpr = crate::engine::render_dpr(area);
@@ -1545,6 +1590,12 @@ impl BrowserWindow {
                 // GtkGLArea's resize reports PHYSICAL pixels; the engine viewport is
                 // logical (CSS) px — the DPR handles physical rasterization separately.
                 let (vw, vh) = (w / dpr as i32, h / dpr as i32);
+                if vw <= 0 || vh <= 0 {
+                    return;
+                }
+                // Record it so tabs whose own GLArea has never been allocated are sized by
+                // this exact formula rather than a second, subtly different one.
+                resize_last_viewport.set(Some((vw as u32, vh as u32)));
                 let handle = resize_handle.clone();
                 runtime().spawn(async move {
                     let _ = handle
