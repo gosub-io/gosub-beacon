@@ -34,6 +34,8 @@ fn main() {
         .filter(None, log::LevelFilter::Error)
         .filter(Some("fetcher"), log::LevelFilter::Trace)
         .filter(Some("gtk"), log::LevelFilter::Info)
+        // Our own warnings must not be swallowed by the global Error filter.
+        .filter(Some("gosub_beacon"), log::LevelFilter::Warn)
         .init();
 
     Fetcher::protocols_implemented().iter().for_each(|protocol| {

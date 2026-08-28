@@ -223,11 +223,13 @@ impl BrowserEngine {
 
     /// Create a fresh engine tab in the default zone. Blocks on the runtime.
     ///
-    /// `viewport` is the initial size in CSS px. Pass the currently visible content
-    /// area's size: a hidden `GtkStack` page is never allocated, so its GLArea's
-    /// resize handler (the only other `SetViewport` source) does not fire until the
-    /// tab is first shown — without an initial viewport, background tabs lay out and
-    /// rasterize at the engine's default size and must fully re-render on switch.
+    /// `viewport` is the initial size in CSS px, from `viewport_for_new_tab()`: a hidden
+    /// `GtkStack` page is never allocated, so its GLArea's resize handler (the only other
+    /// `SetViewport` source) does not fire until the tab is first shown. Without an initial
+    /// viewport, background tabs lay out and rasterize at the wrong size and must fully
+    /// re-render on switch. `None` is safe — the engine applies its own non-zero fallback —
+    /// but prefer a real size, since a viewport that differs when the tab is first shown
+    /// costs a full cache drop and re-layout.
     pub fn create_tab(&mut self, rt: &Runtime, title: &str, viewport: Option<(u32, u32)>) -> anyhow::Result<TabHandle> {
         let defaults = TabDefaults {
             url: None,
@@ -294,6 +296,11 @@ pub fn render_frame_gl(
     if phys_w <= 0 || phys_h <= 0 {
         return;
     }
+
+    // We share this GL context with GTK, which mutates state Skia caches (scissor, blend, bound
+    // FBO, viewport). Without this, Skia keeps drawing against a stale idea of that state, which
+    // shows up as region-shaped artifacts -- e.g. a corner that stays unpainted.
+    dc.reset(None);
 
     let fb_info = skia_safe::gpu::gl::FramebufferInfo {
         fboid: bound_framebuffer(),

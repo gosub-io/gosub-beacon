@@ -74,28 +74,47 @@ impl BrowserWindow {
                 return;
             }
 
-            let window_clone = window.clone();
-            spawn_future_local(async move {
-                // URLs on the command line become the startup tabs; without any, a
-                // default set opens.
-                let mut initial_urls: Vec<String> = std::env::args().skip(1).filter(|a| !a.starts_with('-')).collect();
-                if initial_urls.is_empty() {
-                    initial_urls = ["https://gosub.io", "https://adayinthelifeof.nl", "https://news.ycombinator.com"]
-                        .map(String::from)
-                        .to_vec();
+            // The window is MAPPED here, but not yet ALLOCATED: GLib dispatches
+            // G_PRIORITY_DEFAULT (0) sources ahead of the frame clock's layout phase
+            // (GDK_PRIORITY_REDRAW = 120), so `content_stack` still measures 0x0. Opening the
+            // tabs now gives every one of them the engine's fallback viewport instead of the
+            // real one, and each then has to reflow the first time it is shown - visible as the
+            // layout jumping sideways. Wait for a real allocation (idle runs at
+            // G_PRIORITY_DEFAULT_IDLE = 200, i.e. after layout) so they are born correct.
+            let wait_window = window.clone();
+            // Bounded: never spin forever if an allocation never arrives (window mapped then
+            // immediately hidden). Falling through just restores the previous behaviour.
+            let tries = std::cell::Cell::new(0u32);
+            glib::idle_add_local(move || {
+                let unallocated = wait_window.imp().content_stack.width() <= 0 || wait_window.imp().content_stack.height() <= 0;
+                if unallocated && tries.get() < 100 {
+                    tries.set(tries.get() + 1);
+                    return glib::ControlFlow::Continue;
                 }
+                let window_clone = wait_window.clone();
+                spawn_future_local(async move {
+                    // URLs on the command line become the startup tabs; without any, a
+                    // default set opens.
+                    let mut initial_urls: Vec<String> = std::env::args().skip(1).filter(|a| !a.starts_with('-')).collect();
+                    if initial_urls.is_empty() {
+                        initial_urls = ["https://gosub.io", "https://adayinthelifeof.nl", "https://news.ycombinator.com"]
+                            .map(String::from)
+                            .to_vec();
+                    }
 
-                for url in initial_urls.iter() {
-                    window_clone
-                        .imp()
-                        .get_sender()
-                        .send(Message::OpenTab(url.to_string(), "New Tab".to_string()))
-                        .await
-                        .unwrap();
-                }
+                    for url in initial_urls.iter() {
+                        window_clone
+                            .imp()
+                            .get_sender()
+                            .send(Message::OpenTab(url.to_string(), "New Tab".to_string()))
+                            .await
+                            .unwrap();
+                    }
 
-                // Refresh tabs on startup
-                window_clone.imp().get_sender().send(Message::RefreshTabs()).await.unwrap();
+                    // Refresh tabs on startup
+                    window_clone.imp().get_sender().send(Message::RefreshTabs()).await.unwrap();
+                });
+                glib::ControlFlow::Break
             });
         });
 
