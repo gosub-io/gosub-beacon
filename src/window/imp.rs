@@ -374,9 +374,16 @@ impl BrowserWindow {
                     self.activate_tab(tab_id);
                 }
                 TabCommand::Insert(tab_id, position) => {
+                    // Commands are drained in one batch, so this can name a tab that a later
+                    // command in the SAME batch already closed (`remove_tab` drops it from
+                    // `tabs` immediately). Unwrapping here panicked while holding the lock,
+                    // which poisoned it and turned every later click into an abort.
                     let manager = self.tab_manager.lock().unwrap();
-                    let tab = manager.get_tab(tab_id).unwrap().clone();
+                    let tab = manager.get_tab(tab_id);
                     drop(manager);
+                    let Some(tab) = tab else {
+                        continue;
+                    };
 
                     let chip = self.create_tab_chip(&tab);
                     let sibling = if position == 0 {
@@ -393,7 +400,7 @@ impl BrowserWindow {
 
                     // The stack shows its first child automatically; mirror that on the chip.
                     if self.content_stack.visible_child().as_ref() == Some(page.upcast_ref()) {
-                        chip.set_active(true);
+                        Self::set_chip_active(&chip, true);
                     }
                 }
                 TabCommand::Close(tab_id) => {
@@ -406,7 +413,8 @@ impl BrowserWindow {
                     self.render_areas.borrow_mut().remove(&tab_id);
                 }
                 TabCommand::CloseAll => {
-                    while let Some(chip) = self.tab_strip.first_child() {
+                    // Only the chips: the new-tab button is also a child of the strip.
+                    for chip in self.chips() {
                         self.tab_strip.remove(&chip);
                     }
                     while let Some(page) = self.content_stack.first_child() {
@@ -425,9 +433,13 @@ impl BrowserWindow {
                     }
                 }
                 TabCommand::Update(tab_id) => {
+                    // Same as Insert: the tab may already be gone by the time we get here.
                     let manager = self.tab_manager.lock().unwrap();
-                    let tab = manager.get_tab(tab_id).unwrap().clone();
+                    let tab = manager.get_tab(tab_id);
                     drop(manager);
+                    let Some(tab) = tab else {
+                        continue;
+                    };
 
                     // The shell-rendered config page gets a GTK widget; everything else
                     // (real URLs and engine-served gosub:// pages) gets an engine-backed
@@ -453,12 +465,7 @@ impl BrowserWindow {
                     }
 
                     if let Some(chip) = self.chip_for_tab(tab_id) {
-                        chip.set_child(Some(&self.create_tab_label(&tab)));
-                        if tab.is_pinned() {
-                            chip.add_css_class("pinned");
-                        } else {
-                            chip.remove_css_class("pinned");
-                        }
+                        self.populate_chip(&chip, &tab);
                     }
                 }
             }
@@ -524,20 +531,50 @@ impl BrowserWindow {
     }
 
     /// All tab chips in strip order.
-    fn chips(&self) -> Vec<ToggleButton> {
+    ///
+    /// A chip is a `Box`, not a button: the close button has to be a SIBLING of the label
+    /// toggle rather than nested inside it. GTK4 does not deliver clicks to a button nested
+    /// in another button - the outer one takes them - which is why the close button did
+    /// nothing while the chip was itself a `ToggleButton`.
+    fn chips(&self) -> Vec<gtk4::Box> {
         let mut out = Vec::new();
         let mut child = self.tab_strip.first_child();
         while let Some(widget) = child {
             child = widget.next_sibling();
-            if let Ok(chip) = widget.downcast::<ToggleButton>() {
+            if let Ok(chip) = widget.downcast::<gtk4::Box>() {
                 out.push(chip);
             }
         }
         out
     }
 
-    fn chip_for_tab(&self, tab_id: TabId) -> Option<ToggleButton> {
+    fn chip_for_tab(&self, tab_id: TabId) -> Option<gtk4::Box> {
         self.chips().into_iter().find(|c| c.get_tab_id() == Some(tab_id))
+    }
+
+    /// The label toggle inside a chip (its first `ToggleButton` child).
+    fn chip_toggle(chip: &gtk4::Box) -> Option<ToggleButton> {
+        let mut child = chip.first_child();
+        while let Some(widget) = child {
+            child = widget.next_sibling();
+            if let Ok(toggle) = widget.downcast::<ToggleButton>() {
+                return Some(toggle);
+            }
+        }
+        None
+    }
+
+    /// Mark a chip selected. The `Box` has no `:checked` state of its own, so the selected
+    /// look rides on an `active` class while the inner toggle keeps the real toggle state.
+    fn set_chip_active(chip: &gtk4::Box, active: bool) {
+        if let Some(toggle) = Self::chip_toggle(chip) {
+            toggle.set_active(active);
+        }
+        if active {
+            chip.add_css_class("active");
+        } else {
+            chip.remove_css_class("active");
+        }
     }
 
     fn page_for_tab(&self, tab_id: TabId) -> Option<Widget> {
@@ -597,7 +634,7 @@ impl BrowserWindow {
 
     pub(crate) fn activate_tab(&self, tab_id: TabId) {
         for chip in self.chips() {
-            chip.set_active(chip.get_tab_id() == Some(tab_id));
+            Self::set_chip_active(&chip, chip.get_tab_id() == Some(tab_id));
         }
         // Correct the engine's viewport for this tab BEFORE it is shown, so its GLArea's
         // first-ever resize does not land as a change and trigger a full re-layout.
@@ -623,23 +660,77 @@ impl BrowserWindow {
         self.update_bookmark_button();
     }
 
-    /// A tab chip: toggle button in the strip whose child is the tab label.
-    fn create_tab_chip(&self, tab: &GosubTab) -> ToggleButton {
-        let chip = ToggleButton::new();
-        chip.set_has_frame(false);
+    /// A tab chip: a `Box` holding the label toggle and, beside it, the close button.
+    ///
+    /// The close button MUST be a sibling of the toggle, never a descendant - see [`Self::chips`].
+    fn create_tab_chip(&self, tab: &GosubTab) -> gtk4::Box {
+        let chip = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
         chip.add_css_class("tab-chip");
+        chip.set_tab_id(tab.id());
+        self.populate_chip(&chip, tab);
+        chip
+    }
+
+    /// Fill (or refill) a chip's contents for `tab`, preserving which chip is selected.
+    /// Rebuilding wholesale keeps pinned/unpinned transitions correct: pinned tabs have no
+    /// close button.
+    fn populate_chip(&self, chip: &gtk4::Box, tab: &GosubTab) {
+        let was_active = self.active_tab_id() == Some(tab.id());
+
+        while let Some(child) = chip.first_child() {
+            chip.remove(&child);
+        }
+
         if tab.is_pinned() {
             chip.add_css_class("pinned");
+        } else {
+            chip.remove_css_class("pinned");
         }
-        chip.set_child(Some(&self.create_tab_label(tab)));
-        chip.set_tab_id(tab.id());
+
+        let toggle = ToggleButton::new();
+        toggle.set_has_frame(false);
+        toggle.add_css_class("tab-chip-main");
+        toggle.set_child(Some(&self.create_tab_label(tab)));
+        toggle.set_tab_id(tab.id());
+        let window_clone = self.obj().clone();
+        let tab_id = tab.id();
+        toggle.connect_clicked(move |_| {
+            window_clone.imp().activate_tab(tab_id);
+        });
+        chip.append(&toggle);
+
+        // Pinned tabs are icon-only and have never had a close button.
+        if !tab.is_pinned() {
+            chip.append(&self.create_tab_close_button(tab));
+        }
+
+        Self::set_chip_active(chip, was_active);
+    }
+
+    /// The chip's X button. Lives beside the label toggle, so its clicks actually arrive.
+    fn create_tab_close_button(&self, tab: &GosubTab) -> Button {
+        let tab_close_button = Button::builder()
+            .halign(gtk4::Align::End)
+            .valign(gtk4::Align::Center)
+            .has_frame(false)
+            .margin_bottom(0)
+            .margin_end(0)
+            .margin_start(0)
+            .margin_top(0)
+            .build();
+        tab_close_button.add_css_class("tab-close");
+        let img = Image::from_icon_name("window-close-symbolic");
+        img.set_pixel_size(14);
+        tab_close_button.set_child(Some(&img));
 
         let window_clone = self.obj().clone();
         let tab_id = tab.id();
-        chip.connect_clicked(move |_| {
-            window_clone.imp().activate_tab(tab_id);
+        tab_close_button.connect_clicked(move |_| {
+            info!(target: "gtk", "Clicked close button for tab {}", tab_id);
+            window_clone.imp().close_tab(tab_id);
+            _ = window_clone.imp().get_sender().send_blocking(Message::RefreshTabs());
         });
-        chip
+        tab_close_button
     }
 
     fn create_pinned_tab_label(&self, tab: &GosubTab) -> Widget {
@@ -650,8 +741,14 @@ impl BrowserWindow {
             return img.into();
         }
 
-        // No favicon for this pinned tab, so use a default icon
-        let img = Image::from_resource("/io/gosub/beacon/assets/pin.svg");
+        // No favicon for this pinned tab, so fall back to a themed pin. This used to load
+        // `/io/gosub/beacon/assets/pin.svg`, which does not exist -- it was never added to
+        // resources.gresource.xml and there is no such file -- so pinned tabs without a
+        // favicon rendered a broken-image placeholder. A stock symbolic icon needs no asset
+        // and recolours with the theme, matching the favicon placeholder above.
+        let img = Image::from_icon_name("view-pin-symbolic");
+        img.set_pixel_size(16);
+        img.add_css_class("dim-label");
         img.set_margin_top(5);
         img.set_margin_bottom(5);
         img.into()
@@ -694,28 +791,8 @@ impl BrowserWindow {
         tab_label.set_xalign(0.0);
         label_vbox.append(&tab_label);
 
-        let tab_close_button = Button::builder()
-            .halign(gtk4::Align::End)
-            .has_frame(false)
-            .margin_bottom(0)
-            .margin_end(0)
-            .margin_start(0)
-            .margin_top(0)
-            .build();
-        tab_close_button.add_css_class("tab-close");
-        let img = Image::from_icon_name("window-close-symbolic");
-        img.set_pixel_size(14);
-        tab_close_button.set_child(Some(&img));
-        label_vbox.append(&tab_close_button);
-
-        let window_clone = self.obj().clone();
-        let tab_id = tab.id();
-        tab_close_button.connect_clicked(move |_| {
-            info!(target: "gtk", "Clicked close button for tab {}", tab_id);
-            window_clone.imp().close_tab(tab_id);
-            _ = window_clone.imp().get_sender().send_blocking(Message::RefreshTabs());
-        });
-
+        // The close button is NOT part of the label: it is appended beside the label toggle
+        // by `populate_chip`, because a button nested in a button never receives clicks.
         label_vbox.into()
     }
 

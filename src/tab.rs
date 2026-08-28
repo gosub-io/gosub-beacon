@@ -346,19 +346,43 @@ impl GosubTabManager {
         tab_id
     }
 
-    pub fn remove_tab(&mut self, tab_id: TabId) {
-        if let Some(index) = self.unpinned_tab_order.iter().position(|id| id == &tab_id) {
-            self.unpinned_tab_order.remove(index);
-            self.commands.push(TabCommand::Close(tab_id));
+    /// The tab that should take focus once the tab at `index` has been removed from `order`:
+    /// the one before it, or else whichever shifted into its place.
+    fn neighbour_of(order: &VecDeque<TabId>, index: usize) -> Option<TabId> {
+        if index == 0 {
+            order.front().copied()
+        } else {
+            order.get(index - 1).copied()
+        }
+    }
 
-            // Set active tab to the last tab. Assumes there is always one tab
-            if index == 0 {
-                if let Some(new_active_tab) = self.unpinned_tab_order.front() {
-                    self.set_active(*new_active_tab);
-                }
-            } else if let Some(new_active_tab) = self.unpinned_tab_order.get(index - 1) {
-                self.set_active(*new_active_tab);
+    pub fn remove_tab(&mut self, tab_id: TabId) {
+        // A tab lives in exactly one of the two order lists. Pinned tabs used to be skipped
+        // here entirely - only `unpinned_tab_order` was consulted - so closing one dropped it
+        // from `self.tabs` without ever emitting `TabCommand::Close`, leaving its chip and its
+        // stack page orphaned in the UI.
+        let from_pinned = self.pinned_tab_order.iter().position(|id| id == &tab_id);
+        let from_unpinned = self.unpinned_tab_order.iter().position(|id| id == &tab_id);
+
+        let next_active = match (from_pinned, from_unpinned) {
+            (Some(index), _) => {
+                self.pinned_tab_order.remove(index);
+                Self::neighbour_of(&self.pinned_tab_order, index).or_else(|| self.unpinned_tab_order.front().copied())
             }
+            (None, Some(index)) => {
+                self.unpinned_tab_order.remove(index);
+                Self::neighbour_of(&self.unpinned_tab_order, index).or_else(|| self.pinned_tab_order.back().copied())
+            }
+            // In neither order list: there is no chip or page to tear down.
+            (None, None) => {
+                self.tabs.remove(&tab_id);
+                return;
+            }
+        };
+
+        self.commands.push(TabCommand::Close(tab_id));
+        if let Some(new_active_tab) = next_active {
+            self.set_active(new_active_tab);
         }
 
         self.tabs.remove(&tab_id);
@@ -400,8 +424,18 @@ impl GosubTabManager {
         tabs_to_close
     }
 
+    /// NOTE: currently unused, and both branches consult the OPPOSITE order list to the one
+    /// the tab is in (see the pinned/unpinned branches below), so a correctly-classified tab
+    /// silently finds no index and nothing happens. Left as-is rather than guessed at; fixing
+    /// it needs a decision on whether reordering moves a tab across the pinned boundary or
+    /// only within its own list.
     pub fn reorder(&mut self, tab_id: TabId, position: usize) {
-        let tab = self.tabs.get(&tab_id).unwrap();
+        // Unknown tab: nothing to reorder. This used to `.unwrap()`, which panics on a stale
+        // id - the same failure that aborted the app from the Insert/Update handlers, since a
+        // command batch can name a tab that an earlier command in the batch already closed.
+        let Some(tab) = self.tabs.get(&tab_id) else {
+            return;
+        };
 
         if tab.is_pinned() {
             if let Some(index) = self.unpinned_tab_order.iter().position(|id| id == &tab_id) {
@@ -481,6 +515,50 @@ mod test {
         manager.remove_tab(tab2_id);
         assert_eq!(manager.tab_count(), 2);
         assert_eq!(manager.order(), vec![tab1_id, tab3_id]);
+    }
+
+    /// Regression: closing a PINNED tab must emit `TabCommand::Close` and leave the order
+    /// lists consistent. It used to be dropped from `tabs` with no command at all, so the UI
+    /// kept its chip and its stack page forever.
+    #[test]
+    fn removing_a_pinned_tab_emits_close() {
+        let mut manager = GosubTabManager::new();
+        let mut pinned = GosubTab::new(Url::parse("about:blank").unwrap(), "pinned");
+        pinned.set_pinned(true);
+        let plain = GosubTab::new(Url::parse("about:blank").unwrap(), "plain");
+
+        let pinned_id = manager.add_tab(pinned, None);
+        let plain_id = manager.add_tab(plain, None);
+        assert_eq!(manager.tab_count(), 2);
+
+        let _ = manager.commands(); // drain setup commands
+        manager.remove_tab(pinned_id);
+
+        assert_eq!(manager.tab_count(), 1, "the pinned tab must be gone");
+        assert!(
+            manager
+                .commands()
+                .iter()
+                .any(|c| matches!(c, crate::tab::TabCommand::Close(id) if *id == pinned_id)),
+            "closing a pinned tab must emit TabCommand::Close so the UI tears down its chip and page"
+        );
+        assert_eq!(manager.order(), vec![plain_id]);
+        assert!(manager.get_tab(pinned_id).is_none());
+    }
+
+    /// Regression: reordering an unknown/stale tab id must not panic.
+    #[test]
+    fn reorder_of_an_unknown_tab_is_a_noop() {
+        let mut manager = GosubTabManager::new();
+        let tab = GosubTab::new(Url::parse("about:blank").unwrap(), "only");
+        let tab_id = manager.add_tab(tab, None);
+
+        // An id that was never added, and one that has just been removed.
+        manager.reorder(TabId::new(), 0);
+        manager.remove_tab(tab_id);
+        manager.reorder(tab_id, 0);
+
+        assert_eq!(manager.tab_count(), 0);
     }
 
     #[test]

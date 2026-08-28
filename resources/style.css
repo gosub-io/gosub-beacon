@@ -57,29 +57,49 @@ box.tab-row {
     background: alpha(@theme_fg_color, 0.04);
     border-bottom: 1px solid alpha(@theme_fg_color, 0.08);
 }
-button.tab-chip {
+/* The chip is a box, not a button: the close button has to be a SIBLING of the label
+   toggle, because GTK4 never delivers clicks to a button nested inside another button.
+   The box carries the chip's look; selection rides on an `active` class, since a box has
+   no `:checked` state of its own. */
+box.tab-chip {
     margin: 0;
-    padding: 1px 8px;
+    padding: 1px 4px 1px 8px;
     min-height: 20px;
     border-radius: 7px;
     background: transparent;
     transition: background 150ms ease;
 }
-button.tab-chip:hover {
+box.tab-chip:hover {
     background: alpha(@theme_fg_color, 0.07);
 }
-button.tab-chip:checked {
+box.tab-chip.active {
     background: alpha(@theme_fg_color, 0.13);
 }
-button.tab-chip:checked:hover {
+box.tab-chip.active:hover {
     background: alpha(@theme_fg_color, 0.16);
 }
-button.tab-chip.pinned {
+box.tab-chip.pinned {
     padding: 2px 6px;
 }
 
+/* The label toggle draws no chrome of its own - the box above is the visible chip. */
+box.tab-chip button.tab-chip-main {
+    margin: 0;
+    padding: 0;
+    min-height: 0;
+    border: none;
+    box-shadow: none;
+    background: transparent;
+}
+box.tab-chip button.tab-chip-main:hover,
+box.tab-chip button.tab-chip-main:checked,
+box.tab-chip button.tab-chip-main:checked:hover {
+    background: transparent;
+}
+
 /* Close button: appears on hover/active tabs only, circular hover halo. */
-button.tab-chip button.tab-close {
+box.tab-chip button.tab-close {
+    margin-left: 4px;
     padding: 0;
     min-width: 16px;
     min-height: 16px;
@@ -88,11 +108,11 @@ button.tab-chip button.tab-close {
     opacity: 0;
     transition: opacity 150ms ease, background 150ms ease;
 }
-button.tab-chip:hover button.tab-close,
-button.tab-chip:checked button.tab-close {
+box.tab-chip:hover button.tab-close,
+box.tab-chip.active button.tab-close {
     opacity: 1;
 }
-button.tab-chip button.tab-close:hover {
+box.tab-chip button.tab-close:hover {
     background: alpha(@theme_fg_color, 0.15);
 }
 
