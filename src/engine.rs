@@ -297,6 +297,11 @@ pub fn render_frame_gl(
         return;
     }
 
+    // We share this GL context with GTK, which mutates state Skia caches (scissor, blend, bound
+    // FBO, viewport). Without this, Skia keeps drawing against a stale idea of that state, which
+    // shows up as region-shaped artifacts -- e.g. a corner that stays unpainted.
+    dc.reset(None);
+
     let fb_info = skia_safe::gpu::gl::FramebufferInfo {
         fboid: bound_framebuffer(),
         format: 0x8058, // GL_RGBA8
