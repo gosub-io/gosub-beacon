@@ -424,48 +424,51 @@ impl GosubTabManager {
         tabs_to_close
     }
 
-    /// NOTE: currently unused, and both branches consult the OPPOSITE order list to the one
-    /// the tab is in (see the pinned/unpinned branches below), so a correctly-classified tab
-    /// silently finds no index and nothing happens. Left as-is rather than guessed at; fixing
-    /// it needs a decision on whether reordering moves a tab across the pinned boundary or
-    /// only within its own list.
+    /// Move `tab_id` to `position`, an index into the visible strip order (see [`Self::order`]).
+    ///
+    /// Reordering never moves a tab across the pinned boundary: pinned tabs reorder among the
+    /// pinned, unpinned among the unpinned, and a target past either end clamps to the nearest
+    /// slot in the tab's own list. List membership changes only via [`Self::pin_tab`] /
+    /// [`Self::unpin_tab`], so `is_pinned` and membership can never disagree.
     pub fn reorder(&mut self, tab_id: TabId, position: usize) {
         // Unknown tab: nothing to reorder. This used to `.unwrap()`, which panics on a stale
         // id - the same failure that aborted the app from the Insert/Update handlers, since a
         // command batch can name a tab that an earlier command in the batch already closed.
-        let Some(tab) = self.tabs.get(&tab_id) else {
+        let pinned = match self.tabs.get(&tab_id) {
+            Some(tab) => tab.is_pinned(),
+            None => return,
+        };
+        let pinned_len = self.pinned_tab_order.len();
+
+        let list = if pinned {
+            &mut self.pinned_tab_order
+        } else {
+            &mut self.unpinned_tab_order
+        };
+        let Some(from) = list.iter().position(|id| id == &tab_id) else {
+            // `is_pinned` disagrees with list membership. Only reachable if something set the
+            // flag directly instead of going through pin_tab/unpin_tab.
             return;
         };
 
-        if tab.is_pinned() {
-            if let Some(index) = self.unpinned_tab_order.iter().position(|id| id == &tab_id) {
-                match index.cmp(&position) {
-                    std::cmp::Ordering::Equal => {}
-                    std::cmp::Ordering::Less => {
-                        self.unpinned_tab_order.remove(index);
-                        self.pinned_tab_order.push_back(tab_id);
-                    }
-                    std::cmp::Ordering::Greater => {
-                        self.unpinned_tab_order.remove(index);
-                        self.pinned_tab_order.push_front(tab_id);
-                    }
-                }
-                self.commands.push(TabCommand::Move(tab_id, position as u32));
-            }
-        } else if let Some(index) = self.pinned_tab_order.iter().position(|id| id == &tab_id) {
-            match index.cmp(&position) {
-                std::cmp::Ordering::Equal => {}
-                std::cmp::Ordering::Less => {
-                    self.pinned_tab_order.remove(index);
-                    self.pinned_tab_order.insert(position, tab_id);
-                }
-                std::cmp::Ordering::Greater => {
-                    self.pinned_tab_order.remove(index);
-                    self.pinned_tab_order.insert(position, tab_id);
-                }
-            }
-            self.commands.push(TabCommand::Move(tab_id, position as u32));
+        // `position` indexes the concatenated strip (pinned first, then unpinned), which is what
+        // the view resolves TabCommand::Move against. Translate it into this list, clamping
+        // rather than letting a drag past the boundary change the tab's pinned state.
+        let local_target = if pinned {
+            position.min(list.len() - 1)
+        } else {
+            position.saturating_sub(pinned_len).min(list.len() - 1)
+        };
+        if local_target == from {
+            return;
         }
+
+        list.remove(from);
+        list.insert(local_target, tab_id);
+
+        // Report the resting place as a strip index, matching what the view expects.
+        let global = if pinned { local_target } else { pinned_len + local_target };
+        self.commands.push(TabCommand::Move(tab_id, global as u32));
     }
 }
 
@@ -547,6 +550,57 @@ mod test {
     }
 
     /// Regression: reordering an unknown/stale tab id must not panic.
+    /// Fixture: strip order is [P1 P2 U1 U2 U3], pinned tabs first (see `order`).
+    fn strip() -> (GosubTabManager, Vec<TabId>) {
+        let mut m = GosubTabManager::new();
+        let mut ids = Vec::new();
+        for (n, pinned) in [("P1", true), ("P2", true), ("U1", false), ("U2", false), ("U3", false)] {
+            let mut tab = GosubTab::new(Url::parse("about:blank").unwrap(), n);
+            tab.set_pinned(pinned);
+            ids.push(m.add_tab(tab, None));
+        }
+        (m, ids)
+    }
+
+    #[test]
+    fn reorder_moves_within_the_unpinned_list() {
+        let (mut m, ids) = strip();
+        let (p1, p2, u1, u2, u3) = (ids[0], ids[1], ids[2], ids[3], ids[4]);
+        assert_eq!(m.order(), vec![p1, p2, u1, u2, u3]);
+
+        // Strip index 4 is U3's slot: move U1 to the end of the unpinned run.
+        m.reorder(u1, 4);
+        assert_eq!(m.order(), vec![p1, p2, u2, u3, u1]);
+    }
+
+    #[test]
+    fn reorder_clamps_at_the_pinned_boundary_instead_of_pinning() {
+        let (mut m, ids) = strip();
+        let (p1, p2, u1, u2, u3) = (ids[0], ids[1], ids[2], ids[3], ids[4]);
+
+        // Drag U3 to the very front of the strip. It must stop at the first unpinned slot,
+        // not jump into the pinned run and not become pinned.
+        m.reorder(u3, 0);
+        assert_eq!(m.order(), vec![p1, p2, u3, u1, u2]);
+        assert!(!m.get_tab(u3).unwrap().is_pinned());
+
+        // Symmetrically, a pinned tab dragged past the end stays inside the pinned run.
+        m.reorder(p1, 4);
+        assert_eq!(m.order(), vec![p2, p1, u3, u1, u2]);
+        assert!(m.get_tab(p1).unwrap().is_pinned());
+    }
+
+    #[test]
+    fn reorder_to_the_current_slot_emits_nothing() {
+        let (mut m, ids) = strip();
+        let u2 = ids[3];
+        let before = m.order();
+        let _ = m.commands(); // drain the Insert commands from setup (`commands` takes the queue)
+        m.reorder(u2, 3); // U2 is already at strip index 3
+        assert_eq!(m.order(), before);
+        assert!(m.commands().is_empty(), "a no-op reorder must not emit a Move");
+    }
+
     #[test]
     fn reorder_of_an_unknown_tab_is_a_noop() {
         let mut manager = GosubTabManager::new();
