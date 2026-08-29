@@ -856,13 +856,36 @@ impl BrowserWindow {
 
         // Pinned tabs are icon-only and have never had a close button.
         if !tab.is_pinned() {
-            chip.append(&self.create_tab_close_button(tab));
+            let close = self.create_tab_close_button(tab);
+            // The toggle is already packed, so prepend puts the button before the label.
+            if self.close_button_on_left() {
+                close.set_halign(gtk4::Align::Start);
+                chip.prepend(&close);
+            } else {
+                chip.append(&close);
+            }
         }
 
         Self::set_chip_active(chip, was_active);
     }
 
     /// The chip's X button. Lives beside the label toggle, so its clicks actually arrive.
+    /// Whether the tab close button goes on the left of the label, from
+    /// `useragent.tab.close_button` in the engine settings store (`left` | `right`).
+    /// Falls back to the right when the engine is not up yet, which is where the button
+    /// sat before the setting was honoured.
+    ///
+    /// The setting is a map (`m:right` by default), so read it with `get_map`: `get_string`
+    /// works but logs "setting is not a string" on every chip it builds.
+    fn close_button_on_left(&self) -> bool {
+        self.engine.borrow().as_ref().is_some_and(|e| {
+            e.settings()
+                .get_map("useragent.tab.close_button")
+                .first()
+                .is_some_and(|side| side == "left")
+        })
+    }
+
     fn create_tab_close_button(&self, tab: &GosubTab) -> Button {
         let tab_close_button = Button::builder()
             .halign(gtk4::Align::End)
