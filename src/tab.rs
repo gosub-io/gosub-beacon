@@ -379,6 +379,27 @@ impl GosubTabManager {
         order
     }
 
+    /// The tabs that "Close Tabs to Left" should close: every unpinned tab sitting before
+    /// `tab_id` in the visible order. Pinned tabs are always leftmost (see `order`), so they
+    /// are skipped rather than closed.
+    pub fn closable_tabs_left_of(&self, tab_id: TabId) -> Vec<TabId> {
+        let mut tabs_to_close = Vec::new();
+
+        for id in self.order() {
+            // Our tab is found, so everything after it is to the right.
+            if id == tab_id {
+                break;
+            }
+            // Pinned tab, we cannot close it.
+            match self.tabs.get(&id) {
+                Some(tab) if !tab.is_pinned() => tabs_to_close.push(id),
+                _ => continue,
+            }
+        }
+
+        tabs_to_close
+    }
+
     pub fn reorder(&mut self, tab_id: TabId, position: usize) {
         let tab = self.tabs.get(&tab_id).unwrap();
 
@@ -490,5 +511,38 @@ mod test {
         assert!(!manager.is_most_left_unpinned_tab(tab2_id));
         assert!(manager.is_most_right_tab(tab6_id));
         assert!(!manager.is_most_right_tab(tab5_id));
+    }
+
+    #[test]
+    fn test_closable_tabs_left_of_skips_pinned_tabs() {
+        let mut manager = GosubTabManager::new();
+        let tab1 = GosubTab::new(Url::parse("about:blank").unwrap(), "New tab 1");
+        let tab2 = GosubTab::new(Url::parse("about:blank").unwrap(), "New tab 2");
+        let mut tab3 = GosubTab::new(Url::parse("about:blank").unwrap(), "New tab 3");
+        tab3.set_pinned(true);
+        let tab4 = GosubTab::new(Url::parse("about:blank").unwrap(), "New tab 4");
+        let mut tab5 = GosubTab::new(Url::parse("about:blank").unwrap(), "New tab 5");
+        tab5.set_pinned(true);
+        let tab6 = GosubTab::new(Url::parse("about:blank").unwrap(), "New tab 6");
+
+        let tab1_id = manager.add_tab(tab1, None);
+        let tab2_id = manager.add_tab(tab2, None);
+        let tab3_id = manager.add_tab(tab3, None);
+        let tab4_id = manager.add_tab(tab4, None);
+        let tab5_id = manager.add_tab(tab5, None);
+        let tab6_id = manager.add_tab(tab6, None);
+
+        // Visible ordering is [ 3 5 1 2 4 6 ], with 3 and 5 pinned.
+        assert_eq!(manager.order(), vec![tab3_id, tab5_id, tab1_id, tab2_id, tab4_id, tab6_id]);
+
+        // Only the unpinned tabs to the left are closed; the pinned ones are spared.
+        assert_eq!(manager.closable_tabs_left_of(tab4_id), vec![tab1_id, tab2_id]);
+        assert_eq!(manager.closable_tabs_left_of(tab6_id), vec![tab1_id, tab2_id, tab4_id]);
+
+        // Leftmost unpinned tab has only pinned tabs before it, so nothing is closable.
+        assert!(manager.closable_tabs_left_of(tab1_id).is_empty());
+
+        // The tab itself is never included.
+        assert!(!manager.closable_tabs_left_of(tab4_id).contains(&tab4_id));
     }
 }
