@@ -344,16 +344,25 @@ pub fn render_frame_gl(
         let canvas = surface.canvas();
         canvas.clear(skia_safe::Color4f::new(1.0, 1.0, 1.0, 1.0));
 
-        if let Some(ExternalHandle::TileCache { dpr: tile_dpr, .. }) = compositor.frame_for(tab_id) {
-            // `target_scale` is the physical-px-per-CSS-px the shell wants on screen
-            // (display scale × page zoom). Tiles arrive rasterized at `tile_dpr`; the
-            // difference is bridged here, which also keeps stale tiles (rasterized at the
-            // previous zoom's dpr) at the correct on-screen size until fresh ones land.
-            let correction = target_scale / tile_dpr.max(1) as f64;
-            if (correction - 1.0).abs() > 1e-3 {
-                canvas.scale((correction as f32, correction as f32));
-            }
+        // `target_scale` is the physical-px-per-CSS-px the shell wants on screen (display
+        // scale × page zoom). Tiles arrive rasterized at `tile_dpr`; the difference is bridged
+        // here, which also keeps stale tiles (rasterized at the previous zoom's dpr) at the
+        // correct on-screen size until fresh ones land.
+        let correction = match compositor.frame_for(tab_id) {
+            Some(ExternalHandle::TileCache { dpr: tile_dpr, .. }) => target_scale / tile_dpr.max(1) as f64,
+            _ => 1.0,
+        };
+        if (correction - 1.0).abs() > 1e-3 {
+            canvas.scale((correction as f32, correction as f32));
         }
+
+        // Cull bounds live in CANVAS space, which the scale above has divorced from physical
+        // pixels: a tile at canvas x maps to screen x * correction. Comparing raw canvas
+        // coordinates against the physical surface size drops every tile past
+        // `phys_w`, even though anything up to `phys_w / correction` is still on screen --
+        // which is why zooming in used to leave a blank band down the right-hand side.
+        let cull_w = (phys_w as f64 / correction).ceil() as i32;
+        let cull_h = (phys_h as f64 / correction).ceil() as i32;
 
         if let Some(ExternalHandle::TileCache {
             dpr,
@@ -378,7 +387,7 @@ pub fn render_frame_gl(
                 let tw = tile.width as i32;
                 let th = tile.height as i32;
 
-                if px >= phys_w || py >= phys_h || px + tw <= 0 || py + th <= 0 {
+                if px >= cull_w || py >= cull_h || px + tw <= 0 || py + th <= 0 {
                     continue;
                 }
 
