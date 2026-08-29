@@ -151,23 +151,8 @@ pub(crate) fn setup_context_menu_actions(action_group: &SimpleActionGroup, windo
         close_tabs_left.set_enabled(false);
     }
     close_tabs_left.connect_activate(move |_, _| {
-        let mut tabs_to_close = vec![];
-
         let manager = window_clone.imp().tab_manager.lock().unwrap();
-        for tab_id in manager.order() {
-            if let Some(tab) = manager.get_tab(tab_id) {
-                // pinned tab, we cannot close
-                if !tab.is_pinned() {
-                    continue;
-                }
-                // our tab is found, so break the loop
-                if tab_id == info.id {
-                    break;
-                }
-                // Just add this tab to the list
-                tabs_to_close.push(tab_id);
-            }
-        }
+        let tabs_to_close = manager.closable_tabs_left_of(info.id);
         drop(manager);
 
         // close all the tabs we need to close
@@ -217,11 +202,17 @@ pub(crate) fn setup_context_menu_actions(action_group: &SimpleActionGroup, windo
     }
     close_other_tabs.connect_activate(move |_, _| {
         let manager = window_clone.imp().tab_manager.lock().unwrap();
-        let tabs = manager.order();
-        for tab_id in tabs {
-            if tab_id != info.id {
-                window_clone.imp().close_tab(tab_id);
-            }
+        // Collect before closing: `close_tab` takes the same lock, so it must not be held here.
+        let tabs_to_close = manager
+            .order()
+            .into_iter()
+            .filter(|tab_id| *tab_id != info.id)
+            .filter(|tab_id| manager.get_tab(*tab_id).is_some_and(|tab| !tab.is_pinned()))
+            .collect::<Vec<_>>();
+        drop(manager);
+
+        for tab_id in tabs_to_close {
+            window_clone.imp().close_tab(tab_id);
         }
         _ = window_clone.imp().get_sender().send_blocking(Message::RefreshTabs());
     });
