@@ -147,7 +147,7 @@
                             </object>
                         </child>
                         <child>
-                            <object class="GtkToggleButton">
+                            <object class="GtkToggleButton" id="btn_darkmode">
                                 <property name="has-frame">false</property>
                                 <property name="tooltip-text">Dark mode</property>
                                 <signal name="clicked" handler="handle_toggle_darkmode" swapped="true"/>
