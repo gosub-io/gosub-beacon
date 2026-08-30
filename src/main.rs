@@ -6,6 +6,7 @@ pub mod engine;
 mod fetcher;
 mod session;
 mod tab;
+mod theme;
 mod window;
 
 use crate::application::Application;
@@ -48,7 +49,12 @@ fn main() {
     gio::resources_register_include!("gosub.gresource").expect("Failed to register resources.");
 
     let app = Application::new();
-    app.connect_startup(|_| load_css());
+    app.connect_startup(|_| {
+        load_css();
+        // Chrome follows the desktop light/dark preference; the manual toggle overrides it
+        // until the desktop preference next changes.
+        crate::theme::follow_desktop_color_scheme();
+    });
     // Keep GTK away from argv: URLs passed on the command line become the startup
     // tabs (see BrowserWindow::new), which plain `app.run()` would reject as unknown
     // options.

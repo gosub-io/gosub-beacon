@@ -110,6 +110,10 @@ pub struct BrowserWindow {
     pub bookmark_icon: TemplateChild<Image>,
     #[template_child]
     pub bookmarks_bar: TemplateChild<gtk4::Box>,
+    /// Dark-mode toggle. Held so its state can track `gtk-application-prefer-dark-theme`,
+    /// which the desktop's colour-scheme also writes (see `crate::theme`).
+    #[template_child]
+    pub btn_darkmode: TemplateChild<ToggleButton>,
 
     // Other stuff that are non-widgets
     pub tab_manager: Arc<Mutex<GosubTabManager>>,
@@ -179,6 +183,7 @@ impl Default for BrowserWindow {
             btn_bookmark: TemplateChild::default(),
             bookmark_icon: TemplateChild::default(),
             bookmarks_bar: TemplateChild::default(),
+            btn_darkmode: TemplateChild::default(),
 
             tab_manager: Arc::new(Mutex::new(GosubTabManager::new())),
             sender: Arc::new(tx),
@@ -251,6 +256,7 @@ impl ObjectImpl for BrowserWindow {
         self.setup_downloads_popover();
         self.setup_bookmark_button();
         self.setup_url_completion();
+        self.sync_dark_mode_button();
         self.log("Browser created...");
     }
 }
@@ -293,6 +299,18 @@ impl BrowserWindow {
                 .send(Message::OpenTabRight(tab_id, format!("view-source:{url}"), "View source".into()))
                 .await;
         });
+    }
+
+    /// Mirror `gtk-application-prefer-dark-theme` onto the toolbar toggle, so the button
+    /// reflects reality when the *desktop* changes the theme rather than the button.
+    /// One-way: the button's own handler still writes the property, and writing the value it
+    /// already has emits no notify, so this cannot loop.
+    fn sync_dark_mode_button(&self) {
+        let Some(settings) = Settings::default() else { return };
+        settings
+            .bind_property("gtk-application-prefer-dark-theme", &*self.btn_darkmode, "active")
+            .sync_create()
+            .build();
     }
 
     #[template_callback]
