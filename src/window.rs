@@ -103,7 +103,7 @@ impl BrowserWindow {
                     // URLs on the command line become the startup tabs; without any, the
                     // previous session is restored (falling back to a default set). A
                     // private window starts on the home page only.
-                    let mut initial_urls: Vec<String> = std::env::args().skip(1).filter(|a| !a.starts_with('-')).collect();
+                    let mut initial_urls: Vec<String> = crate::cli::Cli::global().urls.clone();
                     let mut session = Vec::new();
                     if private {
                         initial_urls = vec!["gosub://home".to_string()];

@@ -33,7 +33,12 @@ const DEFAULT_ZONE: uuid::Uuid = uuid!("f1234567-abcd-4000-8000-000000000001");
 /// cannot be created, so a locked-down environment still gets a working (if
 /// non-standard) profile.
 pub fn data_dir() -> std::path::PathBuf {
-    let dir = gtk4::glib::user_data_dir().join("gosub-beacon");
+    // `--user-data-dir` wins over the XDG location, so a scratch profile can be used without
+    // touching the real one.
+    let dir = match &crate::cli::Cli::global().user_data_dir {
+        Some(dir) => dir.clone(),
+        None => gtk4::glib::user_data_dir().join("gosub-beacon"),
+    };
     if let Err(e) = std::fs::create_dir_all(&dir) {
         log::warn!("cannot create data dir {}: {e}; using the working directory", dir.display());
         return std::path::PathBuf::from(".");
