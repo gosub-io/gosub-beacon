@@ -218,7 +218,7 @@ impl BrowserWindow {
                     sender,
                     async move {
                         sender
-                            .send(Message::OpenTab("gosub://home".into(), "New Tab".into()))
+                            .send(Message::OpenTabForeground("gosub://home".into(), "New Tab".into()))
                             .await
                             .unwrap();
                     }
