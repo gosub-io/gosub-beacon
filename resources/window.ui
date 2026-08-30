@@ -104,6 +104,18 @@
                             </object>
                         </child>
                         <child>
+                            <object class="GtkButton" id="btn_home">
+                                <property name="has-frame">false</property>
+                                <property name="tooltip-text" translatable="yes">Home</property>
+                                <signal name="clicked" handler="handle_home_clicked" swapped="true"/>
+                                <child>
+                                    <object class="GtkImage">
+                                        <property name="icon-name">go-home-symbolic</property>
+                                    </object>
+                                </child>
+                            </object>
+                        </child>
+                        <child>
                             <object class="GtkEntry" id="searchbar">
                                 <signal name="activate" handler="handle_searchbar_clicked" swapped="true"/>
                                 <property name="placeholder-text" translatable="yes">Search or enter address</property>

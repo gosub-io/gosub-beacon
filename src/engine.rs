@@ -94,6 +94,24 @@ impl BrowserEngine {
 
         let data_dir = data_dir();
 
+        // Beacon's own settings, merged into the engine's store under the `useragent`
+        // namespace the client schema already owns. Registering here rather than editing the
+        // engine's useragent-settings.json keeps a shell-only preference in the shell, which
+        // is the direction that schema is headed anyway ("intended to move to a dedicated
+        // client crate, which would then merge it in itself").
+        //
+        // MUST come before `set_storage`: merged settings are an in-memory snapshot, and
+        // `set_storage` loads stored values for the keys it knows about at attach time. Merge
+        // afterwards and the key exists but its persisted value is never read back, so the
+        // setting silently always reports its default.
+        let beacon_settings = gosub_engine::Config::new(vec![gosub_engine::SettingInfo {
+            key: "general.homepage".to_string(),
+            description: "Page the Home button navigates to.".to_string(),
+            default: gosub_engine::Setting::String("gosub://home".to_string()),
+            constraint: None,
+        }]);
+        engine.settings().merge(&beacon_settings, "useragent");
+
         // Persist settings overrides (edited via gosub://config) across runs. Attached
         // before anything reads or writes settings, so stored values win over defaults.
         // Falls back to the in-memory store if the database cannot be opened.

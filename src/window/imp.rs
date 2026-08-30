@@ -322,6 +322,19 @@ impl BrowserWindow {
         settings.set_property("gtk-application-prefer-dark-theme", btn.is_active());
     }
 
+    /// Home button: send the active tab to the configured homepage. Goes through
+    /// `Message::LoadUrl`, the same path the address bar uses, so scheme inference and
+    /// internal-page routing behave identically to typing the URL.
+    #[template_callback]
+    fn handle_home_clicked(&self, _btn: &Button) {
+        let Some(tab_id) = self.active_tab_id() else {
+            return;
+        };
+        let url = self.homepage();
+        self.log(&format!("Home: {url}"));
+        _ = self.get_sender().send_blocking(Message::LoadUrl(tab_id, url));
+    }
+
     /// Reload the active tab — or, while it is loading, stop it (the button
     /// doubles as a stop button; see `update_reload_button`).
     #[template_callback]
@@ -1052,6 +1065,18 @@ impl BrowserWindow {
     }
 
     /// The chip's X button. Lives beside the label toggle, so its clicks actually arrive.
+    /// The configured homepage (`useragent.general.homepage`, registered by beacon in
+    /// `BrowserEngine::new`). Falls back to the branded start page if the engine is not up
+    /// yet or the value was cleared.
+    fn homepage(&self) -> String {
+        self.engine
+            .borrow()
+            .as_ref()
+            .map(|e| e.settings().get_string("useragent.general.homepage"))
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "gosub://home".to_string())
+    }
+
     /// Whether the tab close button goes on the left of the label, from
     /// `useragent.tab.close_button` in the engine settings store (`left` | `right`).
     /// Falls back to the right when the engine is not up yet, which is where the button
