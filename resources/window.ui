@@ -28,29 +28,33 @@
                                 <property name="vscrollbar-policy">never</property>
                                 <property name="hexpand">True</property>
                                 <child>
+                                    <!-- Chips only. The strip holds nothing else, which is what
+                                         lets insert_child_after target chips by position and
+                                         CloseAll clear the strip wholesale. -->
                                     <object class="GtkBox" id="tab_strip">
                                         <property name="orientation">horizontal</property>
                                         <property name="spacing">2</property>
-                                        <!-- The new-tab button lives INSIDE the strip so it
-                                             trails the last tab. Chips are inserted before it
-                                             (insert_child_after only ever targets chips), and
-                                             CloseAll removes chips only, so it stays last. -->
-                                        <child>
-                                            <object class="GtkButton">
-                                                <property name="has-frame">false</property>
-                                                <property name="tooltip-text">New tab</property>
-                                                <property name="action-name">app.open-new-tab</property>
-                                                <property name="valign">center</property>
-                                                <style>
-                                                    <class name="new-tab"/>
-                                                </style>
-                                                <child>
-                                                    <object class="GtkImage">
-                                                        <property name="icon-name">list-add-symbolic</property>
-                                                    </object>
-                                                </child>
-                                            </object>
-                                        </child>
+                                    </object>
+                                </child>
+                            </object>
+                        </child>
+
+                        <!-- The new-tab button sits OUTSIDE the scroller, pinned to the right
+                             of the row. Inside it, it trailed the last chip and scrolled off
+                             with them once the strip overflowed, leaving no way to open a tab
+                             with the pointer. -->
+                        <child>
+                            <object class="GtkButton">
+                                <property name="has-frame">false</property>
+                                <property name="tooltip-text">New tab</property>
+                                <property name="action-name">app.open-new-tab</property>
+                                <property name="valign">center</property>
+                                <style>
+                                    <class name="new-tab"/>
+                                </style>
+                                <child>
+                                    <object class="GtkImage">
+                                        <property name="icon-name">list-add-symbolic</property>
                                     </object>
                                 </child>
                             </object>
