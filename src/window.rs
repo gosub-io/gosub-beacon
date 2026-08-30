@@ -164,7 +164,14 @@ impl BrowserWindow {
         app.set_accels_for_action("app.open-new-tab", &["<Primary>T"]);
         app.set_accels_for_action("app.close-tab", &["<Primary>W"]);
         app.set_accels_for_action("app.reopen-closed-tab", &["<Primary><Shift>T"]);
-        app.set_accels_for_action("app.toggle-log", &["<Primary>L"]);
+        // Ctrl+L is the address bar in every mainstream browser; the log console moves
+        // aside to Ctrl+Shift+L.
+        app.set_accels_for_action("app.focus-address-bar", &["<Primary>L", "<Alt>D", "F6"]);
+        app.set_accels_for_action("app.toggle-log", &["<Primary><Shift>L"]);
+        app.set_accels_for_action("app.reload", &["F5", "<Primary>R"]);
+        app.set_accels_for_action("app.navigate-back", &["<Alt>Left"]);
+        app.set_accels_for_action("app.navigate-forward", &["<Alt>Right"]);
+        app.set_accels_for_action("app.new-window", &["<Primary>N"]);
         app.set_accels_for_action("app.zoom-in", &["<Primary>equal", "<Primary>plus", "<Primary>KP_Add"]);
         app.set_accels_for_action("app.zoom-out", &["<Primary>minus", "<Primary>KP_Subtract"]);
         app.set_accels_for_action("app.zoom-reset", &["<Primary>0", "<Primary>KP_0"]);
@@ -256,6 +263,67 @@ impl BrowserWindow {
             }
         });
         app.add_action(&fullscreen_action);
+
+        // Focus the address bar and select what is there, so typing replaces the URL.
+        let focus_url_action = SimpleAction::new("focus-address-bar", None);
+        focus_url_action.connect_activate({
+            let app = app.clone();
+            move |_, _| {
+                let Some(window) = BrowserWindow::action_target(&app) else { return };
+                let imp = window.imp();
+                imp.searchbar.grab_focus();
+                imp.searchbar.select_region(0, -1);
+            }
+        });
+        app.add_action(&focus_url_action);
+
+        // Reload (F5 / Ctrl+R). Reuses the toolbar button's helper, which doubles as stop
+        // while a page is still loading.
+        let reload_action = SimpleAction::new("reload", None);
+        reload_action.connect_activate({
+            let app = app.clone();
+            move |_, _| {
+                let Some(window) = BrowserWindow::action_target(&app) else { return };
+                let imp = window.imp();
+                if let Some(tab_id) = imp.active_tab_id() {
+                    imp.reload_or_stop(tab_id);
+                }
+            }
+        });
+        app.add_action(&reload_action);
+
+        let back_action = SimpleAction::new("navigate-back", None);
+        back_action.connect_activate({
+            let app = app.clone();
+            move |_, _| {
+                let Some(window) = BrowserWindow::action_target(&app) else { return };
+                window.imp().navigate_back();
+            }
+        });
+        app.add_action(&back_action);
+
+        // Forward is anchored to the toolbar button: with several forward branches the
+        // helper pops a menu asking which to follow, and it needs somewhere to appear.
+        let forward_action = SimpleAction::new("navigate-forward", None);
+        forward_action.connect_activate({
+            let app = app.clone();
+            move |_, _| {
+                let Some(window) = BrowserWindow::action_target(&app) else { return };
+                let imp = window.imp();
+                let anchor = imp.btn_next.clone();
+                imp.navigate_forward(&anchor);
+            }
+        });
+        app.add_action(&forward_action);
+
+        let new_window_action = SimpleAction::new("new-window", None);
+        new_window_action.connect_activate({
+            let app = app.clone();
+            move |_, _| {
+                BrowserWindow::new(&app, false).present();
+            }
+        });
+        app.add_action(&new_window_action);
 
         // Page zoom on the active tab.
         for (name, direction) in [("zoom-in", 1), ("zoom-out", -1)] {
