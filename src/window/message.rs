@@ -3,8 +3,12 @@ use std::fmt;
 use std::fmt::{Debug, Formatter};
 
 pub enum Message {
-    /// Open a new tab, and load a URL
+    /// Open a new tab in the background, and load a URL. Used for startup tabs, where the
+    /// first URL should end up active rather than the last.
     OpenTab(String, String),
+    /// Open a new tab and switch to it. The explicit new-tab gesture (Ctrl+T, the + button)
+    /// only; link-opening stays on `OpenTabRight`, which must not steal focus.
+    OpenTabForeground(String, String),
     /// Opens a new tab on the right side of the given TabID
     OpenTabRight(TabId, String, String),
     /// Sent when we need to load a new url into a tab
@@ -33,6 +37,7 @@ impl Debug for Message {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
             Message::OpenTab(url, title) => write!(f, "OpenTab({} {})", url, title),
+            Message::OpenTabForeground(url, title) => write!(f, "OpenTabForeground({} {})", url, title),
             Message::OpenTabRight(tab_id, url, title) => write!(f, "OpenTabRight({:?}, {} {})", tab_id, url, title),
             Message::LoadUrl(tab_id, url) => write!(f, "LoadUrl({:?}, {})", tab_id, url),
             Message::RefreshTabs() => write!(f, "RefreshTabs()"),

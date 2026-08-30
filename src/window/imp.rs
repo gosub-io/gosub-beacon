@@ -1902,6 +1902,13 @@ impl BrowserWindow {
             Message::OpenTab(url, title) => {
                 self.open_tab(None, &url, &title);
             }
+            Message::OpenTabForeground(url, title) => {
+                // The explicit new-tab gesture switches to what it just made. `open_tab` alone
+                // does not activate, which is why Ctrl+T used to leave you on the old tab.
+                if let Some(tab_id) = self.open_tab(None, &url, &title) {
+                    self.activate_tab(tab_id);
+                }
+            }
             Message::OpenTabRight(target_tab_id, url, title) => {
                 if let Some(pos) = self.get_page_num_for_tab(target_tab_id) {
                     self.open_tab(Some(pos as usize + 1), &url, &title);
