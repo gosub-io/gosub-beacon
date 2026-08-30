@@ -804,7 +804,8 @@ impl BrowserWindow {
             return; // not allocated yet; the resize hook will call us again
         }
 
-        // Pinned chips and the + button keep their natural size: only titled chips flex.
+        // Pinned chips are icon-only and keep their natural size: only titled chips flex.
+        // The + button is not in here -- it sits outside the scroller so it stays reachable.
         let mut fixed = 0;
         let mut children = 0;
         let mut flexible: Vec<(gtk4::Box, gtk4::Label)> = Vec::new();
