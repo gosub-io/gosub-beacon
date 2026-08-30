@@ -16,7 +16,7 @@
 
                 <!-- Row 2: full-width tab strip -->
                 <child>
-                    <object class="GtkBox">
+                    <object class="GtkBox" id="tab_row">
                         <property name="orientation">horizontal</property>
                         <property name="spacing">2</property>
                         <style>
@@ -60,7 +60,7 @@
 
                 <!-- Row 3: navigation toolbar -->
                 <child>
-                    <object class="GtkBox">
+                    <object class="GtkBox" id="nav_toolbar">
                         <property name="orientation">horizontal</property>
                         <property name="spacing">5</property>
                         <property name="margin-start">8</property>

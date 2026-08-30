@@ -146,6 +146,17 @@ impl BrowserWindow {
             });
         });
 
+        // Chrome (header bar, tab strip, nav toolbar, bookmarks bar) is hidden in fullscreen.
+        // Driven off the window's own state rather than the action, so it cannot drift.
+        window.connect_fullscreened_notify(|window| {
+            let show_chrome = !window.is_fullscreen();
+            let imp = window.imp();
+            imp.headerbar.set_visible(show_chrome);
+            imp.tab_row.set_visible(show_chrome);
+            imp.nav_toolbar.set_visible(show_chrome);
+            imp.bookmarks_bar.set_visible(show_chrome);
+        });
+
         window
     }
 
@@ -158,6 +169,7 @@ impl BrowserWindow {
         app.set_accels_for_action("app.zoom-out", &["<Primary>minus", "<Primary>KP_Subtract"]);
         app.set_accels_for_action("app.zoom-reset", &["<Primary>0", "<Primary>KP_0"]);
         app.set_accels_for_action("app.new-private-window", &["<Primary><Shift>P"]);
+        app.set_accels_for_action("app.toggle-fullscreen", &["F11"]);
     }
 
     /// The window app actions should act on: the focused one (multi-window safe).
@@ -231,6 +243,19 @@ impl BrowserWindow {
             }
         });
         app.add_action(&private_action);
+
+        // Fullscreen (F11). Only flips the window state; the chrome hides itself off the
+        // resulting `fullscreened` notify, so a change made by the window manager instead of
+        // this action (titlebar double-click, compositor keybinding) stays in sync.
+        let fullscreen_action = SimpleAction::new("toggle-fullscreen", None);
+        fullscreen_action.connect_activate({
+            let app = app.clone();
+            move |_, _| {
+                let Some(window) = BrowserWindow::action_target(&app) else { return };
+                window.set_fullscreened(!window.is_fullscreen());
+            }
+        });
+        app.add_action(&fullscreen_action);
 
         // Page zoom on the active tab.
         for (name, direction) in [("zoom-in", 1), ("zoom-out", -1)] {

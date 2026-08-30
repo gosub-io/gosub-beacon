@@ -88,6 +88,12 @@ pub struct BrowserWindow {
     pub headerbar: TemplateChild<gtk4::HeaderBar>,
     #[template_child]
     pub tab_strip: TemplateChild<gtk4::Box>,
+    /// Row 2 (the tab strip's row) and row 3 (the nav toolbar). Held so fullscreen can
+    /// hide the whole chrome, not just the header bar.
+    #[template_child]
+    pub tab_row: TemplateChild<gtk4::Box>,
+    #[template_child]
+    pub nav_toolbar: TemplateChild<gtk4::Box>,
     #[template_child]
     pub content_stack: TemplateChild<Stack>,
     #[template_child]
@@ -152,6 +158,8 @@ impl Default for BrowserWindow {
             btn_refresh: TemplateChild::default(),
             headerbar: TemplateChild::default(),
             tab_strip: TemplateChild::default(),
+            tab_row: TemplateChild::default(),
+            nav_toolbar: TemplateChild::default(),
             content_stack: TemplateChild::default(),
             log_scroller: TemplateChild::default(),
             log: TemplateChild::default(),
