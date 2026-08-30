@@ -128,8 +128,10 @@ pub struct BrowserWindow {
     pub last_viewport: Rc<Cell<Option<(u32, u32)>>>,
     /// Maps engine tab ids back to our tab ids (for routing engine events).
     pub engine_tab_map: Rc<RefCell<HashMap<EngineTabId, TabId>>>,
-    /// Right-clicks awaiting the engine's hit-test answer: token → (tab, window point).
-    pub pending_hit_tests: RefCell<HashMap<u64, (TabId, Point)>>,
+    /// Clicks awaiting the engine's hit-test answer: token → (tab, window point, what to
+    /// do with the answer). Right-click builds a context menu; Ctrl/middle-click opens the
+    /// link it lands on in a background tab.
+    pub pending_hit_tests: RefCell<HashMap<u64, (TabId, Point, HitIntent)>>,
     /// Source of hit-test tokens.
     pub next_hit_test_token: Cell<u64>,
 
@@ -200,6 +202,15 @@ impl Default for BrowserWindow {
             private: Cell::new(false),
         }
     }
+}
+
+/// What to do with a `HitTestResult` once the engine answers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HitIntent {
+    /// Right-click: build the page context menu from the hit.
+    ContextMenu,
+    /// Ctrl+click or middle-click: open `link_url` in a background tab, if there is one.
+    OpenLinkInBackgroundTab,
 }
 
 impl BrowserWindow {
@@ -877,6 +888,38 @@ impl BrowserWindow {
         }
     }
 
+    /// Ask the engine what sits under `(x, y)` in `tab_id`'s render area, recording what the
+    /// answer is for. Shared by right-click (context menu) and Ctrl/middle-click (open link
+    /// in a background tab) so the token bookkeeping exists in exactly one place.
+    pub(crate) fn query_hit_test(&self, tab_id: TabId, gesture: &gtk4::GestureClick, x: f64, y: f64, intent: HitIntent) {
+        let handle = {
+            let manager = self.tab_manager.lock().unwrap();
+            manager.get_tab(tab_id).and_then(|t| t.tab_handle())
+        };
+        let Some(handle) = handle else { return };
+        let window = self.obj().clone();
+        let Some(widget) = gesture.widget() else { return };
+        // Anchor point in window coordinates, for whatever the answer wants to position.
+        let Some(p) = widget.compute_point(&window, &Point::new(x as f32, y as f32)) else {
+            return;
+        };
+        let token = self.next_hit_test_token.get();
+        self.next_hit_test_token.set(token + 1);
+        self.pending_hit_tests.borrow_mut().insert(token, (tab_id, p, intent));
+        // The engine works in CSS px; the click arrives in zoomed widget px.
+        let z = self.tab_zoom.borrow().get(&tab_id).map(|c| c.get()).unwrap_or(1.0);
+        let (qx, qy) = (x / z, y / z);
+        runtime().spawn(async move {
+            let _ = handle
+                .send(EngineTabCommand::QueryHitTest {
+                    x: qx as f32,
+                    y: qy as f32,
+                    token: gosub_engine::events::HitTestToken(token),
+                })
+                .await;
+        });
+    }
+
     pub(crate) fn activate_tab(&self, tab_id: TabId) {
         // A cycle in progress is *previewing* tabs; reordering now would collapse the walk
         // into a two-tab ping-pong. `commit_cycle` promotes the landing tab instead.
@@ -929,6 +972,20 @@ impl BrowserWindow {
         let chip = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
         chip.add_css_class("tab-chip");
         chip.set_tab_id(tab.id());
+
+        // Middle-click closes the tab. On the chip itself rather than its toggle: the close
+        // button is a sibling, and a gesture on the toggle would miss clicks landing on it.
+        let middle = gtk4::GestureClick::new();
+        middle.set_button(gdk::BUTTON_MIDDLE);
+        let window = self.obj().clone();
+        let tab_id = tab.id();
+        middle.connect_pressed(move |_g, _n, _x, _y| {
+            let imp = window.imp();
+            imp.close_tab(tab_id);
+            _ = imp.get_sender().send_blocking(Message::RefreshTabs());
+        });
+        chip.add_controller(middle);
+
         self.populate_chip(&chip, tab);
         chip
     }
@@ -2097,10 +2154,20 @@ impl BrowserWindow {
             click.set_button(gdk::BUTTON_PRIMARY);
             let click_handle = handle.clone();
             let click_zoom = zoom.clone();
+            let click_window = self.obj().clone();
+            let click_tab_id = tab.id();
             click.connect_pressed(move |g, _n, x, y| {
                 // Keys should go to the page after a click on it.
                 if let Some(widget) = g.widget() {
                     widget.grab_focus();
+                }
+                // Ctrl+click opens a link in a background tab instead of following it. Ask
+                // the engine what is under the pointer; the answer decides (see HitIntent).
+                if g.current_event_state().contains(gdk::ModifierType::CONTROL_MASK) {
+                    click_window
+                        .imp()
+                        .query_hit_test(click_tab_id, g, x, y, HitIntent::OpenLinkInBackgroundTab);
+                    return;
                 }
                 let handle = click_handle.clone();
                 let z = click_zoom.get();
@@ -2141,36 +2208,28 @@ impl BrowserWindow {
             });
             area.add_controller(keys);
 
+            // Middle click on the page: same link-in-background-tab behaviour as Ctrl+click.
+            let mid = gtk4::GestureClick::new();
+            mid.set_button(gdk::BUTTON_MIDDLE);
+            let mid_window = self.obj().clone();
+            let mid_tab_id = tab.id();
+            mid.connect_pressed(move |g, _n, x, y| {
+                mid_window
+                    .imp()
+                    .query_hit_test(mid_tab_id, g, x, y, HitIntent::OpenLinkInBackgroundTab);
+            });
+            area.add_controller(mid);
+
             // Secondary click -> ask the engine what is under the pointer; the context menu
             // is built from its HitTestResult (see handle_engine_event).
             let right = gtk4::GestureClick::new();
             right.set_button(gdk::BUTTON_SECONDARY);
-            let right_handle = handle.clone();
-            let right_zoom = zoom.clone();
-            let window = self.obj().clone();
-            let our_tab_id = tab.id();
+            let right_window = self.obj().clone();
+            let right_tab_id = tab.id();
             right.connect_pressed(move |gesture, _n, x, y| {
-                let imp = window.imp();
-                let token = imp.next_hit_test_token.get();
-                imp.next_hit_test_token.set(token + 1);
-                // Remember where to anchor the menu, in window coordinates.
-                let Some(widget) = gesture.widget() else { return };
-                let Some(p) = widget.compute_point(&window, &Point::new(x as f32, y as f32)) else {
-                    return;
-                };
-                imp.pending_hit_tests.borrow_mut().insert(token, (our_tab_id, p));
-                let handle = right_handle.clone();
-                let z = right_zoom.get();
-                let (qx, qy) = (x / z, y / z);
-                runtime().spawn(async move {
-                    let _ = handle
-                        .send(EngineTabCommand::QueryHitTest {
-                            x: qx as f32,
-                            y: qy as f32,
-                            token: gosub_engine::events::HitTestToken(token),
-                        })
-                        .await;
-                });
+                right_window
+                    .imp()
+                    .query_hit_test(right_tab_id, gesture, x, y, HitIntent::ContextMenu);
             });
             area.add_controller(right);
         }
@@ -2408,10 +2467,20 @@ impl BrowserWindow {
                 self.update_download(id.0, |e| e.state = DownloadState::Failed(error.clone()));
             }
             EngineEvent::HitTestResult { token, hit, .. } => {
-                let Some((tab_id, point)) = self.pending_hit_tests.borrow_mut().remove(&token.0) else {
+                let Some((tab_id, point, intent)) = self.pending_hit_tests.borrow_mut().remove(&token.0) else {
                     return;
                 };
-                super::page_context_menu::show(&self.obj(), tab_id, point, hit);
+                match intent {
+                    HitIntent::ContextMenu => super::page_context_menu::show(&self.obj(), tab_id, point, hit),
+                    HitIntent::OpenLinkInBackgroundTab => {
+                        // Not on a link: a Ctrl/middle click on empty page area does nothing.
+                        let Some(link) = hit.link_url.clone() else { return };
+                        let sender = self.get_sender();
+                        runtime().spawn(async move {
+                            let _ = sender.send(Message::OpenTabRight(tab_id, link, "New Tab".into())).await;
+                        });
+                    }
+                }
             }
             // Cursor shape for what is under the pointer; only the active tab's area is under
             // the pointer, but setting it on the tab's own area is always correct.
