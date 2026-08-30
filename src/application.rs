@@ -36,7 +36,7 @@ mod imp {
                 return;
             }
 
-            let private = std::env::args().any(|a| a == "--private");
+            let private = crate::cli::Cli::global().private;
             let window = BrowserWindow::new(&obj, private);
             window.present();
         }

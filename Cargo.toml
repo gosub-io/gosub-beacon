@@ -33,6 +33,8 @@ url = "2.5.2"
 rusqlite = "0.39"
 cookie = "0.18.1"
 anyhow = "1.0.95"
+# CLI parsing. Version matches the engine workspace so the org stays on one clap.
+clap = { version = "4.6.0", features = ["derive"] }
 thiserror = "2.0.9"
 futures-core = "0.3.31"
 bytes = "1.9.0"

@@ -1,4 +1,5 @@
 mod application;
+mod cli;
 mod cookies;
 mod dialog;
 pub mod engine;
@@ -40,6 +41,11 @@ fn main() {
         .filter(Some("gosub_beacon"), log::LevelFilter::Warn)
         .init();
 
+    // Parse argv first: `--help` / `--version` must answer cleanly, without a display and
+    // without the protocol banner below scrolling past first. Everything downstream reads the
+    // parsed result rather than re-scanning argv.
+    let cli = crate::cli::Cli::init();
+
     Fetcher::protocols_implemented().iter().for_each(|protocol| {
         println!("Protocol: {}", protocol);
     });
@@ -55,9 +61,9 @@ fn main() {
         // until the desktop preference next changes.
         crate::theme::follow_desktop_color_scheme();
     });
-    // Keep GTK away from argv: URLs passed on the command line become the startup
-    // tabs (see BrowserWindow::new), which plain `app.run()` would reject as unknown
-    // options.
+    // Keep GTK away from argv: it is ours, already parsed, and plain `app.run()` would
+    // reject the URLs and flags as unknown options.
+    let _ = cli;
     let argv0: Vec<String> = std::env::args().take(1).collect();
     app.run_with_args(&argv0);
 }
