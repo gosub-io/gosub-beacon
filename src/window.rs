@@ -177,6 +177,13 @@ impl BrowserWindow {
         app.set_accels_for_action("app.zoom-reset", &["<Primary>0", "<Primary>KP_0"]);
         app.set_accels_for_action("app.new-private-window", &["<Primary><Shift>P"]);
         app.set_accels_for_action("app.toggle-fullscreen", &["F11"]);
+        // MRU tab cycling. Ctrl+Tab arrives as ISO_Left_Tab when Shift is held, which is a
+        // separate keysym rather than a modifier on Tab -- both spellings are bound.
+        app.set_accels_for_action("app.cycle-tab-next", &["<Primary>Tab"]);
+        app.set_accels_for_action("app.cycle-tab-prev", &["<Primary><Shift>Tab", "<Primary><Shift>ISO_Left_Tab"]);
+        for n in 1..=9i32 {
+            app.set_accels_for_action(&format!("app.select-tab({n})"), &[&format!("<Primary>{n}")]);
+        }
     }
 
     /// The window app actions should act on: the focused one (multi-window safe).
@@ -324,6 +331,32 @@ impl BrowserWindow {
             }
         });
         app.add_action(&new_window_action);
+
+        for (name, direction) in [("cycle-tab-next", 1), ("cycle-tab-prev", -1)] {
+            let action = SimpleAction::new(name, None);
+            action.connect_activate({
+                let app = app.clone();
+                move |_, _| {
+                    let Some(window) = BrowserWindow::action_target(&app) else { return };
+                    window.imp().cycle_tab(direction);
+                }
+            });
+            app.add_action(&action);
+        }
+
+        // One parameterised action rather than nine. Parameter is i32, not u32: the accel is spelled `app.select-tab(3)`, and GVariant
+        // parses a bare integer literal as int32. Declaring u32 here makes the detailed
+        // action name fail to match and the accel silently never fires.
+        let select_tab = SimpleAction::new("select-tab", Some(&i32::static_variant_type()));
+        select_tab.connect_activate({
+            let app = app.clone();
+            move |_, param| {
+                let Some(window) = BrowserWindow::action_target(&app) else { return };
+                let Some(n) = param.and_then(|p| p.get::<i32>()) else { return };
+                window.imp().select_tab_by_position(n.max(0) as usize);
+            }
+        });
+        app.add_action(&select_tab);
 
         // Page zoom on the active tab.
         for (name, direction) in [("zoom-in", 1), ("zoom-out", -1)] {

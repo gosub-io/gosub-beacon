@@ -132,6 +132,15 @@ pub struct BrowserWindow {
     pub pending_hit_tests: RefCell<HashMap<u64, (TabId, Point)>>,
     /// Source of hit-test tokens.
     pub next_hit_test_token: Cell<u64>,
+
+    /// Tabs in most-recently-used order, most recent first. Drives Ctrl+Tab cycling.
+    pub mru: RefCell<Vec<TabId>>,
+    /// Position within `mru` while a Ctrl+Tab cycle is in flight. `None` when not cycling.
+    /// While cycling, activating a tab must NOT reorder `mru`, or every press would just
+    /// ping-pong between two tabs instead of walking the list.
+    pub cycle_index: Cell<Option<usize>>,
+    /// Fires when the cycle has settled; commits the landed tab to the front of `mru`.
+    pub cycle_timer: RefCell<Option<glib::SourceId>>,
     /// Source of download ids.
     pub next_download_id: Cell<u64>,
     /// Session downloads, newest last; rendered into the downloads popover.
@@ -179,6 +188,9 @@ impl Default for BrowserWindow {
             engine_tab_map: Rc::new(RefCell::new(HashMap::new())),
             pending_hit_tests: RefCell::new(HashMap::new()),
             next_hit_test_token: Cell::new(1),
+            mru: RefCell::new(Vec::new()),
+            cycle_index: Cell::new(None),
+            cycle_timer: RefCell::new(None),
             next_download_id: Cell::new(1),
             downloads: RefCell::new(Vec::new()),
             downloads_list: RefCell::new(None),
@@ -401,6 +413,7 @@ impl BrowserWindow {
             });
         }
         self.tab_zoom.borrow_mut().remove(&tab_id);
+        self.forget_mru(tab_id);
         self.refresh_tabs();
     }
 
@@ -783,7 +796,93 @@ impl BrowserWindow {
         });
     }
 
+    /// Move `tab_id` to the front of the MRU list (inserting it if new).
+    pub(crate) fn touch_mru(&self, tab_id: TabId) {
+        let mut mru = self.mru.borrow_mut();
+        mru.retain(|id| *id != tab_id);
+        mru.insert(0, tab_id);
+    }
+
+    /// Drop a closed tab from the MRU list.
+    pub(crate) fn forget_mru(&self, tab_id: TabId) {
+        self.mru.borrow_mut().retain(|id| *id != tab_id);
+        let too_few = self.mru.borrow().len() < 2;
+        if too_few {
+            self.cancel_cycle();
+        }
+    }
+
+    /// Ctrl+Tab (`+1`) / Ctrl+Shift+Tab (`-1`): step through the MRU list.
+    ///
+    /// The list is deliberately not reordered while stepping, so repeated presses reach the
+    /// third tab and beyond rather than bouncing between two. A short idle timer ends the
+    /// cycle and commits wherever it landed.
+    pub(crate) fn cycle_tab(&self, direction: i32) {
+        let target = {
+            let mru = self.mru.borrow();
+            if mru.len() < 2 {
+                return;
+            }
+            let from = self.cycle_index.get().unwrap_or(0) as i32;
+            let next = (from + direction).rem_euclid(mru.len() as i32) as usize;
+            self.cycle_index.set(Some(next));
+            mru[next]
+        };
+        self.activate_tab(target);
+        self.restart_cycle_timer();
+    }
+
+    /// Restart the settle timer; when it fires the cycle is over.
+    fn restart_cycle_timer(&self) {
+        if let Some(id) = self.cycle_timer.borrow_mut().take() {
+            id.remove();
+        }
+        let window = self.obj().downgrade();
+        let id = glib::timeout_add_local_once(std::time::Duration::from_millis(1200), move || {
+            if let Some(window) = window.upgrade() {
+                window.imp().commit_cycle();
+            }
+        });
+        *self.cycle_timer.borrow_mut() = Some(id);
+    }
+
+    /// End the cycle, promoting the tab it landed on to the front of the MRU list.
+    fn commit_cycle(&self) {
+        self.cycle_timer.borrow_mut().take();
+        if self.cycle_index.take().is_some() {
+            if let Some(tab_id) = self.active_tab_id() {
+                self.touch_mru(tab_id);
+            }
+        }
+    }
+
+    /// Abandon a cycle without committing (e.g. the tab it was walking went away).
+    fn cancel_cycle(&self) {
+        if let Some(id) = self.cycle_timer.borrow_mut().take() {
+            id.remove();
+        }
+        self.cycle_index.set(None);
+    }
+
+    /// Ctrl+1..8 select that position in the visible strip; Ctrl+9 is always the last tab,
+    /// matching Chrome and Firefox.
+    pub(crate) fn select_tab_by_position(&self, n: usize) {
+        let order = self.tab_manager.lock().unwrap().order();
+        if order.is_empty() {
+            return;
+        }
+        let idx = if n >= 9 { order.len() - 1 } else { n.saturating_sub(1) };
+        if let Some(tab_id) = order.get(idx).copied() {
+            self.activate_tab(tab_id);
+        }
+    }
+
     pub(crate) fn activate_tab(&self, tab_id: TabId) {
+        // A cycle in progress is *previewing* tabs; reordering now would collapse the walk
+        // into a two-tab ping-pong. `commit_cycle` promotes the landing tab instead.
+        if self.cycle_index.get().is_none() {
+            self.touch_mru(tab_id);
+        }
         for chip in self.chips() {
             Self::set_chip_active(&chip, chip.get_tab_id() == Some(tab_id));
         }
@@ -1831,6 +1930,13 @@ impl BrowserWindow {
         manager.add_tab(tab, position);
         manager.notify_tab_changed(tab_id);
         drop(manager);
+        // Enter the MRU list at the *back*: a freshly opened tab is cycleable, but it has
+        // not been used yet. Without this only activated tabs were ever in the list, so
+        // opening several tabs and never switching left it with one entry and Ctrl+Tab
+        // silently did nothing.
+        if !self.mru.borrow().contains(&tab_id) {
+            self.mru.borrow_mut().push(tab_id);
+        }
         self.refresh_tabs();
 
         if let Some(raw) = source_mode(&render_mode) {
