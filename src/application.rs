@@ -134,7 +134,9 @@ impl Application {
     fn setup_accelerators(&self) {
         // Global application accelerators
         self.set_accels_for_action("app.quit", &["<Primary>Q"]);
-        self.set_accels_for_action("app.toggle-dark-mode", &["<Primary>D"]);
+        // Ctrl+D is "bookmark this page" in every mainstream browser, so dark mode moves
+        // aside to Ctrl+Shift+D (see app.bookmark-page in window.rs).
+        self.set_accels_for_action("app.toggle-dark-mode", &["<Primary><Shift>D"]);
         self.set_accels_for_action("app.show-about", &["F1"]);
         self.set_accels_for_action("app.show-shortcuts", &["F2"]);
     }
