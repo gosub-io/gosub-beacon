@@ -1197,7 +1197,7 @@ impl BrowserWindow {
 
     /// Forward button: with a single forward branch go straight there; with several, pop up a
     /// menu (anchored to `anchor`) asking which branch to follow.
-    fn navigate_forward(&self, anchor: &Button) {
+    pub(crate) fn navigate_forward(&self, anchor: &Button) {
         let Some(tab_id) = self.active_tab_id() else {
             return;
         };
