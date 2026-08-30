@@ -1428,27 +1428,32 @@ impl BrowserWindow {
     fn setup_bookmark_button(&self) {
         let window = self.obj().clone();
         self.btn_bookmark.connect_clicked(move |_| {
-            let imp = window.imp();
-            let Some(places) = imp.places() else { return };
-            let Some(tab_id) = imp.active_tab_id() else { return };
-            let (url, title) = {
-                let manager = imp.tab_manager.lock().unwrap();
-                match manager.get_tab(tab_id) {
-                    Some(tab) => (tab.url().to_string(), tab.title().to_string()),
-                    None => return,
-                }
-            };
-            if !url.starts_with("http") {
-                return; // internal pages are not bookmarkable
-            }
-            if places.is_bookmarked(&url) {
-                places.remove_bookmark(&url);
-            } else {
-                places.add_bookmark(&url, if title.is_empty() { &url } else { &title });
-            }
-            imp.update_bookmark_button();
-            imp.rebuild_bookmarks_bar();
+            window.imp().toggle_bookmark();
         });
+    }
+
+    /// Add or remove the active tab's page from the bookmarks. Shared by the toolbar star and
+    /// the `app.bookmark-page` action (Ctrl+D), so both behave identically.
+    pub(crate) fn toggle_bookmark(&self) {
+        let Some(places) = self.places() else { return };
+        let Some(tab_id) = self.active_tab_id() else { return };
+        let (url, title) = {
+            let manager = self.tab_manager.lock().unwrap();
+            match manager.get_tab(tab_id) {
+                Some(tab) => (tab.url().to_string(), tab.title().to_string()),
+                None => return,
+            }
+        };
+        if !url.starts_with("http") {
+            return; // internal pages are not bookmarkable
+        }
+        if places.is_bookmarked(&url) {
+            places.remove_bookmark(&url);
+        } else {
+            places.add_bookmark(&url, if title.is_empty() { &url } else { &title });
+        }
+        self.update_bookmark_button();
+        self.rebuild_bookmarks_bar();
     }
 
     /// Standard zoom ladder, matching mainstream browsers.

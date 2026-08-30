@@ -172,6 +172,7 @@ impl BrowserWindow {
         app.set_accels_for_action("app.navigate-back", &["<Alt>Left"]);
         app.set_accels_for_action("app.navigate-forward", &["<Alt>Right"]);
         app.set_accels_for_action("app.new-window", &["<Primary>N"]);
+        app.set_accels_for_action("app.bookmark-page", &["<Primary>D"]);
         app.set_accels_for_action("app.zoom-in", &["<Primary>equal", "<Primary>plus", "<Primary>KP_Add"]);
         app.set_accels_for_action("app.zoom-out", &["<Primary>minus", "<Primary>KP_Subtract"]);
         app.set_accels_for_action("app.zoom-reset", &["<Primary>0", "<Primary>KP_0"]);
@@ -322,6 +323,18 @@ impl BrowserWindow {
             }
         });
         app.add_action(&forward_action);
+
+        // Ctrl+D: same toggle as the toolbar star, so both add/remove identically. Internal
+        // pages are not bookmarkable and the helper simply returns for them.
+        let bookmark_action = SimpleAction::new("bookmark-page", None);
+        bookmark_action.connect_activate({
+            let app = app.clone();
+            move |_, _| {
+                let Some(window) = BrowserWindow::action_target(&app) else { return };
+                window.imp().toggle_bookmark();
+            }
+        });
+        app.add_action(&bookmark_action);
 
         let new_window_action = SimpleAction::new("new-window", None);
         new_window_action.connect_activate({
