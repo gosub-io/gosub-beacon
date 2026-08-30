@@ -88,6 +88,9 @@ pub struct BrowserWindow {
     pub headerbar: TemplateChild<gtk4::HeaderBar>,
     #[template_child]
     pub tab_strip: TemplateChild<gtk4::Box>,
+
+    #[template_child]
+    pub tab_scroller: TemplateChild<ScrolledWindow>,
     /// Row 2 (the tab strip's row) and row 3 (the nav toolbar). Held so fullscreen can
     /// hide the whole chrome, not just the header bar.
     #[template_child]
@@ -173,6 +176,7 @@ impl Default for BrowserWindow {
             btn_refresh: TemplateChild::default(),
             headerbar: TemplateChild::default(),
             tab_strip: TemplateChild::default(),
+            tab_scroller: TemplateChild::default(),
             tab_row: TemplateChild::default(),
             nav_toolbar: TemplateChild::default(),
             content_stack: TemplateChild::default(),
@@ -253,6 +257,7 @@ impl ObjectImpl for BrowserWindow {
 
     fn constructed(&self) {
         self.parent_constructed();
+        self.setup_tab_strip_sizing();
         self.setup_downloads_popover();
         self.setup_bookmark_button();
         self.setup_url_completion();
@@ -676,6 +681,9 @@ impl BrowserWindow {
             }
         }
 
+        // Chip count may have changed, so the per-tab width budget has too.
+        self.relayout_tab_strip();
+
         // Loading state may have changed for the active tab.
         self.update_reload_button();
         self.save_session();
@@ -742,6 +750,20 @@ impl BrowserWindow {
     /// toggle rather than nested inside it. GTK4 does not deliver clicks to a button nested
     /// in another button - the outer one takes them - which is why the close button did
     /// nothing while the chip was itself a `ToggleButton`.
+    /// Narrowest a tab title may get before the strip scrolls instead of shrinking.
+    const TAB_LABEL_MIN_CHARS: i32 = 5;
+    /// Widest a tab title gets, however few tabs are open.
+    const TAB_LABEL_MAX_CHARS: i32 = 16;
+
+    /// Re-share the strip width whenever the viewport resizes. The horizontal adjustment's
+    /// page size *is* the viewport width, and unlike the widget there is a signal for it.
+    fn setup_tab_strip_sizing(&self) {
+        let window = self.obj().clone();
+        self.tab_scroller.hadjustment().connect_page_size_notify(move |_| {
+            window.imp().relayout_tab_strip();
+        });
+    }
+
     fn chips(&self) -> Vec<gtk4::Box> {
         let mut out = Vec::new();
         let mut child = self.tab_strip.first_child();
@@ -752,6 +774,111 @@ impl BrowserWindow {
             }
         }
         out
+    }
+
+    /// The title label inside a chip. Pinned chips are icon-only and have none.
+    fn chip_label(chip: &gtk4::Box) -> Option<gtk4::Label> {
+        let content = Self::chip_toggle(chip)?.child()?;
+        let mut child = content.first_child();
+        while let Some(widget) = child {
+            child = widget.next_sibling();
+            if let Ok(label) = widget.downcast::<gtk4::Label>() {
+                return Some(label);
+            }
+        }
+        None
+    }
+
+    /// Share the strip's width between the chips that have a title, narrowing them as tabs
+    /// multiply and widening them again as tabs close.
+    ///
+    /// This has to be driven from code. The strip lives in a `ScrolledWindow`, whose viewport
+    /// always allocates the child at least its natural width, so chips can never be squeezed
+    /// by the layout itself - their natural width has to come down, and for an ellipsizing
+    /// label that means lowering its char bounds. Below [`Self::TAB_LABEL_MIN_CHARS`] the
+    /// width stops shrinking and the strip scrolls instead, which is where
+    /// `scroll_active_chip_into_view` takes over.
+    fn relayout_tab_strip(&self) {
+        let avail = self.tab_scroller.width();
+        if avail <= 0 {
+            return; // not allocated yet; the resize hook will call us again
+        }
+
+        // Pinned chips and the + button keep their natural size: only titled chips flex.
+        let mut fixed = 0;
+        let mut children = 0;
+        let mut flexible: Vec<(gtk4::Box, gtk4::Label)> = Vec::new();
+        let mut child = self.tab_strip.first_child();
+        while let Some(widget) = child {
+            child = widget.next_sibling();
+            children += 1;
+            match widget.downcast::<gtk4::Box>() {
+                Ok(chip) => match Self::chip_label(&chip) {
+                    Some(label) => flexible.push((chip, label)),
+                    None => fixed += chip.measure(gtk4::Orientation::Horizontal, -1).1,
+                },
+                Err(other) => fixed += other.measure(gtk4::Orientation::Horizontal, -1).1,
+            }
+        }
+        if flexible.is_empty() {
+            return;
+        }
+
+        // Everything in a chip that is not the title: favicon, padding, close button. Measured
+        // rather than assumed, so it survives theme and icon-size changes.
+        let overhead = flexible
+            .iter()
+            .map(|(chip, label)| chip.measure(gtk4::Orientation::Horizontal, -1).1 - label.measure(gtk4::Orientation::Horizontal, -1).1)
+            .max()
+            .unwrap_or(0);
+
+        let spacing = self.tab_strip.spacing() * (children - 1).max(0);
+        let per_chip = (avail - fixed - spacing) / flexible.len() as i32;
+
+        // One width for all of them, so tabs stay uniform as they narrow. The char count is
+        // only an estimate - `approximate_char_width` is an average, and chip chrome does not
+        // scale with it - so measure the result and step down until it genuinely fits. Without
+        // the check a nine-tab strip overflowed by a few pixels and scrolled needlessly.
+        let char_width = (flexible[0].1.pango_context().metrics(None, None).approximate_char_width() / gtk4::pango::SCALE).max(1);
+        let mut chars = ((per_chip - overhead) / char_width).clamp(Self::TAB_LABEL_MIN_CHARS, Self::TAB_LABEL_MAX_CHARS);
+        loop {
+            for (_, label) in &flexible {
+                // Only touch labels that actually change: assigning here triggers a resize,
+                // and the resize hook calls back into this function.
+                if label.max_width_chars() != chars {
+                    label.set_width_chars(chars);
+                    label.set_max_width_chars(chars);
+                }
+            }
+            // At the floor we stop shrinking and let the strip scroll instead.
+            if chars <= Self::TAB_LABEL_MIN_CHARS || self.tab_strip.measure(gtk4::Orientation::Horizontal, -1).1 <= avail {
+                return;
+            }
+            chars -= 1;
+        }
+    }
+
+    /// Keep the strip scrolled so the active chip is visible. Without this, activating a tab
+    /// that has overflowed the strip leaves no chip highlighted at all.
+    fn scroll_active_chip_into_view(&self) {
+        let Some(chip) = self.active_tab_id().and_then(|id| self.chip_for_tab(id)) else {
+            return;
+        };
+        let scroller = self.tab_scroller.get();
+
+        // A chip inserted this frame has no allocation yet, so the bounds below would be
+        // meaningless. Wait until the layout has run.
+        glib::idle_add_local_once(move || {
+            let Some(bounds) = chip.compute_bounds(&scroller) else { return };
+            let adj = scroller.hadjustment();
+            // Bounds are relative to the visible viewport, so they are already scroll-adjusted.
+            let (left, right) = (bounds.x() as f64, (bounds.x() + bounds.width()) as f64);
+            if left < 0.0 {
+                adj.set_value(adj.value() + left);
+            } else if right > adj.page_size() {
+                adj.set_value(adj.value() + right - adj.page_size());
+            }
+        });
     }
 
     fn chip_for_tab(&self, tab_id: TabId) -> Option<gtk4::Box> {
@@ -989,6 +1116,7 @@ impl BrowserWindow {
                 DEVICE_PIXEL_RATIO.store(raster_dpr, std::sync::atomic::Ordering::Relaxed);
             }
         }
+        self.scroll_active_chip_into_view();
         self.searchbar.set_progress_fraction(0.0);
         self.update_nav_buttons();
         self.update_reload_button();
