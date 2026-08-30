@@ -320,28 +320,48 @@ impl GosubTabManager {
         self.commands.push(TabCommand::Move(tab_id, self.pinned_tab_order.len() as u32));
     }
 
+    /// Add `tab`, optionally at `position` — an index into the **visible strip** (see
+    /// [`Self::order`]), which is what callers derive from the tab bar and what the view
+    /// expects back on `TabCommand::Insert`. `None` appends.
+    ///
+    /// Pinned tabs occupy the front of the strip, so a pinned tab always lands among the
+    /// pinned and an unpinned one among the unpinned; a strip index pointing into the other
+    /// run is clamped to the nearest valid slot rather than crossing the boundary.
+    ///
+    /// The per-list index must not escape this function. It used to: the emitted position was
+    /// an index into `unpinned_tab_order` while the view applied it to the whole strip, so with
+    /// any pinned tab a new tab landed `pinned_len` slots too far left — and the incoming
+    /// `position`, already a strip index, was inserted into the list as if it were a local one.
     pub fn add_tab(&mut self, tab: GosubTab, position: Option<usize>) -> TabId {
-        let mut real_position = position.unwrap_or(usize::MAX);
+        let tab_id = tab.id();
+        let pinned = tab.is_pinned();
+        let pinned_len = self.pinned_tab_order.len();
 
-        if tab.is_pinned() {
-            if real_position > self.pinned_tab_order.len() {
-                self.pinned_tab_order.push_back(tab.id());
-                real_position = self.pinned_tab_order.len() - 1;
-            } else {
-                self.pinned_tab_order.insert(real_position, tab.id());
-            }
-        } else if real_position > self.unpinned_tab_order.len() {
-            self.unpinned_tab_order.push_back(tab.id());
-            real_position = self.unpinned_tab_order.len() - 1;
+        // Strip index -> index within the list this tab belongs to.
+        let target = match position {
+            None => usize::MAX, // append
+            Some(strip) if pinned => strip.min(pinned_len),
+            Some(strip) => strip.saturating_sub(pinned_len).min(self.unpinned_tab_order.len()),
+        };
+
+        let list = if pinned {
+            &mut self.pinned_tab_order
         } else {
-            self.unpinned_tab_order.insert(real_position, tab.id());
-        }
+            &mut self.unpinned_tab_order
+        };
+        let local = if target > list.len() {
+            list.push_back(tab_id);
+            list.len() - 1
+        } else {
+            list.insert(target, tab_id);
+            target
+        };
 
-        self.commands.push(TabCommand::Insert(tab.id(), real_position as u32));
+        // Report the resting place as a strip index, matching what the view consumes.
+        let global = if pinned { local } else { pinned_len + local };
+        self.commands.push(TabCommand::Insert(tab_id, global as u32));
 
-        let tab_id = tab.id;
         self.tabs.insert(tab_id, tab);
-        // self.set_active(tab_id);
 
         tab_id
     }
@@ -474,7 +494,7 @@ impl GosubTabManager {
 
 #[cfg(test)]
 mod test {
-    use super::{GosubTab, GosubTabManager, TabId};
+    use super::{GosubTab, GosubTabManager, TabCommand, TabId};
     use url::Url;
 
     #[test]
@@ -560,6 +580,60 @@ mod test {
             ids.push(m.add_tab(tab, None));
         }
         (m, ids)
+    }
+
+    /// The emitted `Insert` position must be a STRIP index, not an index into the tab's own
+    /// list. With pinned tabs present the two differ, and the view applies it to the strip.
+    #[test]
+    fn add_tab_emits_a_strip_index_not_a_list_index() {
+        let (mut m, _ids) = strip(); // [P1 P2 U1 U2 U3]
+        let _ = m.commands(); // drain setup commands
+
+        let new = GosubTab::new(Url::parse("about:blank").unwrap(), "new");
+        let new_id = m.add_tab(new, None);
+
+        // Appended at the end of the strip: 2 pinned + 3 unpinned => index 5.
+        assert_eq!(m.order().last(), Some(&new_id), "new tab should be last in the strip");
+        let pos = m.commands().iter().find_map(|c| match c {
+            TabCommand::Insert(id, p) if *id == new_id => Some(*p),
+            _ => None,
+        });
+        assert_eq!(pos, Some(5), "emitted position must be the strip index, not the unpinned index (2)");
+        assert_eq!(m.order().iter().position(|id| *id == new_id), Some(5));
+    }
+
+    /// A caller-supplied position is a strip index too (the shell derives it from the tab bar),
+    /// so it must be translated into the target list rather than used as a local index.
+    #[test]
+    fn add_tab_accepts_a_strip_index_for_its_position() {
+        let (mut m, ids) = strip(); // [P1 P2 U1 U2 U3]
+        let (p1, p2, u1) = (ids[0], ids[1], ids[2]);
+
+        // Strip index 3 is "just after U1" — i.e. the second unpinned slot.
+        let new = GosubTab::new(Url::parse("about:blank").unwrap(), "new");
+        let new_id = m.add_tab(new, Some(3));
+
+        assert_eq!(m.order()[0], p1);
+        assert_eq!(m.order()[1], p2);
+        assert_eq!(m.order()[2], u1);
+        assert_eq!(m.order()[3], new_id, "should land at the requested strip position");
+        assert!(!m.get_tab(new_id).unwrap().is_pinned());
+    }
+
+    /// A strip index pointing into the pinned run clamps to the first unpinned slot rather
+    /// than making the tab pinned — the same boundary rule `reorder` follows.
+    #[test]
+    fn add_tab_clamps_a_position_inside_the_pinned_run() {
+        let (mut m, ids) = strip(); // [P1 P2 U1 U2 U3]
+        let (p1, p2) = (ids[0], ids[1]);
+
+        let new = GosubTab::new(Url::parse("about:blank").unwrap(), "new");
+        let new_id = m.add_tab(new, Some(0)); // would be among the pinned tabs
+
+        assert_eq!(m.order()[0], p1, "pinned tabs keep the front of the strip");
+        assert_eq!(m.order()[1], p2);
+        assert_eq!(m.order()[2], new_id, "clamped to the first unpinned slot");
+        assert!(!m.get_tab(new_id).unwrap().is_pinned());
     }
 
     #[test]
