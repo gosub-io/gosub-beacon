@@ -176,7 +176,11 @@ impl Default for BrowserWindow {
             engine: Rc::new(RefCell::new(None)),
             render_areas: Rc::new(RefCell::new(HashMap::new())),
             last_viewport: Rc::new(Cell::new(None)),
-            beacon: Rc::new(RefCell::new(Beacon::new(tab_manager.clone(), runtime().handle().clone()))),
+            beacon: Rc::new(RefCell::new(Beacon::new(
+                tab_manager.clone(),
+                runtime().handle().clone(),
+                Rc::new(beacon_core::platform::NullPlatform),
+            ))),
             pending_hit_tests: RefCell::new(HashMap::new()),
             next_hit_test_token: Cell::new(1),
             cycle_timer: RefCell::new(None),
@@ -232,6 +236,11 @@ impl ObjectImpl for BrowserWindow {
 
     fn constructed(&self) {
         self.parent_constructed();
+        // The window exists now, so the clipboard and file launcher have something to hang
+        // off; until this point Beacon has been on the no-op platform.
+        self.beacon
+            .borrow_mut()
+            .set_platform(Rc::new(crate::platform::GtkPlatform::new(&self.obj())));
         self.setup_tab_strip_sizing();
         self.setup_downloads_popover();
         self.setup_bookmark_button();
@@ -1789,15 +1798,10 @@ impl BrowserWindow {
                 let open = Button::with_label("Open");
                 open.set_has_frame(false);
                 open.add_css_class("download-open");
-                let path = entry.path.clone();
+                let download_id = entry.id;
                 let window = self.obj().clone();
                 open.connect_clicked(move |_| {
-                    let launcher = gtk4::FileLauncher::new(Some(&gtk4::gio::File::for_path(&path)));
-                    launcher.launch(Some(&window), gtk4::gio::Cancellable::NONE, |result| {
-                        if let Err(e) = result {
-                            log::warn!("open download failed: {e}");
-                        }
-                    });
+                    window.imp().dispatch(BeaconCommand::OpenDownload(download_id));
                 });
                 top.append(&open);
             }

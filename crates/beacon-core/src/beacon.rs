@@ -9,6 +9,7 @@
 //! with widget calls, which meant none of it could be exercised without a display.
 
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use gosub_engine::events::{CursorShape, EngineEvent, NavigationEvent, TabCommand as EngineTabCommand};
@@ -16,6 +17,7 @@ use gosub_engine::events::{CursorShape, EngineEvent, NavigationEvent, TabCommand
 use crate::command::BeaconCommand;
 use crate::download::{DownloadState, Downloads};
 use crate::event::{BeaconEvent, Cursor};
+use crate::platform::Platform;
 use crate::state::{ClosedTabs, MruList};
 use crate::tab::{GosubTabManager, TabId};
 
@@ -34,10 +36,13 @@ pub struct Beacon {
     /// Talking to the engine is async, so applying a command needs somewhere to run the
     /// send. The frontend supplies its runtime rather than this crate owning one.
     rt: tokio::runtime::Handle,
+    /// The desktop, as far as the browser is concerned. `Rc` because this and the frontend
+    /// that implements it both live on the main thread.
+    platform: Rc<dyn Platform>,
 }
 
 impl Beacon {
-    pub fn new(tabs: Arc<Mutex<GosubTabManager>>, rt: tokio::runtime::Handle) -> Self {
+    pub fn new(tabs: Arc<Mutex<GosubTabManager>>, rt: tokio::runtime::Handle, platform: Rc<dyn Platform>) -> Self {
         Self {
             tabs,
             engine_tabs: HashMap::new(),
@@ -45,6 +50,7 @@ impl Beacon {
             mru: MruList::new(),
             closed: ClosedTabs::new(),
             rt,
+            platform,
         }
     }
 
@@ -56,6 +62,20 @@ impl Beacon {
             BeaconCommand::GoToHistoryEntry(entry) => self.send_to_active(EngineTabCommand::GoForward { entry: Some(entry) }),
             BeaconCommand::Reload { ignore_cache } => self.send_to_active(EngineTabCommand::Reload { ignore_cache }),
             BeaconCommand::Stop => self.send_to_active(EngineTabCommand::CancelNavigation),
+
+            BeaconCommand::CopyText(text) => {
+                self.platform.copy_text(&text);
+                Vec::new()
+            }
+            // The frontend knows which row was clicked; where that download landed is ours
+            // to remember. An id we have no record of is ignored rather than fatal.
+            BeaconCommand::OpenDownload(id) => match self.downloads.get(id) {
+                Some(entry) => {
+                    self.platform.open_path(&entry.path);
+                    Vec::new()
+                }
+                None => vec![BeaconEvent::Log(format!("No such download: #{id}"))],
+            },
 
             BeaconCommand::PinTab(tab_id) => {
                 self.tabs.lock().unwrap().pin_tab(tab_id);
@@ -101,6 +121,13 @@ impl Beacon {
             let _ = handle.send(command).await;
         });
         vec![BeaconEvent::LoadingChanged(tab_id, true), BeaconEvent::TabsChanged]
+    }
+
+    /// Install the real platform. A frontend whose implementation needs its own window
+    /// cannot supply one at construction time -- the window does not exist yet -- so
+    /// `Beacon` starts on [`crate::platform::NullPlatform`] and this swaps it in.
+    pub fn set_platform(&mut self, platform: Rc<dyn Platform>) {
+        self.platform = platform;
     }
 
     pub fn tabs(&self) -> &Arc<Mutex<GosubTabManager>> {
@@ -387,6 +414,23 @@ mod tests {
     use gosub_engine::NavigationId;
     use url::Url;
 
+    /// A [`Platform`] that records what it was asked to do, so the tests can check that a
+    /// command actually reached the desktop rather than just returning the right events.
+    #[derive(Default)]
+    struct RecordingPlatform {
+        copied: std::cell::RefCell<Vec<String>>,
+        opened: std::cell::RefCell<Vec<std::path::PathBuf>>,
+    }
+
+    impl Platform for RecordingPlatform {
+        fn copy_text(&self, text: &str) {
+            self.copied.borrow_mut().push(text.to_string());
+        }
+        fn open_path(&self, path: &std::path::Path) {
+            self.opened.borrow_mut().push(path.to_path_buf());
+        }
+    }
+
     /// A runtime for the tests to hand Beacon. Applying a command spawns the engine send
     /// on it; nothing in these tests has a real engine to reach, so it just has to exist.
     fn test_runtime() -> tokio::runtime::Handle {
@@ -405,7 +449,7 @@ mod tests {
             m.add_tab(tab, None);
             m.set_active(tab_id);
         }
-        let mut beacon = Beacon::new(manager, test_runtime());
+        let mut beacon = Beacon::new(manager, test_runtime(), Rc::new(crate::platform::NullPlatform));
         let engine_id = EngineTabId::new();
         beacon.bind_engine_tab(engine_id, tab_id);
         (beacon, tab_id, engine_id)
@@ -601,7 +645,7 @@ mod tests {
     #[test]
     fn a_navigation_command_with_no_active_tab_does_nothing() {
         let manager = Arc::new(Mutex::new(GosubTabManager::new()));
-        let mut beacon = Beacon::new(manager, test_runtime());
+        let mut beacon = Beacon::new(manager, test_runtime(), Rc::new(crate::platform::NullPlatform));
         assert!(beacon.apply(BeaconCommand::Back).is_empty());
         assert!(beacon.apply(BeaconCommand::Reload { ignore_cache: false }).is_empty());
     }
@@ -616,5 +660,43 @@ mod tests {
         // ...and it must not be left looking like a load is under way, or the tab spins
         // forever: nothing is coming back to clear it.
         assert!(!beacon.tabs().lock().unwrap().get_tab(tab_id).unwrap().is_loading());
+    }
+
+    fn beacon_with_recorder() -> (Beacon, Rc<RecordingPlatform>) {
+        let platform = Rc::new(RecordingPlatform::default());
+        let manager = Arc::new(Mutex::new(GosubTabManager::new()));
+        let mut beacon = Beacon::new(manager, test_runtime(), platform.clone());
+        beacon.set_platform(platform.clone());
+        (beacon, platform)
+    }
+
+    #[test]
+    fn copying_reaches_the_platform() {
+        let (mut beacon, platform) = beacon_with_recorder();
+        let out = beacon.apply(BeaconCommand::CopyText("https://example.com/".into()));
+        assert!(out.is_empty(), "copying is not something the frontend has to redraw");
+        assert_eq!(platform.copied.borrow().as_slice(), ["https://example.com/"]);
+    }
+
+    #[test]
+    fn opening_a_download_resolves_the_path_core_recorded() {
+        let (mut beacon, platform) = beacon_with_recorder();
+        let id = beacon.downloads_mut().next_id();
+        beacon
+            .downloads_mut()
+            .start(id, "report.pdf".into(), std::path::PathBuf::from("/tmp/report.pdf"));
+
+        let out = beacon.apply(BeaconCommand::OpenDownload(id));
+        assert!(out.is_empty());
+        // The frontend only knew which row was clicked; the path came from core.
+        assert_eq!(platform.opened.borrow().as_slice(), [std::path::PathBuf::from("/tmp/report.pdf")]);
+    }
+
+    #[test]
+    fn opening_an_unknown_download_says_so_instead_of_launching_something() {
+        let (mut beacon, platform) = beacon_with_recorder();
+        let out = beacon.apply(BeaconCommand::OpenDownload(404));
+        assert!(matches!(out.as_slice(), [BeaconEvent::Log(_)]), "got {out:?}");
+        assert!(platform.opened.borrow().is_empty());
     }
 }

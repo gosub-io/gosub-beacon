@@ -27,6 +27,11 @@ pub enum BeaconCommand {
     /// Stop the active tab's in-flight load.
     Stop,
 
+    /// Put text on the system clipboard (a context-menu "Copy …").
+    CopyText(String),
+    /// Open a finished download in the desktop's default application.
+    OpenDownload(u64),
+
     /// Pin a tab to the left of the strip.
     PinTab(TabId),
     /// Unpin a tab.

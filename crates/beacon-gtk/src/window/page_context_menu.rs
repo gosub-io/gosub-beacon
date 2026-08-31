@@ -122,5 +122,5 @@ fn add_action(group: &SimpleActionGroup, name: &str, f: impl Fn() + 'static) {
 }
 
 fn copy_text(window: &super::BrowserWindow, text: &str) {
-    window.clipboard().set_text(text);
+    window.imp().dispatch(BeaconCommand::CopyText(text.to_string()));
 }
