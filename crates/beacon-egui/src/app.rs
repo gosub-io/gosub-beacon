@@ -22,6 +22,7 @@ use gosub_render_pipeline::render::{argb_u32_to_rgba8, composite_tiles, TileTarg
 use gosub_renderer_vello::{VelloBackend, WgpuContextProvider};
 use tokio::runtime::Runtime;
 
+use crate::chrome::{self, Favicons};
 use crate::context::EguiContextProvider;
 use crate::platform::EguiPlatform;
 
@@ -59,6 +60,9 @@ pub struct BeaconApp {
     status: String,
     cursor: Cursor,
     log: Vec<String>,
+    favicons: Favicons,
+    /// Bookmarks, read from the engine's places store once at startup.
+    bookmarks: Vec<(String, String)>,
 }
 
 impl BeaconApp {
@@ -106,7 +110,10 @@ impl BeaconApp {
             status: String::new(),
             cursor: Cursor::Default,
             log: Vec::new(),
+            favicons: Favicons::default(),
+            bookmarks: Vec::new(),
         };
+        app.bookmarks = app.engine.places().bookmarks().into_iter().map(|b| (b.title, b.url)).collect();
 
         let urls = if urls.is_empty() { vec!["gosub://home".to_string()] } else { urls };
         for url in urls {
@@ -177,6 +184,41 @@ impl BeaconApp {
         });
     }
 
+    /// Switch to a tab: record it, promote it in the MRU list, and follow the address bar.
+    fn activate(&mut self, tab_id: TabId) {
+        self.tabs.lock().unwrap().mark_active(tab_id);
+        self.beacon.mru_mut().touch(tab_id);
+        if let Some(tab) = self.tabs.lock().unwrap().get_tab(tab_id) {
+            self.address_bar = tab.url().to_string();
+        }
+    }
+
+    /// Close a tab, shutting down its engine worker. Refuses the last one, as GTK does --
+    /// a browser with no tabs has nothing to show and no way back.
+    fn close_tab(&mut self, tab_id: TabId) {
+        if self.tabs.lock().unwrap().tab_count() <= 1 {
+            return;
+        }
+        if let Some(handle) = self.tabs.lock().unwrap().get_tab(tab_id).and_then(|t| t.tab_handle()) {
+            self.beacon.unbind_engine_tab(handle.tab_id);
+            self.rt.spawn(async move {
+                let _ = handle.send(TabCommand::CloseTab).await;
+            });
+        }
+        if let Some(tab) = self.tabs.lock().unwrap().get_tab(tab_id) {
+            self.beacon.closed_mut().push(tab.url().to_string(), None);
+        }
+        self.tabs.lock().unwrap().remove_tab(tab_id);
+        self.beacon.mru_mut().forget(tab_id);
+        self.views.remove(&tab_id);
+        self.favicons.forget(tab_id);
+        // remove_tab hands over to a neighbour; follow it so the address bar agrees.
+        let next = self.tabs.lock().unwrap().active();
+        if let Some(next) = next {
+            self.activate(next);
+        }
+    }
+
     fn dispatch(&mut self, command: BeaconCommand) {
         let events = self.beacon.apply(command);
         self.absorb(events);
@@ -222,7 +264,9 @@ impl BeaconApp {
                 }
                 BeaconEvent::TabCrashed(tab_id, _) => {
                     self.views.remove(&tab_id);
+                    self.favicons.forget(tab_id);
                 }
+                BeaconEvent::FaviconChanged(tab_id) => self.favicons.forget(tab_id),
                 // The tab strip, the buttons and the viewport are all rebuilt from current
                 // state every frame, so these need no separate handling in an immediate-mode
                 // UI -- unlike GTK, where each one has a widget to poke.
@@ -232,7 +276,6 @@ impl BeaconApp {
                 | BeaconEvent::TitleChanged(..)
                 | BeaconEvent::LoadingChanged(..)
                 | BeaconEvent::LoadProgress(..)
-                | BeaconEvent::FaviconChanged(_)
                 | BeaconEvent::NavStateChanged(_)
                 | BeaconEvent::NavigationFailed(..)
                 | BeaconEvent::DownloadOffered { .. }
@@ -340,6 +383,8 @@ fn engine_event_name(event: &EngineEvent) -> &'static str {
 impl eframe::App for BeaconApp {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        // Read once: the panel frames below need this while `ui` is borrowed mutably.
+        let faint = ui.visuals().faint_bg_color;
         self.pump_engine();
 
         let Some(active) = self.active() else { return };
@@ -383,58 +428,52 @@ impl eframe::App for BeaconApp {
 
         // ── tab strip ─────────────────────────────────────────────────────
         egui::Panel::top("tabs")
-            .frame(egui::Frame::default().inner_margin(egui::Margin::symmetric(6, 4)))
+            .frame(egui::Frame::default().fill(faint).inner_margin(egui::Margin {
+                left: 6,
+                right: 6,
+                top: 4,
+                bottom: 0,
+            }))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
                     let order = self.tabs.lock().unwrap().order();
-                    let mut activate = None;
-                    let mut close = None;
+                    // Share the strip between tabs, down to a floor -- past that they would
+                    // be unreadable, and a scrolling strip is the lesser evil.
+                    let count = order.len().max(1) as f32;
+                    let room = ui.available_width() - 34.0;
+                    let width = (room / count).clamp(90.0, 240.0);
+
+                    let mut action = None;
                     for tab_id in order {
                         let Some(tab) = self.tabs.lock().unwrap().get_tab(tab_id) else {
                             continue;
                         };
-                        let label = {
-                            let title = tab.title();
-                            let short: String = title.chars().take(28).collect();
-                            if tab.is_loading() {
-                                format!("◌ {short}")
-                            } else {
-                                short
-                            }
-                        };
-                        if ui.selectable_label(Some(tab_id) == self.active(), label).clicked() {
-                            activate = Some(tab_id);
+                        let icon = self.favicons.get(&ctx, tab_id, tab.favicon());
+                        let title = if tab.title().is_empty() { tab.url().as_str() } else { tab.title() };
+                        let (response, closed) =
+                            chrome::tab(ui, title, icon.as_ref(), tab.is_loading(), Some(tab_id) == self.active(), width);
+                        let response = response.on_hover_text(tab.url().as_str());
+                        if closed {
+                            action = Some(chrome::TabAction::Close(tab_id));
+                        } else if response.clicked() {
+                            action = Some(chrome::TabAction::Activate(tab_id));
                         }
-                        if ui.small_button("✕").clicked() {
-                            close = Some(tab_id);
-                        }
-                        ui.separator();
                     }
-                    if ui.small_button("＋").clicked() {
+                    if ui
+                        .add(egui::Button::new(egui::RichText::new("+").size(16.0)).frame(false))
+                        .on_hover_text("New tab")
+                        .clicked()
+                    {
                         if let Some(id) = self.open_tab("gosub://home") {
-                            activate = Some(id);
+                            action = Some(chrome::TabAction::Activate(id));
                         }
                     }
-                    if let Some(tab_id) = activate {
-                        self.tabs.lock().unwrap().set_active(tab_id);
-                        self.beacon.mru_mut().touch(tab_id);
-                        if let Some(tab) = self.tabs.lock().unwrap().get_tab(tab_id) {
-                            self.address_bar = tab.url().to_string();
-                        }
-                    }
-                    if let Some(tab_id) = close {
-                        // Refuse to close the last tab, matching the GTK frontend.
-                        if self.tabs.lock().unwrap().tab_count() > 1 {
-                            if let Some(handle) = self.tabs.lock().unwrap().get_tab(tab_id).and_then(|t| t.tab_handle()) {
-                                self.beacon.unbind_engine_tab(handle.tab_id);
-                                self.rt.spawn(async move {
-                                    let _ = handle.send(TabCommand::CloseTab).await;
-                                });
-                            }
-                            self.tabs.lock().unwrap().remove_tab(tab_id);
-                            self.beacon.mru_mut().forget(tab_id);
-                            self.views.remove(&tab_id);
-                        }
+
+                    match action {
+                        Some(chrome::TabAction::Activate(tab_id)) => self.activate(tab_id),
+                        Some(chrome::TabAction::Close(tab_id)) => self.close_tab(tab_id),
+                        None => {}
                     }
                 });
             });
@@ -444,49 +483,93 @@ impl eframe::App for BeaconApp {
             .frame(egui::Frame::default().inner_margin(egui::Margin::symmetric(8, 6)))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    let (can_back, can_forward, loading) = {
+                    let (can_back, can_forward, loading, url) = {
                         let tabs = self.tabs.lock().unwrap();
                         match tabs.get_tab(active) {
-                            Some(tab) => (tab.history().can_go_back(), tab.history().can_go_forward(), tab.is_loading()),
-                            None => (false, false, false),
+                            Some(tab) => (
+                                tab.history().can_go_back(),
+                                tab.history().can_go_forward(),
+                                tab.is_loading(),
+                                tab.url().clone(),
+                            ),
+                            None => return,
                         }
                     };
-                    if ui.add_enabled(can_back, egui::Button::new("◀")).clicked() {
+
+                    if chrome::tool_button(ui, "\u{2190}", "Back", can_back).clicked() {
                         self.dispatch(BeaconCommand::Back);
                     }
-                    if ui.add_enabled(can_forward, egui::Button::new("▶")).clicked() {
+                    if chrome::tool_button(ui, "\u{2192}", "Forward", can_forward).clicked() {
                         self.dispatch(BeaconCommand::Forward(None));
                     }
                     if loading {
-                        if ui.button("✕").clicked() {
+                        if chrome::tool_button(ui, "\u{2715}", "Stop", true).clicked() {
                             self.dispatch(BeaconCommand::Stop);
                         }
-                    } else if ui.button("⟳").clicked() {
+                    } else if chrome::tool_button(ui, "\u{21bb}", "Reload", true).clicked() {
                         self.dispatch(BeaconCommand::Reload { ignore_cache: false });
                     }
-                    if ui.button("⌂").clicked() {
+                    if chrome::tool_button(ui, "\u{2302}", "Home", true).clicked() {
                         self.navigate_active("gosub://home");
                     }
+                    ui.add_space(4.0);
 
-                    let response = ui.add(
+                    // The address bar takes the room left after the trailing controls, so
+                    // they stay put instead of drifting with the URL length.
+                    let trailing = 30.0;
+                    let response = ui.add_sized(
+                        [ui.available_width() - trailing, ui.spacing().interact_size.y],
                         egui::TextEdit::singleline(&mut self.address_bar)
-                            .desired_width(f32::INFINITY)
-                            .hint_text("Search or enter address"),
+                            .hint_text("Search or enter address")
+                            .vertical_align(egui::Align::Center),
                     );
                     self.address_bar_focused = response.has_focus();
                     if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                         let target = self.address_bar.clone();
                         self.navigate_active(&target);
                     }
+
+                    let bookmarked = self.bookmarks.iter().any(|(_, b)| b.as_str() == url.as_str());
+                    let star = if bookmarked { "\u{2605}" } else { "\u{2606}" };
+                    chrome::tool_button(ui, star, "Bookmark this page", true);
                 });
             });
 
-        // ── status bar ────────────────────────────────────────────────────
+        // ── bookmarks bar ─────────────────────────────────────────────────
+        if !self.bookmarks.is_empty() {
+            egui::Panel::top("bookmarks")
+                .frame(egui::Frame::default().inner_margin(egui::Margin {
+                    left: 10,
+                    right: 8,
+                    top: 0,
+                    bottom: 5,
+                }))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 10.0;
+                        let mut go = None;
+                        for (title, url) in &self.bookmarks {
+                            if ui
+                                .add(egui::Button::new(egui::RichText::new(title).size(12.0)).frame(false))
+                                .on_hover_text(url)
+                                .clicked()
+                            {
+                                go = Some(url.clone());
+                            }
+                        }
+                        if let Some(url) = go {
+                            self.navigate_active(&url);
+                        }
+                    });
+                });
+        }
+
+        // ── status: only while a link is under the pointer ────────────────
         if !self.status.is_empty() {
             egui::Panel::bottom("status")
-                .frame(egui::Frame::default().inner_margin(egui::Margin::symmetric(6, 2)))
+                .frame(egui::Frame::default().fill(faint).inner_margin(egui::Margin::symmetric(8, 3)))
                 .show(ui, |ui| {
-                    ui.label(egui::RichText::new(&self.status).small());
+                    ui.label(egui::RichText::new(&self.status).size(11.0).color(ui.visuals().weak_text_color()));
                 });
         }
 

@@ -15,6 +15,8 @@ gosub_renderer_vello.workspace = true
 
 eframe.workspace = true
 egui.workspace = true
+# Favicons arrive as encoded PNG/ICO; already in the graph via the render stack.
+image = { version = "0.25", default-features = false, features = ["png", "ico", "jpeg", "gif"] }
 vello.workspace = true
 
 anyhow.workspace = true

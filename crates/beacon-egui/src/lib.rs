@@ -7,6 +7,7 @@
 //! — the chrome is rebuilt from current state on every frame.
 
 mod app;
+mod chrome;
 mod context;
 mod platform;
 
