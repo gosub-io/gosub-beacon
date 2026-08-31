@@ -7,7 +7,7 @@
 #   crates/beacon-gtk   the GTK4 frontend
 [workspace]
 resolver = "2"
-members = ["crates/beacon", "crates/beacon-core", "crates/beacon-gtk"]
+members = ["crates/beacon", "crates/beacon-core", "crates/beacon-egui", "crates/beacon-gtk"]
 # `cargo run` / `cargo build` with no `-p` mean the browser.
 default-members = ["crates/beacon"]
 
@@ -27,6 +27,7 @@ license = "MIT"
 gosub_engine = { path = "../gosub-engine/crates/gosub_engine", features = ["sqlite_cookie_store", "sqlite_places"] }
 gosub_render_pipeline = { path = "../gosub-engine/crates/gosub_render_pipeline" }
 gosub_renderer_skia = { path = "../gosub-engine/crates/gosub_renderer_skia" }
+gosub_renderer_vello = { path = "../gosub-engine/crates/gosub_renderer_vello" }
 
 # Skia rasterizes tiles on the CPU; compositing happens on the GPU via GtkGLArea
 # (see crates/beacon-gtk/src/engine.rs). Must match the engine workspace's skia-safe.
@@ -34,6 +35,13 @@ skia-safe = { version = "0.99.0", features = ["gl"] }
 # gtk4 must match the version the engine's `gtk4` feature pins.
 gtk4 = { version = "0.11.1", features = ["v4_6", "v4_14"] }
 gtk-macros = "0.3"
+
+# The egui frontend renders through Vello on wgpu. Versions match the engine workspace's,
+# and so does the vello patch below -- gosub_renderer_vello is built against that rev.
+eframe = { version = "0.35.0", features = ["wgpu"] }
+egui = "0.35.0"
+vello = "0.8.0"
+parking_lot = "0.12"
 glib-build-tools = "0.21.0"
 
 anyhow = "1.0.95"
@@ -51,6 +59,12 @@ reqwest = { version = "0.12.11", features = ["gzip", "brotli", "deflate", "http2
 tokio = { version = "1.42.0", features = ["rt-multi-thread", "macros", "sync", "time"] }
 url = "2.5.2"
 uuid = { version = "1.11.0", features = ["v4", "v7"] }
+
+# gosub_renderer_vello is compiled against this rev, not the crates.io release. Without
+# the same patch the engine workspace uses, two incompatible vellos end up in the graph.
+[patch.crates-io]
+vello = { git = "https://github.com/linebender/vello", rev = "1b24e77ba4e01d12f5db86a9b1b5f2cf828a6a33" }
+vello_encoding = { git = "https://github.com/linebender/vello", rev = "1b24e77ba4e01d12f5db86a9b1b5f2cf828a6a33" }
 
 # Dev builds must stay fast enough to actually browse with: the engine's render
 # pipeline and the frame blit in beacon-gtk's engine.rs are per-pixel CPU work that is

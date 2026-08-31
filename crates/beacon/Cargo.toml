@@ -12,5 +12,13 @@ license.workspace = true
 name = "gosub-beacon"
 path = "src/main.rs"
 
+[features]
+# GTK is the frontend that has parity today, so it stays the default. egui is built with
+#   cargo run -p gosub-beacon --no-default-features --features egui
+default = ["gtk"]
+gtk = ["dep:beacon-gtk"]
+egui = ["dep:beacon-egui"]
+
 [dependencies]
-beacon-gtk = { path = "../beacon-gtk" }
+beacon-gtk = { path = "../beacon-gtk", optional = true }
+beacon-egui = { path = "../beacon-egui", optional = true }
