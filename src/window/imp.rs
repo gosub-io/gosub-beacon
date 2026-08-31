@@ -757,11 +757,34 @@ impl BrowserWindow {
 
     /// Re-share the strip width whenever the viewport resizes. The horizontal adjustment's
     /// page size *is* the viewport width, and unlike the widget there is a signal for it.
+    ///
+    /// Also makes the wheel scroll the strip. A `ScrolledWindow` whose vertical policy is
+    /// `never` does NOT fold a vertical wheel delta into horizontal motion by itself, so
+    /// without this controller the wheel over the tab strip does nothing at all and the only
+    /// thing that can move the strip is `scroll_active_chip_into_view`.
     fn setup_tab_strip_sizing(&self) {
         let window = self.obj().clone();
         self.tab_scroller.hadjustment().connect_page_size_notify(move |_| {
             window.imp().relayout_tab_strip();
         });
+
+        let scroll =
+            gtk4::EventControllerScroll::new(gtk4::EventControllerScrollFlags::BOTH_AXES | gtk4::EventControllerScrollFlags::DISCRETE);
+        let scroller = self.tab_scroller.get();
+        scroll.connect_scroll(move |_, dx, dy| {
+            let adj = scroller.hadjustment();
+            // A plain wheel reports on the vertical axis and a tilt wheel on the horizontal
+            // one; the strip only moves sideways, so take whichever axis actually moved.
+            let delta = if dx.abs() > dy.abs() { dx } else { dy };
+            if delta == 0.0 {
+                return glib::Propagation::Proceed;
+            }
+            let step = adj.step_increment().max(48.0);
+            let max = (adj.upper() - adj.page_size()).max(adj.lower());
+            adj.set_value((adj.value() + delta * step).clamp(adj.lower(), max));
+            glib::Propagation::Stop
+        });
+        self.tab_scroller.add_controller(scroll);
     }
 
     fn chips(&self) -> Vec<gtk4::Box> {
