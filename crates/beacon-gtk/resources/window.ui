@@ -23,9 +23,18 @@
                             <class name="tab-row"/>
                         </style>
                         <child>
+                            <!-- automatic, NOT external: `external` does not merely hide the
+                                 scrollbar, it tells GTK the adjustment is driven from outside, and
+                                 the scrolled window then ignores scroll events on that axis - so
+                                 the strip could not be scrolled by hand at all. Overlay scrolling
+                                 keeps the indicator off the layout, so the row does not grow. -->
                             <object class="GtkScrolledWindow" id="tab_scroller">
-                                <property name="hscrollbar-policy">external</property>
+                                <property name="hscrollbar-policy">automatic</property>
                                 <property name="vscrollbar-policy">never</property>
+                                <property name="overlay-scrolling">True</property>
+                                <style>
+                                    <class name="tab-scroller"/>
+                                </style>
                                 <property name="hexpand">True</property>
                                 <child>
                                     <!-- Chips only. The strip holds nothing else, which is what

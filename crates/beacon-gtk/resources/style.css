@@ -57,6 +57,32 @@ box.tab-row {
     background: alpha(@theme_fg_color, 0.04);
     border-bottom: 1px solid alpha(@theme_fg_color, 0.08);
 }
+/* The strip scrolls by wheel, so the scrollbar exists for input, not for looks. GTK expands
+   an overlay indicator whenever the pointer is near it -- and on a tab strip the pointer is
+   always near it -- which drew a thick bar straight across the chip labels. Pin it to a thin
+   line at the bottom edge in every state, hover and drag included. */
+.tab-scroller scrollbar.horizontal {
+    background: none;
+    border: none;
+    margin: 0;
+    padding: 0;
+}
+.tab-scroller scrollbar.horizontal slider,
+.tab-scroller scrollbar.horizontal:hover slider,
+.tab-scroller scrollbar.horizontal.hovering slider,
+.tab-scroller scrollbar.horizontal.dragging slider {
+    min-height: 3px;
+    min-width: 28px;
+    margin: 0;
+    border: none;
+    border-radius: 2px;
+    background: alpha(@theme_fg_color, 0.25);
+}
+.tab-scroller scrollbar.horizontal.dragging slider,
+.tab-scroller scrollbar.horizontal.hovering slider {
+    background: alpha(@theme_fg_color, 0.4);
+}
+
 /* The chip is a box, not a button: the close button has to be a SIBLING of the label
    toggle, because GTK4 never delivers clicks to a button nested inside another button.
    The box carries the chip's look; selection rides on an `active` class, since a box has
