@@ -4,8 +4,8 @@
 //! Copy for text, and the always-present navigation trio.
 
 use crate::runtime;
-use crate::tab::TabId;
 use crate::window::message::Message;
+use beacon_core::tab::TabId;
 use gosub_engine::events::{HitTestResponse, TabCommand as EngineTabCommand};
 use gtk4::gio::{Menu, SimpleAction, SimpleActionGroup};
 use gtk4::graphene::Point;

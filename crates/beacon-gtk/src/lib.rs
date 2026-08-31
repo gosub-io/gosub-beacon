@@ -4,14 +4,10 @@
 //! This is one possible host for the browser, not the browser itself. Everything that is
 //! not a widget is on its way out to `beacon-core`; what stays here is GTK.
 
-mod address_parser;
 mod application;
-mod cli;
 mod dialog;
-pub mod engine;
 mod fetch;
-mod session;
-mod tab;
+pub mod render;
 mod theme;
 mod window;
 
@@ -50,7 +46,7 @@ pub fn run() {
 
     // Parse argv first: `--help` / `--version` must answer cleanly, without a display.
     // Everything downstream reads the parsed result rather than re-scanning argv.
-    let cli = crate::cli::Cli::init();
+    let cli = beacon_core::cli::Cli::init();
 
     gtk4::init().unwrap();
 

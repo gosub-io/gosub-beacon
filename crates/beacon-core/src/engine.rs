@@ -1,25 +1,26 @@
-//! Thin wrapper around the new (local `../engine`) `GosubEngine`.
+//! Owning and configuring the Gosub engine: zones, profile storage, settings and
+//! internal pages.
 //!
-//! The new engine is fully asynchronous and owns networking, cookies, storage and the
-//! render pipeline. A browser tab maps onto an engine [`TabHandle`]. Skia rasterizes
-//! pages into CPU tile buffers; the [`DefaultCompositor`] delivers them as
-//! `ExternalHandle::TileCache` frames, which [`render_frame_gl`] composites on the GPU
-//! into a `GtkGLArea`'s framebuffer.
+//! The engine is fully asynchronous and owns networking, cookies, storage and the render
+//! pipeline. A browser tab maps onto an engine [`TabHandle`]. Frames arrive through the
+//! shared [`DefaultCompositor`] as `ExternalHandle::TileCache`; getting those onto a
+//! screen is a frontend's job, not this module's.
+//!
+//! [`BrowserEngine`] is generic over the engine's render configuration, so the choice of
+//! rasterizer (Skia, Vello, Cairo) belongs to whichever frontend constructs it. That is
+//! deliberate: the moment this crate names a renderer, every frontend inherits it.
 
 use std::sync::Arc;
 
-use gtk4::prelude::*;
-
 use gosub_engine::cookies::SqliteCookieStore;
 use gosub_engine::events::EngineEvent;
+use gosub_engine::html::RenderConfiguration;
 use gosub_engine::places::SqlitePlaces;
 use gosub_engine::storage::{InMemorySessionStore, PartitionPolicy, SqliteLocalStore, StorageService};
 use gosub_engine::tab::{TabDefaults, TabHandle};
 use gosub_engine::zone::{Zone, ZoneConfig, ZoneId, ZoneServices};
-use gosub_engine::{DefaultRenderConfig, GosubEngine};
-use gosub_render_pipeline::render::backend::{anchored_tile_pos, ExternalHandle};
+use gosub_engine::GosubEngine;
 use gosub_render_pipeline::render::DefaultCompositor;
-use gosub_renderer_skia::{SkiaBackend, SkiaFontSystem};
 use tokio::runtime::Runtime;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
@@ -27,42 +28,26 @@ use uuid::uuid;
 
 const DEFAULT_ZONE: uuid::Uuid = uuid!("f1234567-abcd-4000-8000-000000000001");
 
-/// Per-user data directory holding the profile databases (cookies, local storage,
-/// settings): `$XDG_DATA_HOME/gosub-beacon`, i.e. `~/.local/share/gosub-beacon` by
-/// default. Created on first use. Falls back to the working directory if the XDG dir
-/// cannot be created, so a locked-down environment still gets a working (if
-/// non-standard) profile.
-pub fn data_dir() -> std::path::PathBuf {
-    // `--user-data-dir` wins over the XDG location, so a scratch profile can be used without
-    // touching the real one.
-    let dir = match &crate::cli::Cli::global().user_data_dir {
-        Some(dir) => dir.clone(),
-        None => gtk4::glib::user_data_dir().join("gosub-beacon"),
-    };
-    if let Err(e) = std::fs::create_dir_all(&dir) {
-        log::warn!("cannot create data dir {}: {e}; using the working directory", dir.display());
-        return std::path::PathBuf::from(".");
-    }
-    dir
-}
-
-/// The engine is generic over a render configuration; we rasterize through Skia.
-type AppConfig = DefaultRenderConfig<SkiaBackend, SkiaFontSystem>;
-
 /// Engine TabId, re-exported for callers that need to key on the engine's identifier.
 pub type EngineTabId = gosub_engine::tab::TabId;
+
+/// What a frontend's render configuration has to satisfy to be hosted here. The
+/// `CompositorSink` is pinned to [`DefaultCompositor`] because that is the frame channel
+/// [`BrowserEngine::compositor`] hands out.
+pub trait BeaconConfig: RenderConfiguration<CompositorSink = DefaultCompositor> {}
+impl<C: RenderConfiguration<CompositorSink = DefaultCompositor>> BeaconConfig for C {}
 
 /// Owns the running engine, a single default zone and the shared compositor.
 ///
 /// Created once per browser window. The engine itself runs on the shared tokio runtime;
 /// this struct lives on the GTK main thread.
-pub struct BrowserEngine {
+pub struct BrowserEngine<C: BeaconConfig> {
     /// Bookmarks + visited history store, shared with the engine's zone.
     places: gosub_engine::places::PlacesHandle,
     /// Kept alive so the engine keeps running for the lifetime of the window.
     #[allow(dead_code)]
-    engine: GosubEngine<AppConfig>,
-    zone: Zone<AppConfig>,
+    engine: GosubEngine<C>,
+    zone: Zone<C>,
     /// Shared compositor; clone the `Arc` into draw callbacks to read frames.
     pub compositor: Arc<DefaultCompositor>,
     /// Fires (after `take_redraw_rx`) whenever a new frame is composited.
@@ -72,16 +57,18 @@ pub struct BrowserEngine {
     event_rx: Option<broadcast::Receiver<EngineEvent>>,
 }
 
-impl BrowserEngine {
+impl<C: BeaconConfig> BrowserEngine<C> {
     /// Build and start the engine. Must be called with `rt` as the active tokio runtime
     /// for engine tasks to spawn correctly.
+    ///
+    /// `backend` is the frontend's rasterizer; the engine takes ownership of it.
     ///
     /// A `private` engine backs a private-browsing window: cookies, local storage and
     /// session storage live in memory only, and the engine records no visited history.
     /// Settings are still read from (and written to) the shared store, and the persistent
     /// bookmarks/history remain readable for the UI (bookmarks bar, URL completion) —
     /// matching what mainstream browsers do in private mode.
-    pub fn new(rt: &Runtime, private: bool) -> anyhow::Result<Self> {
+    pub fn new(rt: &Runtime, private: bool, backend: Arc<C::RenderBackend>) -> anyhow::Result<Self> {
         let _guard = rt.enter();
 
         let (tx_redraw, rx_redraw) = mpsc::unbounded_channel::<()>();
@@ -89,10 +76,9 @@ impl BrowserEngine {
             let _ = tx_redraw.send(());
         }));
 
-        let backend = SkiaBackend::new();
-        let mut engine = GosubEngine::<AppConfig>::new(None, Arc::new(backend), compositor.clone());
+        let mut engine = GosubEngine::<C>::new(None, backend, compositor.clone());
 
-        let data_dir = data_dir();
+        let data_dir = crate::paths::data_dir();
 
         // Beacon's own settings, merged into the engine's store under the `useragent`
         // namespace the client schema already owns. Registering here rather than editing the
@@ -285,156 +271,6 @@ impl BrowserEngine {
             .map_err(|e| anyhow::anyhow!("create_tab: {e:?}"))?;
         Ok(tab)
     }
-}
-
-/// Resolve the device-pixel ratio to render at for `widget`.
-///
-/// `GtkWidget::scale_factor()` only ever reports an integer, so on a fractionally
-/// scaled display (e.g. 1.25× or 1.5×, common on Wayland) it returns 1 and the page
-/// is rasterized at logical resolution — the compositor then upscales the whole
-/// surface, blurring text. `GdkSurface::scale()` exposes the true fractional scale;
-/// round it *up* and render at that resolution: downscaling a slightly-too-large
-/// buffer stays sharp, upscaling a too-small one does not.
-pub fn render_dpr(widget: &impl IsA<gtk4::Widget>) -> u32 {
-    let widget = widget.upcast_ref::<gtk4::Widget>();
-    let fractional = widget
-        .native()
-        .and_then(|n| n.surface())
-        .map(|s| s.scale())
-        .filter(|s| *s > 0.0)
-        .unwrap_or_else(|| widget.scale_factor() as f64);
-    fractional.ceil().max(1.0) as u32
-}
-
-// Link libGL so glGetIntegerv resolves (used to query GTK4's bound FBO).
-#[link(name = "GL")]
-extern "C" {}
-
-/// Query the framebuffer GTK4 bound for the current `GLArea` render pass.
-fn bound_framebuffer() -> u32 {
-    extern "C" {
-        fn glGetIntegerv(pname: u32, data: *mut i32);
-    }
-    let mut fbo = 0i32;
-    unsafe {
-        glGetIntegerv(0x8CA6 /* GL_DRAW_FRAMEBUFFER_BINDING */, &mut fbo)
-    };
-    fbo as u32
-}
-
-/// Composite the latest tile frame for `tab_id` into the currently bound GL framebuffer.
-///
-/// Must run on the GTK main thread with the `GLArea`'s GL context current (i.e. from
-/// `connect_render`), with `dc` the Skia `DirectContext` created on that same context.
-/// `phys_w`/`phys_h` are the framebuffer size in physical pixels. Clears to white when
-/// no frame is available yet.
-pub fn render_frame_gl(
-    compositor: &Arc<DefaultCompositor>,
-    tab_id: EngineTabId,
-    dc: &mut skia_safe::gpu::DirectContext,
-    phys_w: i32,
-    phys_h: i32,
-    target_scale: f64,
-) {
-    if phys_w <= 0 || phys_h <= 0 {
-        return;
-    }
-
-    // We share this GL context with GTK, which mutates state Skia caches (scissor, blend, bound
-    // FBO, viewport). Without this, Skia keeps drawing against a stale idea of that state, which
-    // shows up as region-shaped artifacts -- e.g. a corner that stays unpainted.
-    dc.reset(None);
-
-    let fb_info = skia_safe::gpu::gl::FramebufferInfo {
-        fboid: bound_framebuffer(),
-        format: 0x8058, // GL_RGBA8
-        protected: skia_safe::gpu::Protected::No,
-    };
-    let target = skia_safe::gpu::backend_render_targets::make_gl((phys_w, phys_h), None, 8, fb_info);
-    let Some(mut surface) = skia_safe::gpu::surfaces::wrap_backend_render_target(
-        dc,
-        &target,
-        skia_safe::gpu::SurfaceOrigin::BottomLeft,
-        skia_safe::ColorType::RGBA8888,
-        None,
-        None,
-    ) else {
-        log::warn!("failed to wrap GTK framebuffer as Skia surface");
-        return;
-    };
-
-    {
-        let canvas = surface.canvas();
-        canvas.clear(skia_safe::Color4f::new(1.0, 1.0, 1.0, 1.0));
-
-        // `target_scale` is the physical-px-per-CSS-px the shell wants on screen (display
-        // scale × page zoom). Tiles arrive rasterized at `tile_dpr`; the difference is bridged
-        // here, which also keeps stale tiles (rasterized at the previous zoom's dpr) at the
-        // correct on-screen size until fresh ones land.
-        let correction = match compositor.frame_for(tab_id) {
-            Some(ExternalHandle::TileCache { dpr: tile_dpr, .. }) => target_scale / tile_dpr.max(1) as f64,
-            _ => 1.0,
-        };
-        if (correction - 1.0).abs() > 1e-3 {
-            canvas.scale((correction as f32, correction as f32));
-        }
-
-        // Cull bounds live in CANVAS space, which the scale above has divorced from physical
-        // pixels: a tile at canvas x maps to screen x * correction. Comparing raw canvas
-        // coordinates against the physical surface size drops every tile past
-        // `phys_w`, even though anything up to `phys_w / correction` is still on screen --
-        // which is why zooming in used to leave a blank band down the right-hand side.
-        let cull_w = (phys_w as f64 / correction).ceil() as i32;
-        let cull_h = (phys_h as f64 / correction).ceil() as i32;
-
-        if let Some(ExternalHandle::TileCache {
-            dpr,
-            scroll_x,
-            scroll_y,
-            tiles,
-            ..
-        }) = compositor.frame_for(tab_id)
-        {
-            for tile in tiles.iter() {
-                // anchored_tile_pos handles scroll / fixed / sticky uniformly (in CSS px);
-                // scale the result to physical pixels for the GL surface.
-                let (vx, vy) = anchored_tile_pos(
-                    tile.page_x as f64,
-                    tile.page_y as f64,
-                    scroll_x as f64,
-                    scroll_y as f64,
-                    tile.anchor,
-                );
-                let px = (vx * dpr as f64).round() as i32;
-                let py = (vy * dpr as f64).round() as i32;
-                let tw = tile.width as i32;
-                let th = tile.height as i32;
-
-                if px >= cull_w || py >= cull_h || px + tw <= 0 || py + th <= 0 {
-                    continue;
-                }
-
-                // Tile data is BGRA premultiplied (Cairo ARGB32 LE byte order).
-                let info = skia_safe::ImageInfo::new((tw, th), skia_safe::ColorType::BGRA8888, skia_safe::AlphaType::Premul, None);
-                let stride = (tw * 4) as usize;
-                if tile.data.len() < th as usize * stride {
-                    continue;
-                }
-                if let Some(image) = skia_safe::images::raster_from_data(&info, skia_safe::Data::new_copy(&tile.data), stride) {
-                    // Fade the whole tile by its layer's group opacity.
-                    let paint = (tile.opacity < 1.0).then(|| {
-                        let mut p = skia_safe::Paint::default();
-                        p.set_alpha_f(tile.opacity);
-                        p
-                    });
-                    canvas.draw_image(&image, (px as f32, py as f32), paint.as_ref());
-                }
-            }
-        }
-    }
-
-    dc.flush_surface(&mut surface);
-    dc.submit(skia_safe::gpu::SyncCpu::No);
 }
 
 /// Minimal HTML escaping for the bookmarks page.

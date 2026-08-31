@@ -1,4 +1,4 @@
-use crate::tab::TabId;
+use beacon_core::tab::TabId;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
 

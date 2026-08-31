@@ -16,7 +16,7 @@ pub struct SessionTab {
 }
 
 fn path() -> PathBuf {
-    crate::engine::data_dir().join("session.tabs")
+    crate::paths::data_dir().join("session.tabs")
 }
 
 /// The previous session's tabs; empty when there is none (or it cannot be read).

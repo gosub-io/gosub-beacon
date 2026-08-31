@@ -1,10 +1,12 @@
-use crate::address_parser::{GosubAddressParser, GosubRenderMode};
-use crate::engine::{render_frame_gl, BrowserEngine, EngineTabId};
+use crate::render::{render_frame_gl, BrowserEngine};
 use crate::runtime;
-use crate::tab::{GosubTab, GosubTabManager, HistoryEntryId, TabCommand, TabId};
 use crate::window::message::Message;
 use crate::window::tab_context_menu::{build_context_menu, setup_context_menu_actions, TabInfo};
 use async_channel::{Receiver, Sender};
+use beacon_core::address_parser::{GosubAddressParser, GosubRenderMode};
+use beacon_core::engine::EngineTabId;
+use beacon_core::state::{ClosedTabs, MruList};
+use beacon_core::tab::{GosubTab, GosubTabManager, HistoryEntryId, TabCommand, TabId};
 use glib::subclass::InitializingObject;
 use gosub_engine::events::{EngineEvent, NavigationEvent, TabCommand as EngineTabCommand};
 use gtk4::gio::SimpleActionGroup;
@@ -142,13 +144,10 @@ pub struct BrowserWindow {
     /// Source of hit-test tokens.
     pub next_hit_test_token: Cell<u64>,
 
-    /// Tabs in most-recently-used order, most recent first. Drives Ctrl+Tab cycling.
-    pub mru: RefCell<Vec<TabId>>,
-    /// Position within `mru` while a Ctrl+Tab cycle is in flight. `None` when not cycling.
-    /// While cycling, activating a tab must NOT reorder `mru`, or every press would just
-    /// ping-pong between two tabs instead of walking the list.
-    pub cycle_index: Cell<Option<usize>>,
-    /// Fires when the cycle has settled; commits the landed tab to the front of `mru`.
+    /// Tabs in most-recently-used order plus any in-flight Ctrl+Tab cycle. The rules
+    /// live in `beacon_core::state`; the window only owns the settle timer below.
+    pub mru: RefCell<MruList>,
+    /// Fires when the cycle has settled; commits the landed tab to the front of the list.
     pub cycle_timer: RefCell<Option<glib::SourceId>>,
     /// Source of download ids.
     pub next_download_id: Cell<u64>,
@@ -160,8 +159,8 @@ pub struct BrowserWindow {
     completion: RefCell<Option<(Popover, gtk4::ListBox)>>,
     /// Per-tab page zoom, shared with each render area's input/draw closures.
     tab_zoom: RefCell<HashMap<TabId, Rc<Cell<f64>>>>,
-    /// Recently closed tabs as (url, strip position), newest last (Ctrl+Shift+T pops).
-    closed_tabs: RefCell<Vec<(String, usize)>>,
+    /// Recently closed tabs, newest last (Ctrl+Shift+T pops).
+    closed_tabs: RefCell<ClosedTabs>,
     /// Whether this is a private-browsing window (ephemeral engine, no history recording).
     pub private: Cell<bool>,
 }
@@ -199,15 +198,14 @@ impl Default for BrowserWindow {
             engine_tab_map: Rc::new(RefCell::new(HashMap::new())),
             pending_hit_tests: RefCell::new(HashMap::new()),
             next_hit_test_token: Cell::new(1),
-            mru: RefCell::new(Vec::new()),
-            cycle_index: Cell::new(None),
+            mru: RefCell::new(MruList::new()),
             cycle_timer: RefCell::new(None),
             next_download_id: Cell::new(1),
             downloads: RefCell::new(Vec::new()),
             downloads_list: RefCell::new(None),
             completion: RefCell::new(None),
             tab_zoom: RefCell::new(HashMap::new()),
-            closed_tabs: RefCell::new(Vec::new()),
+            closed_tabs: RefCell::new(ClosedTabs::new()),
             private: Cell::new(false),
         }
     }
@@ -443,10 +441,7 @@ impl BrowserWindow {
             return;
         }
         if let Some(tab) = manager.get_tab(tab_id) {
-            let mut closed = self.closed_tabs.borrow_mut();
-            closed.push((tab.url().to_string(), position.unwrap_or(usize::MAX)));
-            let overflow = closed.len().saturating_sub(25);
-            closed.drain(..overflow);
+            self.closed_tabs.borrow_mut().push(tab.url().to_string(), position);
         }
         let handle = manager.get_tab(tab_id).and_then(|t| t.tab_handle());
         manager.remove_tab(tab_id);
@@ -478,11 +473,10 @@ impl BrowserWindow {
 
     /// Reopen the most recently closed tab at its old position (Ctrl+Shift+T).
     pub(crate) fn reopen_closed_tab(&self) {
-        let Some((url, position)) = self.closed_tabs.borrow_mut().pop() else {
+        let Some(closed) = self.closed_tabs.borrow_mut().pop() else {
             return;
         };
-        let position = (position != usize::MAX).then_some(position);
-        if let Some(tab_id) = self.open_tab(position, &url, "New Tab") {
+        if let Some(tab_id) = self.open_tab(closed.position, &closed.url, "New Tab") {
             self.activate_tab(tab_id);
         }
     }
@@ -531,7 +525,7 @@ impl BrowserWindow {
             match result {
                 Ok(bytes) => {
                     let source = String::from_utf8_lossy(&bytes);
-                    let html = super::source_page::build(inner.as_str(), &source, !raw);
+                    let html = beacon_core::source_page::build(inner.as_str(), &source, !raw);
                     let _ = handle
                         .send(EngineTabCommand::LoadHtml {
                             html,
@@ -555,11 +549,11 @@ impl BrowserWindow {
         }
         let active = self.active_tab_id();
         let manager = self.tab_manager.lock().unwrap();
-        let tabs: Vec<crate::session::SessionTab> = manager
+        let tabs: Vec<beacon_core::session::SessionTab> = manager
             .order()
             .iter()
             .filter_map(|id| {
-                manager.get_tab(*id).map(|t| crate::session::SessionTab {
+                manager.get_tab(*id).map(|t| beacon_core::session::SessionTab {
                     url: t.url().to_string(),
                     pinned: t.is_pinned(),
                     active: Some(*id) == active,
@@ -568,7 +562,7 @@ impl BrowserWindow {
             .collect();
         drop(manager);
         if !tabs.is_empty() {
-            crate::session::save(&tabs);
+            beacon_core::session::save(&tabs);
         }
     }
 
@@ -976,17 +970,13 @@ impl BrowserWindow {
 
     /// Move `tab_id` to the front of the MRU list (inserting it if new).
     pub(crate) fn touch_mru(&self, tab_id: TabId) {
-        let mut mru = self.mru.borrow_mut();
-        mru.retain(|id| *id != tab_id);
-        mru.insert(0, tab_id);
+        self.mru.borrow_mut().touch(tab_id);
     }
 
-    /// Drop a closed tab from the MRU list.
+    /// Drop a closed tab from the MRU list, abandoning the cycle if too little is left.
     pub(crate) fn forget_mru(&self, tab_id: TabId) {
-        self.mru.borrow_mut().retain(|id| *id != tab_id);
-        let too_few = self.mru.borrow().len() < 2;
-        if too_few {
-            self.cancel_cycle();
+        if self.mru.borrow_mut().forget(tab_id) {
+            self.clear_cycle_timer();
         }
     }
 
@@ -996,15 +986,8 @@ impl BrowserWindow {
     /// third tab and beyond rather than bouncing between two. A short idle timer ends the
     /// cycle and commits wherever it landed.
     pub(crate) fn cycle_tab(&self, direction: i32) {
-        let target = {
-            let mru = self.mru.borrow();
-            if mru.len() < 2 {
-                return;
-            }
-            let from = self.cycle_index.get().unwrap_or(0) as i32;
-            let next = (from + direction).rem_euclid(mru.len() as i32) as usize;
-            self.cycle_index.set(Some(next));
-            mru[next]
+        let Some(target) = self.mru.borrow_mut().step(direction) else {
+            return;
         };
         self.activate_tab(target);
         self.restart_cycle_timer();
@@ -1027,19 +1010,15 @@ impl BrowserWindow {
     /// End the cycle, promoting the tab it landed on to the front of the MRU list.
     fn commit_cycle(&self) {
         self.cycle_timer.borrow_mut().take();
-        if self.cycle_index.take().is_some() {
-            if let Some(tab_id) = self.active_tab_id() {
-                self.touch_mru(tab_id);
-            }
-        }
+        let active = self.active_tab_id();
+        self.mru.borrow_mut().commit(active);
     }
 
-    /// Abandon a cycle without committing (e.g. the tab it was walking went away).
-    fn cancel_cycle(&self) {
+    /// Drop the settle timer. The list has already ended the cycle on its own side.
+    fn clear_cycle_timer(&self) {
         if let Some(id) = self.cycle_timer.borrow_mut().take() {
             id.remove();
         }
-        self.cycle_index.set(None);
     }
 
     /// Ctrl+1..8 select that position in the visible strip; Ctrl+9 is always the last tab,
@@ -1090,9 +1069,7 @@ impl BrowserWindow {
     pub(crate) fn activate_tab(&self, tab_id: TabId) {
         // A cycle in progress is *previewing* tabs; reordering now would collapse the walk
         // into a two-tab ping-pong. `commit_cycle` promotes the landing tab instead.
-        if self.cycle_index.get().is_none() {
-            self.touch_mru(tab_id);
-        }
+        self.touch_mru(tab_id);
         for chip in self.chips() {
             Self::set_chip_active(&chip, chip.get_tab_id() == Some(tab_id));
         }
@@ -1121,7 +1098,7 @@ impl BrowserWindow {
             let zoom_level = self.tab_zoom.borrow().get(&tab_id).map(|z| z.get()).unwrap_or(1.0);
             if let Some(area) = self.render_areas.borrow().get(&tab_id) {
                 use gosub_render_pipeline::render::DEVICE_PIXEL_RATIO;
-                let raster_dpr = ((crate::engine::render_dpr(area) as f64 * zoom_level).ceil() as u32).clamp(1, 4);
+                let raster_dpr = ((crate::render::render_dpr(area) as f64 * zoom_level).ceil() as u32).clamp(1, 4);
                 DEVICE_PIXEL_RATIO.store(raster_dpr, std::sync::atomic::Ordering::Relaxed);
             }
         }
@@ -1256,8 +1233,8 @@ impl BrowserWindow {
     }
 
     fn create_pinned_tab_label(&self, tab: &GosubTab) -> Widget {
-        if let Some(favicon) = &tab.favicon() {
-            let img = Image::from_paintable(Some(&favicon.clone()));
+        if let Some(texture) = tab.favicon().and_then(decode_favicon) {
+            let img = Image::from_paintable(Some(&texture));
             img.set_margin_top(5);
             img.set_margin_bottom(5);
             return img.into();
@@ -1284,8 +1261,8 @@ impl BrowserWindow {
             let spinner = gtk4::Spinner::new();
             spinner.start();
             label_vbox.append(&spinner);
-        } else if let Some(favicon) = &tab.favicon() {
-            let img = Image::from_paintable(Some(&favicon.clone()));
+        } else if let Some(texture) = tab.favicon().and_then(decode_favicon) {
+            let img = Image::from_paintable(Some(&texture));
             img.set_pixel_size(16);
             label_vbox.append(&img);
         } else {
@@ -1625,7 +1602,7 @@ impl BrowserWindow {
         let (Some(area), Some(handle)) = (area, handle) else { return };
 
         use gosub_render_pipeline::render::DEVICE_PIXEL_RATIO;
-        let scale = crate::engine::render_dpr(&area) as f64;
+        let scale = crate::render::render_dpr(&area) as f64;
         let raster_dpr = ((scale * zoom_level).ceil() as u32).clamp(1, 4);
         DEVICE_PIXEL_RATIO.store(raster_dpr, std::sync::atomic::Ordering::Relaxed);
         let eff = scale * zoom_level;
@@ -2099,23 +2076,16 @@ impl BrowserWindow {
                 self.refresh_tabs();
             }
             Message::FaviconLoaded(tab_id, bytes) => {
-                // PixbufLoader handles ICO (the common favicon format), which
-                // gdk::Texture::from_bytes does not reliably decode.
-                let loader = gtk4::gdk_pixbuf::PixbufLoader::new();
-                let texture = loader
-                    .write(&bytes)
-                    .and_then(|_| loader.close())
-                    .ok()
-                    .and_then(|_| loader.pixbuf())
-                    .map(|pixbuf| gdk::Texture::for_pixbuf(&pixbuf));
-                let Some(texture) = texture else {
+                // Decode once here purely to reject what we cannot draw; the tab keeps the
+                // encoded bytes, and the chip decodes them again when it is built.
+                if decode_favicon(&bytes).is_none() {
                     self.log("Could not decode favicon");
                     return;
-                };
+                }
 
                 let mut manager = self.tab_manager.lock().unwrap();
                 if let Some(mut tab) = manager.get_tab(tab_id) {
-                    tab.set_favicon(Some(texture));
+                    tab.set_favicon(Some(bytes));
                     manager.update_tab(tab_id, &tab);
                 }
                 drop(manager);
@@ -2183,9 +2153,7 @@ impl BrowserWindow {
         // not been used yet. Without this only activated tabs were ever in the list, so
         // opening several tabs and never switching left it with one entry and Ctrl+Tab
         // silently did nothing.
-        if !self.mru.borrow().contains(&tab_id) {
-            self.mru.borrow_mut().push(tab_id);
-        }
+        self.mru.borrow_mut().insert_unused(tab_id);
         self.refresh_tabs();
 
         if let Some(raw) = source_mode(&render_mode) {
@@ -2250,7 +2218,7 @@ impl BrowserWindow {
                 let Some(dc) = dc_ref.as_mut() else {
                     return glib::Propagation::Stop;
                 };
-                let scale = crate::engine::render_dpr(area) as i32;
+                let scale = crate::render::render_dpr(area) as i32;
                 let target_scale = scale as f64 * zoom.get();
                 render_frame_gl(
                     &compositor,
@@ -2277,11 +2245,11 @@ impl BrowserWindow {
                 let z = resize_zoom.get();
                 // Rasterize at ceil(display scale × zoom) so zoomed-in pages stay sharp;
                 // capped because tile memory grows with its square.
-                let raster_dpr = ((crate::engine::render_dpr(area) as f64 * z).ceil() as u32).clamp(1, 4);
+                let raster_dpr = ((crate::render::render_dpr(area) as f64 * z).ceil() as u32).clamp(1, 4);
                 DEVICE_PIXEL_RATIO.store(raster_dpr, std::sync::atomic::Ordering::Relaxed);
                 // GtkGLArea's resize reports PHYSICAL pixels; the engine lays out in CSS
                 // px, which shrink as the zoom grows.
-                let eff = crate::engine::render_dpr(area) as f64 * z;
+                let eff = crate::render::render_dpr(area) as f64 * z;
                 let (vw, vh) = ((w as f64 / eff) as u32, (h as f64 / eff) as u32);
                 if vw == 0 || vh == 0 {
                     return;
@@ -2432,7 +2400,7 @@ impl BrowserWindow {
 
     /// Start the engine and wire its redraw/event notifications into the GTK main loop.
     pub fn init_engine(&self) {
-        let mut engine = match BrowserEngine::new(runtime(), self.private.get()) {
+        let mut engine = match BrowserEngine::new(runtime(), self.private.get(), crate::render::backend()) {
             Ok(e) => e,
             Err(e) => {
                 self.log(format!("Failed to start engine: {e}").as_str());
@@ -2746,6 +2714,19 @@ impl BrowserWindow {
 
 /// Map a GDK keyval to the web [`KeyboardEvent.key`] name the engine expects.
 /// `None` for keys that have neither a named mapping nor a printable character.
+/// Decode an encoded favicon into something GTK can paint. `PixbufLoader` handles ICO
+/// -- the common favicon format -- which `gdk::Texture::from_bytes` does not reliably
+/// decode. Returns `None` for anything that does not decode.
+fn decode_favicon(bytes: &[u8]) -> Option<gdk::Texture> {
+    let loader = gtk4::gdk_pixbuf::PixbufLoader::new();
+    loader
+        .write(bytes)
+        .and_then(|_| loader.close())
+        .ok()
+        .and_then(|_| loader.pixbuf())
+        .map(|pixbuf| gdk::Texture::for_pixbuf(&pixbuf))
+}
+
 fn web_key_name(key: gdk::Key) -> Option<String> {
     use gdk::Key;
     let named = match key {

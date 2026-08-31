@@ -1,6 +1,5 @@
-use crate::engine::EngineTabId;
 use gosub_engine::tab::TabHandle;
-use gtk4::gdk::Texture;
+use gosub_engine::tab::TabId as EngineTabId;
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::fmt::Debug;
@@ -93,8 +92,10 @@ pub struct GosubTab {
     crashed: Option<String>,
     /// Title of the tab
     title: String,
-    /// Loaded favicon of the tab
-    favicon: Option<Texture>,
+    /// The tab's favicon, exactly as the engine fetched it: an encoded image, usually
+    /// PNG or ICO. Decoding needs a toolkit, so it is left to whichever frontend is
+    /// drawing the tab strip.
+    favicon: Option<Vec<u8>>,
     /// Actual content (HTML) of the tab
     content: String,
     /// Handle to the engine-side tab that drives navigation and rendering.
@@ -212,11 +213,11 @@ impl GosubTab {
         self.title = title.to_string();
     }
 
-    pub(crate) fn favicon(&self) -> Option<Texture> {
-        self.favicon.clone()
+    pub fn favicon(&self) -> Option<&[u8]> {
+        self.favicon.as_deref()
     }
 
-    pub fn set_favicon(&mut self, favicon: Option<Texture>) {
+    pub fn set_favicon(&mut self, favicon: Option<Vec<u8>>) {
         self.favicon = favicon;
     }
 }
@@ -260,25 +261,25 @@ impl GosubTabManager {
     }
 
     #[allow(dead_code)]
-    pub(crate) fn get_by_tab(&self, tab_id: TabId) -> Option<&GosubTab> {
+    pub fn get_by_tab(&self, tab_id: TabId) -> Option<&GosubTab> {
         self.tabs.get(&tab_id)
     }
 
-    pub(crate) fn commands(&mut self) -> Vec<TabCommand> {
+    pub fn commands(&mut self) -> Vec<TabCommand> {
         std::mem::take(&mut self.commands)
     }
 
-    pub(crate) fn tab_count(&self) -> usize {
+    pub fn tab_count(&self) -> usize {
         self.tabs.len()
     }
 
     /// Returns true when the given tab is the leftmost unpinned tab
-    pub(crate) fn is_most_left_unpinned_tab(&self, tab_id: TabId) -> bool {
+    pub fn is_most_left_unpinned_tab(&self, tab_id: TabId) -> bool {
         self.unpinned_tab_order.front() == Some(&tab_id)
     }
 
     /// Returns true when the given tab is the rightmost tab
-    pub(crate) fn is_most_right_tab(&self, tab_id: TabId) -> bool {
+    pub fn is_most_right_tab(&self, tab_id: TabId) -> bool {
         self.unpinned_tab_order.back() == Some(&tab_id)
     }
 
@@ -286,11 +287,11 @@ impl GosubTabManager {
         self.commands.push(TabCommand::Activate(tab_id));
     }
 
-    pub(crate) fn notify_tab_changed(&mut self, tab_id: TabId) {
+    pub fn notify_tab_changed(&mut self, tab_id: TabId) {
         self.commands.push(TabCommand::Update(tab_id));
     }
 
-    pub(crate) fn update_tab(&mut self, tab_id: TabId, tab: &GosubTab) {
+    pub fn update_tab(&mut self, tab_id: TabId, tab: &GosubTab) {
         self.tabs.insert(tab_id, tab.clone());
         self.notify_tab_changed(tab_id);
     }
@@ -562,7 +563,7 @@ mod test {
             manager
                 .commands()
                 .iter()
-                .any(|c| matches!(c, crate::tab::TabCommand::Close(id) if *id == pinned_id)),
+                .any(|c| matches!(c, TabCommand::Close(id) if *id == pinned_id)),
             "closing a pinned tab must emit TabCommand::Close so the UI tears down its chip and page"
         );
         assert_eq!(manager.order(), vec![plain_id]);

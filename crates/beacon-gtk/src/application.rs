@@ -36,7 +36,7 @@ mod imp {
                 return;
             }
 
-            let private = crate::cli::Cli::global().private;
+            let private = beacon_core::cli::Cli::global().private;
             let window = BrowserWindow::new(&obj, private);
             window.present();
         }

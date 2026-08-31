@@ -1,6 +1,6 @@
 use crate::runtime;
-use crate::tab::TabId;
 use crate::window::message::Message;
+use beacon_core::tab::TabId;
 use gtk4::gio::{Menu, SimpleAction, SimpleActionGroup};
 use gtk4::glib::clone;
 use gtk4::prelude::*;

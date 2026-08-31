@@ -5,7 +5,6 @@ mod config_page;
 mod imp;
 mod message;
 mod page_context_menu;
-mod source_page;
 mod tab_context_menu;
 
 use crate::application::Application;
@@ -103,12 +102,12 @@ impl BrowserWindow {
                     // URLs on the command line become the startup tabs; without any, the
                     // previous session is restored (falling back to a default set). A
                     // private window starts on the home page only.
-                    let mut initial_urls: Vec<String> = crate::cli::Cli::global().urls.clone();
+                    let mut initial_urls: Vec<String> = beacon_core::cli::Cli::global().urls.clone();
                     let mut session = Vec::new();
                     if private {
                         initial_urls = vec!["gosub://home".to_string()];
                     } else if initial_urls.is_empty() {
-                        session = crate::session::load();
+                        session = beacon_core::session::load();
                         initial_urls = if session.is_empty() {
                             ["https://gosub.io", "https://adayinthelifeof.nl", "https://news.ycombinator.com"]
                                 .map(String::from)
