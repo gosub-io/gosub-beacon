@@ -7,7 +7,7 @@
 #   crates/beacon-gtk   the GTK4 frontend
 [workspace]
 resolver = "2"
-members = ["crates/beacon", "crates/beacon-core", "crates/beacon-egui", "crates/beacon-gtk"]
+members = ["crates/beacon", "crates/beacon-core", "crates/beacon-egui", "crates/beacon-ffi", "crates/beacon-gtk"]
 # `cargo run` / `cargo build` with no `-p` mean the browser.
 default-members = ["crates/beacon"]
 
