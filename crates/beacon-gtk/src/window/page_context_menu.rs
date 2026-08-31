@@ -5,8 +5,9 @@
 
 use crate::runtime;
 use crate::window::message::Message;
+use beacon_core::command::BeaconCommand;
 use beacon_core::tab::TabId;
-use gosub_engine::events::{HitTestResponse, TabCommand as EngineTabCommand};
+use gosub_engine::events::HitTestResponse;
 use gtk4::gio::{Menu, SimpleAction, SimpleActionGroup};
 use gtk4::graphene::Point;
 use gtk4::prelude::*;
@@ -30,7 +31,7 @@ pub(crate) fn show(window: &super::BrowserWindow, tab_id: TabId, point: Point, h
     });
     add_action(&actions, "forward", {
         let window = window.clone();
-        move || window.imp().send_history_command(EngineTabCommand::GoForward { entry: None })
+        move || window.imp().dispatch(BeaconCommand::Forward(None))
     });
     add_action(&actions, "reload", {
         let window = window.clone();

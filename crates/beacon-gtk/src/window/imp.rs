@@ -4,8 +4,10 @@ use crate::window::message::Message;
 use crate::window::tab_context_menu::{build_context_menu, setup_context_menu_actions, TabInfo};
 use async_channel::{Receiver, Sender};
 use beacon_core::address_parser::{GosubAddressParser, GosubRenderMode};
-use beacon_core::engine::EngineTabId;
-use beacon_core::state::{ClosedTabs, MruList};
+use beacon_core::beacon::Beacon;
+use beacon_core::command::BeaconCommand;
+use beacon_core::download::DownloadState;
+use beacon_core::event::{BeaconEvent, Cursor};
 use beacon_core::tab::{GosubTab, GosubTabManager, HistoryEntryId, TabCommand, TabId};
 use glib::subclass::InitializingObject;
 use gosub_engine::events::{EngineEvent, NavigationEvent, TabCommand as EngineTabCommand};
@@ -59,22 +61,6 @@ impl<T: IsA<Widget>> WidgetExtTabId for T {
 }
 
 /// One download this session, as shown in the downloads popover.
-pub struct DownloadEntry {
-    pub id: u64,
-    pub filename: String,
-    pub path: std::path::PathBuf,
-    pub received: u64,
-    pub total: Option<u64>,
-    pub state: DownloadState,
-}
-
-#[derive(PartialEq)]
-pub enum DownloadState {
-    Running,
-    Finished,
-    Failed(String),
-}
-
 #[derive(CompositeTemplate)]
 #[template(resource = "/io/gosub/beacon/ui/window.ui")]
 pub struct BrowserWindow {
@@ -135,8 +121,9 @@ pub struct BrowserWindow {
     /// formula (`content_stack` logical px) and every switch to it would land a differing
     /// `SetViewport`, which drops the whole tile cache and re-lays-out the page.
     pub last_viewport: Rc<Cell<Option<(u32, u32)>>>,
-    /// Maps engine tab ids back to our tab ids (for routing engine events).
-    pub engine_tab_map: Rc<RefCell<HashMap<EngineTabId, TabId>>>,
+    /// Browser state that reacts to the engine: the engine-tab mapping, the download
+    /// list, MRU order and the closed-tab stack. Shares `tab_manager` above.
+    pub beacon: Rc<RefCell<Beacon>>,
     /// Clicks awaiting the engine's hit-test answer: token → (tab, window point, what to
     /// do with the answer). Right-click builds a context menu; Ctrl/middle-click opens the
     /// link it lands on in a background tab.
@@ -144,23 +131,14 @@ pub struct BrowserWindow {
     /// Source of hit-test tokens.
     pub next_hit_test_token: Cell<u64>,
 
-    /// Tabs in most-recently-used order plus any in-flight Ctrl+Tab cycle. The rules
-    /// live in `beacon_core::state`; the window only owns the settle timer below.
-    pub mru: RefCell<MruList>,
     /// Fires when the cycle has settled; commits the landed tab to the front of the list.
     pub cycle_timer: RefCell<Option<glib::SourceId>>,
-    /// Source of download ids.
-    pub next_download_id: Cell<u64>,
-    /// Session downloads, newest last; rendered into the downloads popover.
-    pub downloads: RefCell<Vec<DownloadEntry>>,
     /// List widget inside the downloads popover (built in `constructed`).
     downloads_list: RefCell<Option<gtk4::ListBox>>,
     /// URL-bar completion popover and its list (built in `constructed`).
     completion: RefCell<Option<(Popover, gtk4::ListBox)>>,
     /// Per-tab page zoom, shared with each render area's input/draw closures.
     tab_zoom: RefCell<HashMap<TabId, Rc<Cell<f64>>>>,
-    /// Recently closed tabs, newest last (Ctrl+Shift+T pops).
-    closed_tabs: RefCell<ClosedTabs>,
     /// Whether this is a private-browsing window (ephemeral engine, no history recording).
     pub private: Cell<bool>,
 }
@@ -168,6 +146,9 @@ pub struct BrowserWindow {
 impl Default for BrowserWindow {
     fn default() -> Self {
         let (tx, rx) = async_channel::unbounded::<Message>();
+        // Beacon shares this manager rather than owning it: the window reads it directly to
+        // build the tab strip, and both must see the same tabs.
+        let tab_manager = Arc::new(Mutex::new(GosubTabManager::new()));
         Self {
             searchbar: TemplateChild::default(),
             btn_prev: TemplateChild::default(),
@@ -188,24 +169,20 @@ impl Default for BrowserWindow {
             bookmarks_bar: TemplateChild::default(),
             btn_darkmode: TemplateChild::default(),
 
-            tab_manager: Arc::new(Mutex::new(GosubTabManager::new())),
+            tab_manager: tab_manager.clone(),
             sender: Arc::new(tx),
             receiver: Arc::new(rx),
 
             engine: Rc::new(RefCell::new(None)),
             render_areas: Rc::new(RefCell::new(HashMap::new())),
             last_viewport: Rc::new(Cell::new(None)),
-            engine_tab_map: Rc::new(RefCell::new(HashMap::new())),
+            beacon: Rc::new(RefCell::new(Beacon::new(tab_manager.clone(), runtime().handle().clone()))),
             pending_hit_tests: RefCell::new(HashMap::new()),
             next_hit_test_token: Cell::new(1),
-            mru: RefCell::new(MruList::new()),
             cycle_timer: RefCell::new(None),
-            next_download_id: Cell::new(1),
-            downloads: RefCell::new(Vec::new()),
             downloads_list: RefCell::new(None),
             completion: RefCell::new(None),
             tab_zoom: RefCell::new(HashMap::new()),
-            closed_tabs: RefCell::new(ClosedTabs::new()),
             private: Cell::new(false),
         }
     }
@@ -441,7 +418,7 @@ impl BrowserWindow {
             return;
         }
         if let Some(tab) = manager.get_tab(tab_id) {
-            self.closed_tabs.borrow_mut().push(tab.url().to_string(), position);
+            self.beacon.borrow_mut().closed_mut().push(tab.url().to_string(), position);
         }
         let handle = manager.get_tab(tab_id).and_then(|t| t.tab_handle());
         manager.remove_tab(tab_id);
@@ -449,7 +426,7 @@ impl BrowserWindow {
 
         // Shut down the engine worker behind the tab and drop our references.
         if let Some(handle) = handle {
-            self.engine_tab_map.borrow_mut().remove(&handle.tab_id);
+            self.beacon.borrow_mut().unbind_engine_tab(handle.tab_id);
             runtime().spawn(async move {
                 let _ = handle.send(EngineTabCommand::CloseTab).await;
             });
@@ -468,12 +445,12 @@ impl BrowserWindow {
 
     /// Whether "Reopen Closed Tab" has anything to reopen.
     pub(crate) fn has_closed_tabs(&self) -> bool {
-        !self.closed_tabs.borrow().is_empty()
+        !self.beacon.borrow().closed().is_empty()
     }
 
     /// Reopen the most recently closed tab at its old position (Ctrl+Shift+T).
     pub(crate) fn reopen_closed_tab(&self) {
-        let Some(closed) = self.closed_tabs.borrow_mut().pop() else {
+        let Some(closed) = self.beacon.borrow_mut().closed_mut().pop() else {
             return;
         };
         if let Some(tab_id) = self.open_tab(closed.position, &closed.url, "New Tab") {
@@ -970,12 +947,12 @@ impl BrowserWindow {
 
     /// Move `tab_id` to the front of the MRU list (inserting it if new).
     pub(crate) fn touch_mru(&self, tab_id: TabId) {
-        self.mru.borrow_mut().touch(tab_id);
+        self.beacon.borrow_mut().mru_mut().touch(tab_id);
     }
 
     /// Drop a closed tab from the MRU list, abandoning the cycle if too little is left.
     pub(crate) fn forget_mru(&self, tab_id: TabId) {
-        if self.mru.borrow_mut().forget(tab_id) {
+        if self.beacon.borrow_mut().mru_mut().forget(tab_id) {
             self.clear_cycle_timer();
         }
     }
@@ -986,7 +963,7 @@ impl BrowserWindow {
     /// third tab and beyond rather than bouncing between two. A short idle timer ends the
     /// cycle and commits wherever it landed.
     pub(crate) fn cycle_tab(&self, direction: i32) {
-        let Some(target) = self.mru.borrow_mut().step(direction) else {
+        let Some(target) = self.beacon.borrow_mut().mru_mut().step(direction) else {
             return;
         };
         self.activate_tab(target);
@@ -1011,7 +988,7 @@ impl BrowserWindow {
     fn commit_cycle(&self) {
         self.cycle_timer.borrow_mut().take();
         let active = self.active_tab_id();
-        self.mru.borrow_mut().commit(active);
+        self.beacon.borrow_mut().mru_mut().commit(active);
     }
 
     /// Drop the settle timer. The list has already ended the cycle on its own side.
@@ -1080,7 +1057,11 @@ impl BrowserWindow {
             self.content_stack.set_visible_child(&page);
         }
 
-        let manager = self.tab_manager.lock().unwrap();
+        let mut manager = self.tab_manager.lock().unwrap();
+        // The tab is on screen now, so the manager -- which `active_tab_id` reads -- has to
+        // agree. `mark_active`, not `set_active`: the latter queues an Activate command that
+        // refresh_tabs would replay straight back into here.
+        manager.mark_active(tab_id);
         if let Some(tab) = manager.get_tab(tab_id) {
             // New-tab pages (blank, home) get an empty address bar, ready to type into.
             let page = gosub_engine::internal_pages::InternalPages::page_name(tab.url());
@@ -1421,7 +1402,7 @@ impl BrowserWindow {
             }
         };
 
-        self.engine_tab_map.borrow_mut().insert(handle.tab_id, tab_id);
+        self.beacon.borrow_mut().bind_engine_tab(handle.tab_id, tab_id);
         let mut manager = self.tab_manager.lock().unwrap();
         if let Some(mut tab) = manager.get_tab(tab_id) {
             tab.set_tab_handle(handle);
@@ -1499,13 +1480,15 @@ impl BrowserWindow {
 
     /// The tab id of the currently visible stack page, if any.
     pub(crate) fn active_tab_id(&self) -> Option<TabId> {
-        self.content_stack.visible_child()?.get_tab_id()
+        // The tab manager is the truth, not the stack's visible child: core has to be able
+        // to answer this too, and two sources would drift.
+        self.tab_manager.lock().unwrap().active()
     }
 
     /// Back button: the engine owns session history, so just ask it to go back. It answers
     /// with `HistoryChanged` (cursor moved) and the usual navigation events for the reload.
     pub(crate) fn navigate_back(&self) {
-        self.send_history_command(EngineTabCommand::GoBack);
+        self.dispatch(BeaconCommand::Back);
     }
 
     /// Forward button: with a single forward branch go straight there; with several, pop up a
@@ -1523,14 +1506,14 @@ impl BrowserWindow {
         };
         match children.as_slice() {
             [] => {}
-            [_] => self.send_history_command(EngineTabCommand::GoForward { entry: None }),
+            [_] => self.dispatch(BeaconCommand::Forward(None)),
             _ => self.show_forward_menu(anchor, children),
         }
     }
 
     /// Navigate the active tab to a specific (forward) history entry.
     fn go_to_history_entry(&self, entry: HistoryEntryId) {
-        self.send_history_command(EngineTabCommand::GoForward { entry: Some(entry) });
+        self.dispatch(BeaconCommand::GoToHistoryEntry(entry));
     }
 
     /// The zone's places store (bookmarks + history), once the engine is up.
@@ -1782,7 +1765,8 @@ impl BrowserWindow {
             list.remove(&row);
         }
 
-        let downloads = self.downloads.borrow();
+        let beacon = self.beacon.borrow();
+        let downloads = beacon.downloads().entries();
         if downloads.is_empty() {
             let empty = gtk4::Label::new(Some("No downloads yet"));
             empty.add_css_class("downloads-empty");
@@ -1859,26 +1843,7 @@ impl BrowserWindow {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| "download".into());
-        self.downloads.borrow_mut().push(DownloadEntry {
-            id,
-            filename,
-            path: path.to_path_buf(),
-            received: 0,
-            total: None,
-            state: DownloadState::Running,
-        });
-        self.refresh_downloads();
-    }
-
-    /// Apply an engine download event to the matching entry and update the popover.
-    fn update_download(&self, id: u64, apply: impl FnOnce(&mut DownloadEntry)) {
-        {
-            let mut downloads = self.downloads.borrow_mut();
-            let Some(entry) = downloads.iter_mut().find(|e| e.id == id) else {
-                return;
-            };
-            apply(entry);
-        }
+        self.beacon.borrow_mut().downloads_mut().start(id, filename, path.to_path_buf());
         self.refresh_downloads();
     }
 
@@ -1900,8 +1865,7 @@ impl BrowserWindow {
             // Cancelling the dialog just drops the offer.
             let Ok(file) = result else { return };
             let Some(path) = file.path() else { return };
-            let id = window.imp().next_download_id.get();
-            window.imp().next_download_id.set(id + 1);
+            let id = window.imp().beacon.borrow_mut().downloads_mut().next_id();
             window.imp().log(&format!("Download #{id}: {url} → {}", path.display()));
             window.imp().add_download(id, &path);
             let handle = handle.clone();
@@ -1918,31 +1882,12 @@ impl BrowserWindow {
     }
 
     /// Send a history traversal command to the active tab's engine tab and mark it loading.
-    pub(crate) fn send_history_command(&self, cmd: EngineTabCommand) {
-        let Some(tab_id) = self.active_tab_id() else {
-            return;
-        };
-        let handle = {
-            let mut manager = self.tab_manager.lock().unwrap();
-            let Some(mut tab) = manager.get_tab(tab_id) else {
-                return;
-            };
-            let handle = tab.tab_handle();
-            tab.set_loading(true);
-            manager.update_tab(tab_id, &tab);
-            handle
-        };
-        let Some(handle) = handle else {
-            self.log("Tab has no engine handle yet");
-            return;
-        };
-        self.refresh_tabs();
-        runtime().spawn(async move {
-            if let Err(e) = handle.send(cmd).await {
-                log::error!("history command failed: {e:?}");
-            }
-            let _ = handle.send(EngineTabCommand::ResumeDrawing { fps: 30 }).await;
-        });
+    /// Hand a browser gesture to `beacon-core` and draw whatever it says changed.
+    pub(crate) fn dispatch(&self, command: BeaconCommand) {
+        let events = self.beacon.borrow_mut().apply(command);
+        for event in events {
+            self.apply_beacon_event(event);
+        }
     }
 
     /// Build and show a popover listing the forward branches of the active tab; picking one
@@ -2134,7 +2079,7 @@ impl BrowserWindow {
                 }
             }
         };
-        self.engine_tab_map.borrow_mut().insert(handle.tab_id, tab_id);
+        self.beacon.borrow_mut().bind_engine_tab(handle.tab_id, tab_id);
         tab.set_tab_handle(handle);
 
         let shell = Self::is_shell_rendered(&url);
@@ -2153,7 +2098,7 @@ impl BrowserWindow {
         // not been used yet. Without this only activated tabs were ever in the list, so
         // opening several tabs and never switching left it with one entry and Ctrl+Tab
         // silently did nothing.
-        self.mru.borrow_mut().insert_unused(tab_id);
+        self.beacon.borrow_mut().mru_mut().insert_unused(tab_id);
         self.refresh_tabs();
 
         if let Some(raw) = source_mode(&render_mode) {
@@ -2450,264 +2395,154 @@ impl BrowserWindow {
     }
 
     /// Handle a single engine event on the GTK main thread.
+    /// Route one engine event: the two cases this frontend must answer itself, then
+    /// `beacon-core`'s translation, then drawing whatever it says changed.
     fn handle_engine_event(&self, evt: EngineEvent) {
+        if self.handle_gtk_only_event(&evt) {
+            return;
+        }
+        let events = self.beacon.borrow_mut().on_engine_event(evt);
+        for event in events {
+            self.apply_beacon_event(event);
+        }
+    }
+
+    /// The engine events this frontend answers on its own, before core sees them.
+    /// Returns whether the event was consumed.
+    ///
+    /// Both are here because they are about *this* shell, not about the browser: one page
+    /// that GTK draws with widgets instead of letting the engine render it, and a hit-test
+    /// round trip whose pending-click bookkeeping is tied to GTK gestures.
+    fn handle_gtk_only_event(&self, evt: &EngineEvent) -> bool {
         match evt {
-            EngineEvent::Redraw { .. } => {
-                for area in self.render_areas.borrow().values() {
-                    area.queue_render();
-                }
-            }
-            EngineEvent::Navigation { tab_id, event } => {
-                let Some(our_id) = self.engine_tab_map.borrow().get(&tab_id).copied() else {
-                    return;
-                };
-
-                // The engine serves gosub:// pages itself, except the one page Beacon
-                // renders as a GTK widget (gosub://config). A link to it clicked inside an
-                // engine page starts an engine navigation; cancel that and swap in the
-                // shell page instead. (LoadUrl already set the tab's URL for our own
-                // navigations, so the equality check keeps this from looping.)
-                if let NavigationEvent::Started { url, .. } = &event {
-                    if self.active_tab_id() == Some(our_id) && !Self::is_shell_rendered(url) {
-                        self.searchbar.set_progress_fraction(0.05);
-                    }
-                    if Self::is_shell_rendered(url) {
-                        let (differs, handle) = {
-                            let manager = self.tab_manager.lock().unwrap();
-                            match manager.get_tab(our_id) {
-                                Some(tab) => (tab.url() != url, tab.tab_handle()),
-                                None => (false, None),
-                            }
-                        };
-                        if differs {
-                            if let Some(handle) = handle {
-                                runtime().spawn(async move {
-                                    let _ = handle.send(EngineTabCommand::CancelNavigation).await;
-                                });
-                            }
-                            let _ = self.get_sender().send_blocking(Message::LoadUrl(our_id, url.to_string()));
-                        }
-                        return;
-                    }
-                }
-
-                // Load progress for the active tab, drawn as the address bar's fill
-                // (GtkEntry's built-in progress underline).
-                if let NavigationEvent::Progress {
-                    received_bytes,
-                    expected_length,
-                    ..
-                } = &event
-                {
-                    if self.active_tab_id() == Some(our_id) {
-                        let fraction = match expected_length {
-                            Some(total) if *total > 0 => (*received_bytes as f64 / *total as f64).clamp(0.05, 0.98),
-                            // Unknown length: park mid-way rather than pretending precision.
-                            _ => 0.5,
-                        };
-                        self.searchbar.set_progress_fraction(fraction);
-                    }
-                    return;
-                }
-
-                if let NavigationEvent::HistoryChanged { history } = event {
-                    // The engine also updates the address bar target: on a back/forward
-                    // traversal the tab's URL is the entry we moved to, even while it loads.
-                    let current_url = history.current.and_then(|id| history.entries.get(id.0)).map(|e| e.url.clone());
-                    let mut manager = self.tab_manager.lock().unwrap();
-                    if let Some(mut tab) = manager.get_tab(our_id) {
-                        tab.history_mut().update(history);
-                        if let Some(url) = &current_url {
-                            tab.set_url(url.clone());
-                        }
-                        manager.update_tab(our_id, &tab);
-                    }
-                    drop(manager);
-                    if self.active_tab_id() == Some(our_id) {
-                        if let Some(url) = &current_url {
-                            self.searchbar.set_text(url.as_str());
-                        }
-                        self.update_nav_buttons();
-                    }
-                    return;
-                }
-
-                // Load ended without a page change (stop button, download offer):
-                // clear the progress fill.
-                if let NavigationEvent::Cancelled { .. } = &event {
-                    if self.active_tab_id() == Some(our_id) {
-                        self.searchbar.set_progress_fraction(0.0);
-                    }
-                    return;
-                }
-
-                if let NavigationEvent::Failed { url, error, .. } = &event {
-                    if self.active_tab_id() == Some(our_id) {
-                        self.searchbar.set_progress_fraction(0.0);
-                    }
-                    self.on_navigation_failed(our_id, url, &error.to_string());
-                    return;
-                }
-                if let NavigationEvent::FailedUrl { url, error, .. } = &event {
-                    self.log(&format!("Cannot load {url}: {error}"));
-                    return;
-                }
-
-                if let NavigationEvent::Finished { url, .. } = event {
-                    if self.active_tab_id() == Some(our_id) {
-                        self.searchbar.set_progress_fraction(0.0);
-                    }
-                    let mut manager = self.tab_manager.lock().unwrap();
-                    if let Some(mut tab) = manager.get_tab(our_id) {
-                        tab.set_loading(false);
-                        tab.set_title(url.as_str());
-                        // Session history is recorded by the engine; it follows up with a
-                        // HistoryChanged event that refreshes the back/forward state. The
-                        // favicon likewise arrives as a FavIconChanged event.
-                        manager.update_tab(our_id, &tab);
-                    }
-                    drop(manager);
-
-                    // Update the address bar if this is the active tab.
-                    if self.active_tab_id() == Some(our_id) {
-                        self.searchbar.set_text(url.as_str());
-                    }
-                    self.refresh_tabs();
-                    self.update_nav_buttons();
-                    self.update_bookmark_button();
-                }
-            }
-            // The engine fetched the page's icon (through its own fetcher, so with the
-            // page's cookies and UA); decode it on the GTK side like before.
-            EngineEvent::FavIconChanged { tab_id, favicon } => {
-                let Some(our_id) = self.engine_tab_map.borrow().get(&tab_id).copied() else {
-                    return;
-                };
-                let _ = self.get_sender().send_blocking(Message::FaviconLoaded(our_id, favicon));
-            }
-            // Answer to a right-click's QueryHitTest: build the page context menu from it.
-            // A navigation turned out to be a download: ask where to save it, then hand
-            // the engine the chosen path.
-            EngineEvent::DownloadRequested {
+            // The engine serves gosub:// pages itself, except the one Beacon renders as
+            // GTK widgets (gosub://config). A link to it clicked inside an engine page
+            // starts an engine navigation; cancel that and swap in the shell page instead.
+            // (LoadUrl already set the tab's URL for our own navigations, so the equality
+            // check keeps this from looping.)
+            EngineEvent::Navigation {
                 tab_id,
-                url,
-                suggested_filename,
-                total_bytes,
-                ..
+                event: NavigationEvent::Started { url, .. },
             } => {
-                let Some(our_id) = self.engine_tab_map.borrow().get(&tab_id).copied() else {
-                    return;
+                if !Self::is_shell_rendered(url) {
+                    return false;
+                }
+                let Some(our_id) = self.beacon.borrow().tab_for_engine(*tab_id) else {
+                    return true;
                 };
-                let size = total_bytes.map(|b| format!(" ({b} bytes)")).unwrap_or_default();
-                self.log(&format!("Download offered: {suggested_filename}{size}"));
-                self.save_download_as(our_id, url.to_string(), &suggested_filename);
+                let (differs, handle) = {
+                    let manager = self.tab_manager.lock().unwrap();
+                    match manager.get_tab(our_id) {
+                        Some(tab) => (tab.url() != url, tab.tab_handle()),
+                        None => (false, None),
+                    }
+                };
+                if differs {
+                    if let Some(handle) = handle {
+                        runtime().spawn(async move {
+                            let _ = handle.send(EngineTabCommand::CancelNavigation).await;
+                        });
+                    }
+                    let _ = self.get_sender().send_blocking(Message::LoadUrl(our_id, url.to_string()));
+                }
+                true
             }
-            EngineEvent::DownloadProgress {
-                id,
-                received_bytes,
-                total_bytes,
-                ..
-            } => {
-                self.update_download(id.0, |e| {
-                    e.received = received_bytes;
-                    e.total = total_bytes;
-                });
-            }
-            EngineEvent::DownloadFinished {
-                id, path, received_bytes, ..
-            } => {
-                self.log(&format!("Download #{} finished: {} ({received_bytes} bytes)", id.0, path.display()));
-                self.update_download(id.0, |e| {
-                    e.received = received_bytes;
-                    e.state = DownloadState::Finished;
-                });
-            }
-            EngineEvent::DownloadFailed { id, error, .. } => {
-                self.log(&format!("Download #{} FAILED: {error}", id.0));
-                self.update_download(id.0, |e| e.state = DownloadState::Failed(error.clone()));
-            }
+
+            // Answer to a click's QueryHitTest; what to do with it was decided when the
+            // gesture fired and parked in `pending_hit_tests`.
             EngineEvent::HitTestResult { token, hit, .. } => {
                 let Some((tab_id, point, intent)) = self.pending_hit_tests.borrow_mut().remove(&token.0) else {
-                    return;
+                    return true;
                 };
                 match intent {
-                    HitIntent::ContextMenu => super::page_context_menu::show(&self.obj(), tab_id, point, hit),
+                    HitIntent::ContextMenu => super::page_context_menu::show(&self.obj(), tab_id, point, hit.clone()),
                     HitIntent::OpenLinkInBackgroundTab => {
                         // Not on a link: a Ctrl/middle click on empty page area does nothing.
-                        let Some(link) = hit.link_url.clone() else { return };
+                        let Some(link) = hit.link_url.clone() else { return true };
                         let sender = self.get_sender();
                         runtime().spawn(async move {
                             let _ = sender.send(Message::OpenTabRight(tab_id, link, "New Tab".into())).await;
                         });
                     }
                 }
+                true
             }
-            // Cursor shape for what is under the pointer; only the active tab's area is under
-            // the pointer, but setting it on the tab's own area is always correct.
-            EngineEvent::CursorChanged { tab_id, cursor } => {
-                let Some(our_id) = self.engine_tab_map.borrow().get(&tab_id).copied() else {
-                    return;
-                };
-                let name = match cursor {
-                    gosub_engine::events::CursorShape::Pointer => "pointer",
-                    gosub_engine::events::CursorShape::Text => "text",
-                    gosub_engine::events::CursorShape::Default => "default",
-                };
-                if let Some(area) = self.render_areas.borrow().get(&our_id) {
-                    area.set_cursor_from_name(Some(name));
-                }
-            }
-            // The tab's engine worker died. Mark the tab crashed: its page becomes the
-            // sad-tab widget with a Reload button that recreates the engine tab.
-            EngineEvent::TabCrashed { tab_id, error, .. } => {
-                let Some(our_id) = self.engine_tab_map.borrow_mut().remove(&tab_id) else {
-                    return;
-                };
-                self.log(&format!("Tab crashed: {error}"));
-                self.render_areas.borrow_mut().remove(&our_id);
-                let mut manager = self.tab_manager.lock().unwrap();
-                if let Some(mut tab) = manager.get_tab(our_id) {
-                    tab.set_loading(false);
-                    tab.set_crashed(Some(error));
-                    manager.update_tab(our_id, &tab);
-                }
-                drop(manager);
-                self.refresh_tabs();
-                self.update_nav_buttons();
-            }
+
             // Focus moved inside the page. Nothing to do yet - this becomes the IME /
             // on-screen-keyboard trigger once text editing lands.
             EngineEvent::FocusChanged { focused, editable, .. } => {
                 log::debug!("page focus changed: focused={focused} editable={editable}");
+                true
             }
-            EngineEvent::TitleChanged { tab_id, title } => {
-                let Some(our_id) = self.engine_tab_map.borrow().get(&tab_id).copied() else {
-                    return;
-                };
-                let mut manager = self.tab_manager.lock().unwrap();
-                if let Some(mut tab) = manager.get_tab(our_id) {
-                    tab.set_title(&title);
-                    manager.update_tab(our_id, &tab);
-                }
-                drop(manager);
-                self.refresh_tabs();
 
-                if self.active_tab_id() == Some(our_id) {
+            _ => false,
+        }
+    }
+
+    /// Draw one `BeaconEvent`. Everything below is widget work; the decisions behind it
+    /// were made in `beacon-core`.
+    fn apply_beacon_event(&self, event: BeaconEvent) {
+        match event {
+            BeaconEvent::Redraw => {
+                for area in self.render_areas.borrow().values() {
+                    area.queue_render();
+                }
+            }
+            BeaconEvent::TabsChanged => self.refresh_tabs(),
+            BeaconEvent::ActiveTabChanged(tab_id) => self.activate_tab(tab_id),
+            BeaconEvent::NavStateChanged(_) => {
+                self.update_nav_buttons();
+                self.update_bookmark_button();
+            }
+            BeaconEvent::TitleChanged(tab_id, title) => {
+                if self.active_tab_id() == Some(tab_id) {
                     self.obj().set_title(Some(&format!("{title} — Gosub Beacon")));
                 }
             }
-            EngineEvent::HoverUrl { tab_id, url } => {
-                // Only surface hover for the active tab.
-                let Some(our_id) = self.engine_tab_map.borrow().get(&tab_id).copied() else {
-                    return;
-                };
-                if self.active_tab_id() == Some(our_id) {
+            BeaconEvent::UrlChanged(tab_id, url) => {
+                if self.active_tab_id() == Some(tab_id) {
+                    self.searchbar.set_text(url.as_str());
+                }
+            }
+            BeaconEvent::LoadingChanged(..) => {}
+            // The address bar doubles as the progress bar (GtkEntry's fill).
+            BeaconEvent::LoadProgress(tab_id, fraction) => {
+                if self.active_tab_id() == Some(tab_id) {
+                    self.searchbar.set_progress_fraction(fraction.unwrap_or(0.0));
+                }
+            }
+            // The bytes are on the tab; the chip decodes them when it is rebuilt, which
+            // `TabsChanged` asks for.
+            BeaconEvent::FaviconChanged(_) => {}
+            BeaconEvent::NavigationFailed(tab_id, url, error) => self.on_navigation_failed(tab_id, &url, &error),
+            BeaconEvent::TabCrashed(tab_id, _) => {
+                self.render_areas.borrow_mut().remove(&tab_id);
+            }
+            BeaconEvent::HoverUrl(tab_id, url) => {
+                if self.active_tab_id() == Some(tab_id) {
                     let text = url.as_deref().unwrap_or("");
                     self.statusbar.set_text(text);
                     self.statusbar.set_visible(!text.is_empty());
                 }
             }
-            _ => {}
+            BeaconEvent::CursorChanged(tab_id, cursor) => {
+                let name = match cursor {
+                    Cursor::Pointer => "pointer",
+                    Cursor::Text => "text",
+                    Cursor::Default => "default",
+                };
+                if let Some(area) = self.render_areas.borrow().get(&tab_id) {
+                    area.set_cursor_from_name(Some(name));
+                }
+            }
+            BeaconEvent::DownloadOffered {
+                tab_id,
+                url,
+                suggested_filename,
+                ..
+            } => self.save_download_as(tab_id, url, &suggested_filename),
+            BeaconEvent::DownloadChanged(_) => self.refresh_downloads(),
+            BeaconEvent::Log(message) => self.log(&message),
         }
     }
 }

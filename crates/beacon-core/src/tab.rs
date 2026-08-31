@@ -242,6 +242,10 @@ pub struct GosubTabManager {
     unpinned_tab_order: VecDeque<TabId>,
     // list of commands to execute on the next tab notebook update
     commands: Vec<TabCommand>,
+    // The tab the user is looking at. This used to live only in the widget tree (the GTK
+    // stack's visible child), which meant nothing below the frontend could answer "is this
+    // the active tab?" -- and most of the engine-event handling turns on exactly that.
+    active: Option<TabId>,
 }
 
 impl Default for GosubTabManager {
@@ -257,6 +261,7 @@ impl GosubTabManager {
             unpinned_tab_order: VecDeque::new(),
             pinned_tab_order: VecDeque::new(),
             commands: Vec::new(),
+            active: None,
         }
     }
 
@@ -283,8 +288,25 @@ impl GosubTabManager {
         self.unpinned_tab_order.back() == Some(&tab_id)
     }
 
+    /// Ask for `tab_id` to become active. Records it and queues the command that makes
+    /// the frontend switch to it.
     pub fn set_active(&mut self, tab_id: TabId) {
+        self.active = Some(tab_id);
         self.commands.push(TabCommand::Activate(tab_id));
+    }
+
+    /// Record that `tab_id` *is* now active, without asking for it to be switched to.
+    ///
+    /// The frontend calls this once it has actually shown the tab. It must not go through
+    /// [`Self::set_active`]: that queues `TabCommand::Activate`, which the frontend replays
+    /// by switching tabs again, which would record it again -- a loop.
+    pub fn mark_active(&mut self, tab_id: TabId) {
+        self.active = Some(tab_id);
+    }
+
+    /// The tab the user is looking at, if any.
+    pub fn active(&self) -> Option<TabId> {
+        self.active
     }
 
     pub fn notify_tab_changed(&mut self, tab_id: TabId) {
@@ -362,6 +384,14 @@ impl GosubTabManager {
         let global = if pinned { local } else { pinned_len + local };
         self.commands.push(TabCommand::Insert(tab_id, global as u32));
 
+        // The first tab is active by definition -- nothing else can be, and the frontend
+        // never has to switch to it, so nothing else would ever say so. Without this a
+        // single-tab window has no active tab at all, and everything keyed on "is this the
+        // active tab?" (the address bar, load progress, hover) silently does nothing.
+        if self.active.is_none() {
+            self.active = Some(tab_id);
+        }
+
         self.tabs.insert(tab_id, tab);
 
         tab_id
@@ -397,13 +427,19 @@ impl GosubTabManager {
             // In neither order list: there is no chip or page to tear down.
             (None, None) => {
                 self.tabs.remove(&tab_id);
+                if self.active == Some(tab_id) {
+                    self.active = None;
+                }
                 return;
             }
         };
 
         self.commands.push(TabCommand::Close(tab_id));
-        if let Some(new_active_tab) = next_active {
-            self.set_active(new_active_tab);
+        match next_active {
+            Some(new_active_tab) => self.set_active(new_active_tab),
+            // Nothing left to hand over to; without this `active` would name a closed tab.
+            None if self.active == Some(tab_id) => self.active = None,
+            None => {}
         }
 
         self.tabs.remove(&tab_id);
@@ -751,5 +787,65 @@ mod test {
 
         // The tab itself is never included.
         assert!(!manager.closable_tabs_left_of(tab4_id).contains(&tab4_id));
+    }
+}
+
+#[cfg(test)]
+mod active_tests {
+    use super::*;
+    use url::Url;
+
+    fn tab(url: &str) -> GosubTab {
+        GosubTab::new(Url::parse(url).unwrap(), "t")
+    }
+
+    #[test]
+    fn the_first_tab_is_active_without_anyone_saying_so() {
+        let mut m = GosubTabManager::new();
+        assert_eq!(m.active(), None);
+        let id = m.add_tab(tab("https://a.example/"), None);
+        assert_eq!(m.active(), Some(id));
+    }
+
+    #[test]
+    fn later_tabs_do_not_steal_focus_by_being_opened() {
+        let mut m = GosubTabManager::new();
+        let first = m.add_tab(tab("https://a.example/"), None);
+        m.add_tab(tab("https://b.example/"), None);
+        assert_eq!(m.active(), Some(first));
+    }
+
+    #[test]
+    fn closing_the_active_tab_hands_over_to_a_neighbour() {
+        let mut m = GosubTabManager::new();
+        let first = m.add_tab(tab("https://a.example/"), None);
+        let second = m.add_tab(tab("https://b.example/"), None);
+        m.set_active(second);
+        m.remove_tab(second);
+        assert_eq!(m.active(), Some(first));
+    }
+
+    #[test]
+    fn closing_the_last_tab_leaves_no_active_tab_rather_than_a_dangling_id() {
+        let mut m = GosubTabManager::new();
+        let only = m.add_tab(tab("https://a.example/"), None);
+        m.remove_tab(only);
+        assert_eq!(m.active(), None);
+    }
+
+    #[test]
+    fn mark_active_records_without_queueing_another_switch() {
+        let mut m = GosubTabManager::new();
+        let a = m.add_tab(tab("https://a.example/"), None);
+        let b = m.add_tab(tab("https://b.example/"), None);
+        let _ = m.commands();
+        m.mark_active(b);
+        assert_eq!(m.active(), Some(b));
+        // No Activate command: replaying one would switch tabs again and re-mark, forever.
+        assert!(
+            !m.commands().iter().any(|c| matches!(c, TabCommand::Activate(_))),
+            "mark_active must not queue an Activate"
+        );
+        assert_ne!(a, b);
     }
 }

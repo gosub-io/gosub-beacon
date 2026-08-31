@@ -6,8 +6,12 @@
 //! on GTK, egui, winit or any other toolkit; that constraint is the whole point.
 
 pub mod address_parser;
+pub mod beacon;
 pub mod cli;
+pub mod command;
+pub mod download;
 pub mod engine;
+pub mod event;
 pub mod paths;
 pub mod session;
 pub mod source_page;
