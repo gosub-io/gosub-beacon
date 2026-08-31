@@ -26,5 +26,5 @@ RUN make build
 
 RUN chmod ugo-rw,ugo+rX,u+w -R /gosub
 
-ENTRYPOINT ["/gosub/gosub-beacon/target/debug/gosub-beacon"]
+ENTRYPOINT ["/gosub/gosub-beacon/target/debug/gosub-beacon-gtk"]
 

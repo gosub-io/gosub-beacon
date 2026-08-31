@@ -2931,6 +2931,7 @@ dependencies = [
  "futures",
  "getrandom 0.4.3",
  "lazy_static",
+ "memchr",
  "parking_lot",
  "thiserror 2.0.20",
  "uuid",

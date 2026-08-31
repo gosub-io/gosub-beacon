@@ -6,18 +6,25 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
-# The binary keeps its name: the Dockerfile entrypoint, the headless driver and
-# anything else pointing at target/debug/gosub-beacon expect it.
-[[bin]]
-name = "gosub-beacon"
-path = "src/main.rs"
-
 [features]
-# GTK is the frontend that has parity today, so it stays the default. egui is built with
-#   cargo run -p gosub-beacon --no-default-features --features egui
-default = ["gtk"]
+# Both frontends by default, so a plain `cargo build` gives you two binaries to compare.
+# Build one on its own with, say, `--no-default-features --features gtk`, which also keeps
+# the other frontend's dependency tree (eframe/wgpu/vello, or gtk4) out of the build.
+default = ["gtk", "egui"]
 gtk = ["dep:beacon-gtk"]
 egui = ["dep:beacon-egui"]
+
+# One binary per frontend rather than one binary with a switch: both can be built at once
+# and run side by side, which is the whole point of having two.
+[[bin]]
+name = "gosub-beacon-gtk"
+path = "src/gtk.rs"
+required-features = ["gtk"]
+
+[[bin]]
+name = "gosub-beacon-egui"
+path = "src/egui.rs"
+required-features = ["egui"]
 
 [dependencies]
 beacon-gtk = { path = "../beacon-gtk", optional = true }
