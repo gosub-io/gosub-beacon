@@ -1,9 +1,9 @@
+use crate::address_parser::{GosubAddressParser, GosubRenderMode};
 use crate::engine::{render_frame_gl, BrowserEngine, EngineTabId};
-use crate::fetcher::address_parser::{GosubAddressParser, GosubRenderMode};
+use crate::runtime;
 use crate::tab::{GosubTab, GosubTabManager, HistoryEntryId, TabCommand, TabId};
 use crate::window::message::Message;
 use crate::window::tab_context_menu::{build_context_menu, setup_context_menu_actions, TabInfo};
-use crate::{fetcher, runtime};
 use async_channel::{Receiver, Sender};
 use glib::subclass::InitializingObject;
 use gosub_engine::events::{EngineEvent, NavigationEvent, TabCommand as EngineTabCommand};
@@ -511,6 +511,14 @@ impl BrowserWindow {
         };
         let sender = self.get_sender();
         let inner = inner.clone();
+        // Read the UA off the engine here, on the main thread: the settings store is not
+        // reachable from the spawned task.
+        let user_agent = self
+            .engine
+            .borrow()
+            .as_ref()
+            .map(|e| e.settings().get_string("net.user_agent"))
+            .unwrap_or_default();
         runtime().spawn(async move {
             let result: Result<Vec<u8>, String> = if inner.scheme() == "file" {
                 match inner.to_file_path() {
@@ -518,7 +526,7 @@ impl BrowserWindow {
                     Err(()) => Err("not a local file path".into()),
                 }
             } else {
-                fetcher::fetch_url_body(inner.clone()).await.map_err(|e| format!("{e:?}"))
+                crate::fetch::url_body(inner.clone(), user_agent).await
             };
             match result {
                 Ok(bytes) => {

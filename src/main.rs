@@ -1,17 +1,15 @@
+mod address_parser;
 mod application;
 mod cli;
-mod cookies;
 mod dialog;
 pub mod engine;
-#[allow(dead_code)]
-mod fetcher;
+mod fetch;
 mod session;
 mod tab;
 mod theme;
 mod window;
 
 use crate::application::Application;
-use crate::fetcher::Fetcher;
 use gtk4::gdk::Display;
 use gtk4::prelude::{ApplicationExt, ApplicationExtManual};
 use gtk4::{gio, CssProvider};
@@ -35,20 +33,14 @@ fn main() {
         .format_source_path(true)
         .format_target(true)
         .filter(None, log::LevelFilter::Error)
-        .filter(Some("fetcher"), log::LevelFilter::Trace)
         .filter(Some("gtk"), log::LevelFilter::Info)
         // Our own warnings must not be swallowed by the global Error filter.
         .filter(Some("gosub_beacon"), log::LevelFilter::Warn)
         .init();
 
-    // Parse argv first: `--help` / `--version` must answer cleanly, without a display and
-    // without the protocol banner below scrolling past first. Everything downstream reads the
-    // parsed result rather than re-scanning argv.
+    // Parse argv first: `--help` / `--version` must answer cleanly, without a display.
+    // Everything downstream reads the parsed result rather than re-scanning argv.
     let cli = crate::cli::Cli::init();
-
-    Fetcher::protocols_implemented().iter().for_each(|protocol| {
-        println!("Protocol: {}", protocol);
-    });
 
     gtk4::init().unwrap();
 

@@ -16,7 +16,6 @@ gosub_renderer_skia = { path = "../gosub-engine/crates/gosub_renderer_skia" }
 # Skia rasterizes tiles on the CPU; compositing happens on the GPU via GtkGLArea
 # (see src/engine.rs). Version must match the engine workspace's skia-safe.
 skia-safe = { version = "0.99.0", features = ["gl"] }
-parking_lot = "0.12"
 gtk-macros = "0.3"
 # gtk4 must match the version the engine's `gtk4` feature pins (gtk4-sys uses `links`,
 # so only one gtk4 version can be in the dependency graph).
@@ -29,31 +28,12 @@ colog = "1.3.0"
 tokio = { version = "1.42.0", features = ["rt-multi-thread", "macros", "sync", "time"] }
 async-channel = "2.3.1"
 url = "2.5.2"
-# Match the engine's rusqlite (libsqlite3-sys `links = "sqlite3"` allows only one version).
-rusqlite = "0.39"
-cookie = "0.18.1"
 anyhow = "1.0.95"
 # CLI parsing. Version matches the engine workspace so the org stays on one clap.
 clap = { version = "4.6.0", features = ["derive"] }
-thiserror = "2.0.9"
-futures-core = "0.3.31"
-bytes = "1.9.0"
-futures = "0.3.31"
 lazy_static = "1.5.0"
-# Optional dependencies
-reqwest = {  version = "0.12.11", features = ["blocking", "gzip", "brotli", "cookies", "deflate", "http2", "rustls-tls", "stream"], optional = true }
-ureq = { version = "2.0.0", optional = true }
-gophermap = { version = "0.1.2", optional = true }
-
-[features]
-default = ["proto-http", "http-agent-reqwest"]
-http-agent = []
-http-agent-reqwest = ["http-agent", "dep:reqwest"]
-http-agent-ureq = ["http-agent", "dep:ureq"]
-
-proto-http = []     # Enables the HTTP(s) protocol (required)
-proto-ftp = []      # Enables the FTP protocol (ftp://)
-proto-gopher = [ "dep:gophermap" ]   # Enables the Gopher protocol (gopher://)
+# Only for `view-source:` (src/fetch.rs) -- every other load goes through the engine.
+reqwest = { version = "0.12.11", features = ["gzip", "brotli", "deflate", "http2", "rustls-tls"] }
 
 # EGL is how Skia binds the GL context on Wayland/X11; macOS uses CGL natively.
 [target.'cfg(not(target_os = "macos"))'.dependencies]

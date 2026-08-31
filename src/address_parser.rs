@@ -61,7 +61,9 @@ pub enum GosubRenderMode {
     Json,
     /// Rendered as highlighted XML
     Xml,
-    /// Custom rendering mode (user-defined)
+    /// Custom rendering mode (user-defined). Nothing constructs this yet — it is the
+    /// placeholder for the extension system sketched at the top of this file.
+    #[allow(dead_code)]
     Custom(String),
 }
 
