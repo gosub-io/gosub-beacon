@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
-use beacon_core::beacon::Beacon;
+use beacon_core::beacon::{Beacon, DRAW_FPS};
 use beacon_core::command::BeaconCommand;
 use beacon_core::engine::BrowserEngine;
 use beacon_core::event::{BeaconEvent, Cursor};
@@ -139,8 +139,12 @@ impl BeaconApp {
         self.views.insert(tab_id, TabView::default());
 
         let target = url.to_string();
+        log::debug!("open_tab: navigating engine tab {engine_id:?} to {target}");
         self.rt.spawn(async move {
-            let _ = handle.send(TabCommand::Navigate { url: target }).await;
+            if let Err(e) = handle.send(TabCommand::Navigate { url: target }).await {
+                log::warn!("navigate command was not delivered: {e:?}");
+            }
+            let _ = handle.send(TabCommand::ResumeDrawing { fps: DRAW_FPS }).await;
         });
         Some(tab_id)
     }
@@ -163,6 +167,16 @@ impl BeaconApp {
         });
     }
 
+    /// Send a command and then make sure the tab is actually drawing. Drawing is suspended
+    /// until asked, and neither navigating nor resizing resumes it on its own.
+    fn send_active_and_draw(&self, command: TabCommand) {
+        let Some(handle) = self.active_handle() else { return };
+        self.rt.spawn(async move {
+            let _ = handle.send(command).await;
+            let _ = handle.send(TabCommand::ResumeDrawing { fps: DRAW_FPS }).await;
+        });
+    }
+
     fn dispatch(&mut self, command: BeaconCommand) {
         let events = self.beacon.apply(command);
         self.absorb(events);
@@ -173,6 +187,7 @@ impl BeaconApp {
         loop {
             match self.event_rx.try_recv() {
                 Ok(event) => {
+                    log::debug!("engine event: {}", engine_event_name(&event));
                     let out = self.beacon.on_engine_event(event);
                     self.absorb(out);
                 }
@@ -232,6 +247,7 @@ impl BeaconApp {
             return;
         };
         let Some(handle) = self.engine.compositor.frame_for(engine_id) else {
+            log::debug!("no composited frame yet for engine tab {engine_id:?}");
             return;
         };
         let Some(view) = self.views.get_mut(&tab_id) else { return };
@@ -245,6 +261,10 @@ impl BeaconApp {
                 page_height,
                 ..
             } => {
+                log::debug!(
+                    "frame: TileCache {} tile(s) {viewport_width}x{viewport_height} dpr={dpr} page_height={page_height}",
+                    tiles.len()
+                );
                 view.page_height = page_height;
                 let w = (viewport_width * dpr) as usize;
                 let h = (viewport_height * dpr) as usize;
@@ -276,6 +296,7 @@ impl BeaconApp {
             }
 
             ExternalHandle::WgpuTextureId { id, .. } => {
+                log::debug!("frame: WgpuTextureId {id}");
                 // Re-register only when the wgpu texture itself changes. The engine renders
                 // into the same texture every frame, so keying on anything per-frame would
                 // churn a bind-group free+register each time and wreck the frame rate.
@@ -297,8 +318,22 @@ impl BeaconApp {
                 view.gpu_texture = Some((id, registered));
             }
 
-            _ => {}
+            other => log::debug!("frame: unhandled handle {other:?}"),
         }
+    }
+}
+
+/// Variant name only -- engine events are chatty and their payloads are large.
+fn engine_event_name(event: &EngineEvent) -> &'static str {
+    match event {
+        EngineEvent::Redraw { .. } => "Redraw",
+        EngineEvent::Navigation { .. } => "Navigation",
+        EngineEvent::TitleChanged { .. } => "TitleChanged",
+        EngineEvent::FavIconChanged { .. } => "FavIconChanged",
+        EngineEvent::HoverUrl { .. } => "HoverUrl",
+        EngineEvent::CursorChanged { .. } => "CursorChanged",
+        EngineEvent::TabCrashed { .. } => "TabCrashed",
+        _ => "other",
     }
 }
 
@@ -465,7 +500,7 @@ impl eframe::App for BeaconApp {
                     if let Some(view) = self.views.get_mut(&active) {
                         view.viewport = Some(wanted);
                     }
-                    self.send_active(TabCommand::SetViewport {
+                    self.send_active_and_draw(TabCommand::SetViewport {
                         x: 0,
                         y: 0,
                         width: wanted.0,
@@ -540,6 +575,6 @@ impl BeaconApp {
             }
         }
         self.address_bar = url.to_string();
-        self.send_active(TabCommand::Navigate { url: url.to_string() });
+        self.send_active_and_draw(TabCommand::Navigate { url: url.to_string() });
     }
 }

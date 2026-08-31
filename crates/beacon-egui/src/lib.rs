@@ -20,11 +20,17 @@ fn runtime() -> &'static Runtime {
 
 /// Start Beacon under egui. Blocks until the window closes.
 pub fn run() {
-    colog::basic_builder()
+    // RUST_LOG wins when it is set, so a diagnostic run needs no rebuild:
+    //   RUST_LOG=beacon_egui=debug ./gosub-beacon-egui https://example.org
+    let mut builder = colog::basic_builder();
+    builder
         .filter(None, log::LevelFilter::Error)
         .filter(Some("beacon_egui"), log::LevelFilter::Warn)
-        .filter(Some("beacon_core"), log::LevelFilter::Warn)
-        .init();
+        .filter(Some("beacon_core"), log::LevelFilter::Warn);
+    if let Ok(spec) = std::env::var("RUST_LOG") {
+        builder.parse_filters(&spec);
+    }
+    builder.init();
 
     let cli = beacon_core::cli::Cli::init();
     let urls = cli.urls.clone();

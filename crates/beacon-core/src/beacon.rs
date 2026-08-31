@@ -24,6 +24,9 @@ use crate::tab::{GosubTabManager, TabId};
 /// The engine's own tab identifier.
 pub type EngineTabId = gosub_engine::tab::TabId;
 
+/// Frame rate to ask the engine for when a tab starts drawing again.
+pub const DRAW_FPS: u16 = 30;
+
 /// Browser state that reacts to the engine.
 pub struct Beacon {
     /// Shared with the frontend, which also reads it to build the tab strip.
@@ -117,8 +120,12 @@ impl Beacon {
                 manager.update_tab(tab_id, &tab);
             }
         }
+        // A tab's drawing is suspended until asked to resume, and navigating does not
+        // implicitly resume it -- so without this the page loads and the engine then
+        // composites nothing, forever. Every navigation needs the follow-up.
         self.rt.spawn(async move {
             let _ = handle.send(command).await;
+            let _ = handle.send(EngineTabCommand::ResumeDrawing { fps: DRAW_FPS }).await;
         });
         vec![BeaconEvent::LoadingChanged(tab_id, true), BeaconEvent::TabsChanged]
     }
