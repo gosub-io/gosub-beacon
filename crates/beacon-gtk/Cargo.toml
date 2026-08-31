@@ -1,0 +1,38 @@
+[package]
+name = "beacon-gtk"
+description = "GTK4 frontend for Gosub Beacon"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+beacon-core = { path = "../beacon-core" }
+
+gosub_engine.workspace = true
+gosub_render_pipeline.workspace = true
+gosub_renderer_skia.workspace = true
+
+skia-safe.workspace = true
+gtk4.workspace = true
+gtk-macros.workspace = true
+
+anyhow.workspace = true
+async-channel.workspace = true
+chrono.workspace = true
+clap.workspace = true
+colog.workspace = true
+lazy_static.workspace = true
+log.workspace = true
+once_cell.workspace = true
+reqwest.workspace = true
+tokio.workspace = true
+url.workspace = true
+uuid.workspace = true
+
+# EGL is how Skia binds the GL context on Wayland/X11; macOS uses CGL natively.
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+skia-safe = { workspace = true, features = ["egl"] }
+
+[build-dependencies]
+glib-build-tools.workspace = true

@@ -1,3 +1,9 @@
+//! Beacon's GTK4 frontend: the application window, tab strip, toolbar and the
+//! `GtkGLArea` the engine's frames are composited into.
+//!
+//! This is one possible host for the browser, not the browser itself. Everything that is
+//! not a widget is on its way out to `beacon-core`; what stays here is GTK.
+
 mod address_parser;
 mod application;
 mod cli;
@@ -23,7 +29,8 @@ fn runtime() -> &'static Runtime {
     RUNTIME.get_or_init(|| Runtime::new().expect("Setting up tokio runtime needs to succeed."))
 }
 
-fn main() {
+/// Start Beacon under GTK. Blocks until the last window closes.
+pub fn run() {
     colog::basic_builder()
         .format_file(true)
         .format_indent(Some(2))
@@ -34,8 +41,11 @@ fn main() {
         .format_target(true)
         .filter(None, log::LevelFilter::Error)
         .filter(Some("gtk"), log::LevelFilter::Info)
-        // Our own warnings must not be swallowed by the global Error filter.
-        .filter(Some("gosub_beacon"), log::LevelFilter::Warn)
+        // Our own warnings must not be swallowed by the global Error filter. These match
+        // on module path, which starts with the crate name -- so they have to be kept in
+        // step with the crate names, or our logging silently goes quiet.
+        .filter(Some("beacon_gtk"), log::LevelFilter::Warn)
+        .filter(Some("beacon_core"), log::LevelFilter::Warn)
         .init();
 
     // Parse argv first: `--help` / `--version` must answer cleanly, without a display.

@@ -314,6 +314,36 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
 
 [[package]]
+name = "beacon-core"
+version = "0.1.0"
+
+[[package]]
+name = "beacon-gtk"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-channel",
+ "beacon-core",
+ "chrono",
+ "clap",
+ "colog",
+ "glib-build-tools",
+ "gosub_engine",
+ "gosub_render_pipeline",
+ "gosub_renderer_skia",
+ "gtk-macros",
+ "gtk4",
+ "lazy_static",
+ "log",
+ "once_cell",
+ "reqwest 0.12.28",
+ "skia-safe",
+ "tokio",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "bindgen"
 version = "0.72.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1719,25 +1749,7 @@ dependencies = [
 name = "gosub-beacon"
 version = "0.1.0"
 dependencies = [
- "anyhow",
- "async-channel",
- "chrono",
- "clap",
- "colog",
- "glib-build-tools",
- "gosub_engine",
- "gosub_render_pipeline",
- "gosub_renderer_skia",
- "gtk-macros",
- "gtk4",
- "lazy_static",
- "log",
- "once_cell",
- "reqwest 0.12.28",
- "skia-safe",
- "tokio",
- "url",
- "uuid",
+ "beacon-gtk",
 ]
 
 [[package]]

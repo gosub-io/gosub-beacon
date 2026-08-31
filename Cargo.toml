@@ -1,55 +1,64 @@
-[package]
-name = "gosub-beacon"
+# Beacon is a cargo workspace: a browser core that knows nothing about any toolkit,
+# and one crate per frontend that hosts it. Today there is one frontend (GTK4); the
+# split exists so a second one does not mean a second browser.
+#
+#   crates/beacon       thin binary, picks a frontend
+#   crates/beacon-core  tabs, navigation, session, downloads -- no toolkit
+#   crates/beacon-gtk   the GTK4 frontend
+[workspace]
+resolver = "2"
+members = ["crates/beacon", "crates/beacon-core", "crates/beacon-gtk"]
+# `cargo run` / `cargo build` with no `-p` mean the browser.
+default-members = ["crates/beacon"]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2021"
 authors = ["Gosub Community <info@gosub.io>"]
-description = "Gosub Beacon — a web browser built on the Gosub engine"
 license = "MIT"
 
-[dependencies]
-# Local engine: main gosub-engine checkout. The engine owns networking,
-# cookies, storage and the render pipeline; rendering is consumed via the
-# compositor / tile cache.
+# Versions live here so every crate in the workspace agrees on them. That is not just
+# tidiness: gtk4-sys, libsqlite3-sys and skia bind native libraries through `links`,
+# which allows exactly one version of each in the dependency graph.
+[workspace.dependencies]
+# Local engine: main gosub-engine checkout. The engine owns networking, cookies,
+# storage and the render pipeline; rendering is consumed via the compositor / tile
+# cache. Paths are relative to this file, i.e. to the workspace root.
 gosub_engine = { path = "../gosub-engine/crates/gosub_engine", features = ["sqlite_cookie_store", "sqlite_places"] }
 gosub_render_pipeline = { path = "../gosub-engine/crates/gosub_render_pipeline" }
 gosub_renderer_skia = { path = "../gosub-engine/crates/gosub_renderer_skia" }
+
 # Skia rasterizes tiles on the CPU; compositing happens on the GPU via GtkGLArea
-# (see src/engine.rs). Version must match the engine workspace's skia-safe.
+# (see crates/beacon-gtk/src/engine.rs). Must match the engine workspace's skia-safe.
 skia-safe = { version = "0.99.0", features = ["gl"] }
-gtk-macros = "0.3"
-# gtk4 must match the version the engine's `gtk4` feature pins (gtk4-sys uses `links`,
-# so only one gtk4 version can be in the dependency graph).
+# gtk4 must match the version the engine's `gtk4` feature pins.
 gtk4 = { version = "0.11.1", features = ["v4_6", "v4_14"] }
-chrono = { version = "0.4.39", features = [] }
-uuid = { version = "1.11.0", features = ["v4", "v7"] }
-log = "0.4.22"
-once_cell = "1.5"
-colog = "1.3.0"
-tokio = { version = "1.42.0", features = ["rt-multi-thread", "macros", "sync", "time"] }
-async-channel = "2.3.1"
-url = "2.5.2"
-anyhow = "1.0.95"
-# CLI parsing. Version matches the engine workspace so the org stays on one clap.
-clap = { version = "4.6.0", features = ["derive"] }
-lazy_static = "1.5.0"
-# Only for `view-source:` (src/fetch.rs) -- every other load goes through the engine.
-reqwest = { version = "0.12.11", features = ["gzip", "brotli", "deflate", "http2", "rustls-tls"] }
-
-# EGL is how Skia binds the GL context on Wayland/X11; macOS uses CGL natively.
-[target.'cfg(not(target_os = "macos"))'.dependencies]
-skia-safe = { version = "0.99.0", features = ["gl", "egl"] }
-
-[build-dependencies]
+gtk-macros = "0.3"
 glib-build-tools = "0.21.0"
 
+anyhow = "1.0.95"
+async-channel = "2.3.1"
+chrono = { version = "0.4.39", features = [] }
+# CLI parsing. Version matches the engine workspace so the org stays on one clap.
+clap = { version = "4.6.0", features = ["derive"] }
+colog = "1.3.0"
+lazy_static = "1.5.0"
+log = "0.4.22"
+once_cell = "1.5"
+# Only for `view-source:` -- every other load goes through the engine.
+reqwest = { version = "0.12.11", features = ["gzip", "brotli", "deflate", "http2", "rustls-tls"] }
+tokio = { version = "1.42.0", features = ["rt-multi-thread", "macros", "sync", "time"] }
+url = "2.5.2"
+uuid = { version = "1.11.0", features = ["v4", "v7"] }
+
 # Dev builds must stay fast enough to actually browse with: the engine's render
-# pipeline and the frame blit in src/engine.rs are per-pixel CPU work that is
-# unusable at opt-level 0. Dependencies (including the engine path deps, which
-# do not inherit the engine workspace's own profile) get full optimization;
-# the beacon crate itself gets light optimization to keep rebuilds quick.
+# pipeline and the frame blit in beacon-gtk's engine.rs are per-pixel CPU work that is
+# unusable at opt-level 0. Dependencies (including the engine path deps, which do not
+# inherit the engine workspace's own profile) get full optimization; our own crates get
+# light optimization to keep rebuilds quick. Profiles are only honoured at the
+# workspace root, so they must live here rather than in a member.
 [profile.dev]
 opt-level = 1
 
 [profile.dev.package."*"]
 opt-level = 2
-

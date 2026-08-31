@@ -1,0 +1,16 @@
+[package]
+name = "gosub-beacon"
+description = "Gosub Beacon — a web browser built on the Gosub engine"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+# The binary keeps its name: the Dockerfile entrypoint, the headless driver and
+# anything else pointing at target/debug/gosub-beacon expect it.
+[[bin]]
+name = "gosub-beacon"
+path = "src/main.rs"
+
+[dependencies]
+beacon-gtk = { path = "../beacon-gtk" }
