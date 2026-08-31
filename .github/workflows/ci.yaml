@@ -83,6 +83,28 @@ jobs:
         working-directory: gosub-beacon
         run: cargo test --verbose --all --no-fail-fast --all-targets
 
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: gosub-beacon
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.ENGINE_REPO }}
+          ref: ${{ env.ENGINE_REF }}
+          path: gosub-engine
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: gosub-beacon
+      - name: Build the egui frontend
+        working-directory: gosub-beacon
+        run: cargo build --verbose -p gosub-beacon --no-default-features --features egui
+      - name: Test the toolkit-neutral core
+        working-directory: gosub-beacon
+        run: cargo test --verbose -p beacon-core --no-fail-fast
+
   clippy:
     runs-on: ubuntu-24.04
     steps:
@@ -114,9 +136,20 @@ jobs:
   fmt:
     runs-on: ubuntu-24.04
     steps:
+      # The engine has to be here even to check formatting: `cargo fmt --all` enumerates
+      # workspace members through `cargo metadata`, which resolves every path dependency.
+      # A single-package repo could skip this; a virtual workspace cannot.
       - uses: actions/checkout@v4
+        with:
+          path: gosub-beacon
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.ENGINE_REPO }}
+          ref: ${{ env.ENGINE_REF }}
+          path: gosub-engine
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
       - name: Run fmt
+        working-directory: gosub-beacon
         run: cargo fmt --check --all

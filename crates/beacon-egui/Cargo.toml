@@ -1,0 +1,25 @@
+[package]
+name = "beacon-egui"
+description = "winit/egui frontend for Gosub Beacon"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+beacon-core = { path = "../beacon-core" }
+
+gosub_engine.workspace = true
+gosub_render_pipeline.workspace = true
+gosub_renderer_vello.workspace = true
+
+eframe.workspace = true
+egui.workspace = true
+vello.workspace = true
+
+anyhow.workspace = true
+colog.workspace = true
+log.workspace = true
+parking_lot.workspace = true
+tokio.workspace = true
+url.workspace = true

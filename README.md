@@ -55,15 +55,29 @@ sudo apt install libgtk-4-dev libglib2.0-dev libcairo2-dev libgdk-pixbuf-2.0-dev
                  clang libclang-dev libgl-dev libegl-dev libfontconfig-dev libfreetype-dev
 ```
 
-Linux only for now. macOS and Windows shells will consume the engine's C API instead of
-this GTK code, but help with either is welcome.
+The dependencies above are for the GTK frontend. The egui one needs none of them — it
+renders through Vello on wgpu and pulls in neither GTK nor Skia:
+
+```bash
+cargo build                                    # both binaries
+cargo build --no-default-features --features egui   # just the egui one
+```
+
+Linux is the only platform with a working browser today. macOS is being approached
+through the egui frontend rather than GTK-on-Quartz — CI builds it on `macos-14`, but
+nothing there has been run yet, so treat it as unproven rather than supported. Windows is
+untouched. Help with either is welcome.
 
 ## Running
 
 ```bash
-cargo run                          # opens the default startup tabs
-cargo run -- https://example.com   # URLs on the command line become the startup tabs
+cargo run --bin gosub-beacon-gtk                          # opens the default startup tabs
+cargo run --bin gosub-beacon-gtk -- https://example.com   # URLs become the startup tabs
+cargo run --bin gosub-beacon-egui -- https://example.com  # the other frontend
 ```
+
+`gosub-beacon-gtk` is the one with features; `gosub-beacon-egui` currently does tabs,
+navigation and rendering and little else.
 
 Profile data (cookies, local storage, bookmarks/history, settings) ends up in
 `~/.local/share/gosub-beacon`.
