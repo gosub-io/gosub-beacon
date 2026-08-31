@@ -83,6 +83,38 @@ jobs:
         working-directory: gosub-beacon
         run: cargo test --verbose --all --no-fail-fast --all-targets
 
+  # First macOS build of the stack. Nothing here -- Beacon or engine -- has ever been
+  # compiled for Darwin, so this is exploratory: `continue-on-error` lets it report what
+  # breaks without blocking a PR on an unported dependency. Make it required once it is
+  # reliably green.
+  #
+  # Only the egui frontend: beacon-gtk would need GTK4 from brew, and the plan is to reach
+  # macOS through winit rather than GTK-on-Quartz. That also keeps skia-safe out of the
+  # build entirely -- the egui tree renders through Vello, so there is no C++ Skia to
+  # compile here.
+  macos:
+    runs-on: macos-14
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: gosub-beacon
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.ENGINE_REPO }}
+          ref: ${{ env.ENGINE_REF }}
+          path: gosub-engine
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: gosub-beacon
+      - name: Build the egui frontend
+        working-directory: gosub-beacon
+        run: cargo build --verbose -p gosub-beacon --no-default-features --features egui
+      - name: Test the toolkit-neutral core
+        working-directory: gosub-beacon
+        run: cargo test --verbose -p beacon-core --no-fail-fast
+
   clippy:
     runs-on: ubuntu-24.04
     steps:
