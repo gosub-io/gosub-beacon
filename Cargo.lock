@@ -694,11 +694,26 @@ dependencies = [
  "gosub_engine",
  "gosub_render_pipeline",
  "gosub_renderer_vello",
+ "image",
  "log",
  "parking_lot",
  "tokio",
  "url",
  "vello",
+]
+
+[[package]]
+name = "beacon-ffi"
+version = "0.1.0"
+dependencies = [
+ "beacon-core",
+ "gosub_engine",
+ "gosub_render_pipeline",
+ "gosub_renderer_skia",
+ "log",
+ "skia-safe",
+ "tokio",
+ "url",
 ]
 
 [[package]]

@@ -1,0 +1,27 @@
+[package]
+name = "beacon-ffi"
+description = "C ABI over beacon-core, for native chromes in Swift, C# and friends"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lib]
+name = "beacon"
+# cdylib for the shells to link against; staticlib for embedding; rlib so Rust tests can
+# reach the same code.
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+beacon-core = { path = "../beacon-core" }
+
+gosub_engine.workspace = true
+gosub_render_pipeline.workspace = true
+# CPU tile rasterization: the first frame path hands the shell finished pixels, and this is
+# the backend that produces them. A shared-surface path would swap this for Vello.
+gosub_renderer_skia.workspace = true
+skia-safe.workspace = true
+
+log.workspace = true
+tokio.workspace = true
+url.workspace = true
