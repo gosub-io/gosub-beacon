@@ -114,9 +114,20 @@ jobs:
   fmt:
     runs-on: ubuntu-24.04
     steps:
+      # The engine has to be here even to check formatting: `cargo fmt --all` enumerates
+      # workspace members through `cargo metadata`, which resolves every path dependency.
+      # A single-package repo could skip this; a virtual workspace cannot.
       - uses: actions/checkout@v4
+        with:
+          path: gosub-beacon
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.ENGINE_REPO }}
+          ref: ${{ env.ENGINE_REF }}
+          path: gosub-engine
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
       - name: Run fmt
+        working-directory: gosub-beacon
         run: cargo fmt --check --all
