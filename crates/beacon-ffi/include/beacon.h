@@ -144,10 +144,34 @@ void beacon_scroll(BeaconBrowser *browser, BeaconTabId tab, float delta_x, float
  * from your run loop. Text in the events is invalidated by the next call. */
 size_t beacon_poll_events(BeaconBrowser *browser, BeaconEvent *out, size_t max);
 
-/* ── frames ────────────────────────────────────────────────────────────────── */
+/* ── the page, two ways ────────────────────────────────────────────────────────
+ *
+ * A native chrome should attach a view: the page is drawn straight into it on the GPU,
+ * with no copy. Everything else -- tests, screenshots, thumbnails -- takes the frame,
+ * which is pixels in memory and works everywhere.
+ */
 
-/* Lends you the tab's latest composited frame. false when nothing has rendered yet, which
- * is normal for the first moments after opening a tab. Pair every true with a release. */
+/* Draw this tab into a view you own and lay out yourself: an NSView* on macOS, an HWND on
+ * Windows. Beacon fills it; you position it among your tab bar and toolbar like any other
+ * subview. Sizes are in device pixels.
+ *
+ * Returns false on platforms without a GPU path, or if the view cannot be wrapped -- fall
+ * back to beacon_acquire_frame if it does.
+ *
+ * The view must outlive the attachment: call beacon_detach_view before destroying it. */
+bool beacon_attach_view(BeaconBrowser *browser, BeaconTabId tab, void *view, uint32_t width, uint32_t height);
+void beacon_detach_view(BeaconBrowser *browser, BeaconTabId tab);
+/* Tell Beacon the view resized, in device pixels. */
+void beacon_resize_view(BeaconBrowser *browser, BeaconTabId tab, uint32_t width, uint32_t height);
+/* Draw the latest frame into the attached view. Call on BEACON_REDRAW, from your own draw
+ * cycle. False if no view is attached or nothing has rendered yet. */
+bool beacon_draw_view(BeaconBrowser *browser, BeaconTabId tab);
+
+/* Lends you the tab's latest frame as pixels. false when nothing has rendered yet, which is
+ * normal for the first moments after opening a tab. Pair every true with a release.
+ *
+ * Where the page is rendered on the GPU this copies it back off the card, which is slow on
+ * purpose: if you are drawing a window, attach a view instead. */
 bool beacon_acquire_frame(BeaconBrowser *browser, BeaconTabId tab, BeaconFrame *out);
 void beacon_release_frame(BeaconBrowser *browser, BeaconTabId tab);
 

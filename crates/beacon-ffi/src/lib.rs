@@ -34,9 +34,17 @@ use gosub_render_pipeline::render::backend::ExternalHandle;
 use gosub_render_pipeline::render::{composite_tiles, TileTarget};
 use tokio::runtime::Runtime;
 
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+mod gpu;
+
 /// CPU tiles through Skia — the same path the GTK frontend rasterizes with. The shell gets
-/// finished pixels; nothing here needs a GPU surface.
+/// finished pixels; nothing here needs a GPU or a view.
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 type FfiConfig = gosub_engine::DefaultRenderConfig<gosub_renderer_skia::SkiaBackend, gosub_renderer_skia::SkiaFontSystem>;
+
+/// Vello on the GPU, so the page can be blitted into a view the native chrome owns.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+type FfiConfig = gosub_engine::DefaultRenderConfig<gosub_renderer_vello::VelloBackend<gpu::FfiWgpuContext>>;
 
 fn runtime() -> &'static Runtime {
     static RT: OnceLock<Runtime> = OnceLock::new();
@@ -63,6 +71,13 @@ pub struct BeaconBrowser {
     strings: Vec<CString>,
     /// The composited frame handed out by `acquire_frame`, owned until `release_frame`.
     frame: Vec<u8>,
+
+    /// The wgpu device Vello draws through, kept so attached views can share it.
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    gpu: std::sync::Arc<gpu::FfiWgpuContext>,
+    /// Views the shell has attached, one per tab.
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    views: HashMap<TabId, gpu::ViewSurface>,
 }
 
 #[repr(C)]
@@ -213,7 +228,28 @@ impl BeaconBrowser {
 pub unsafe extern "C" fn beacon_new(config: *const BeaconConfig) -> *mut BeaconBrowser {
     let private = unsafe { config.as_ref() }.map(|c| c.private_mode).unwrap_or(false);
 
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let backend = Arc::new(gosub_renderer_skia::SkiaBackend::new());
+
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    let (gpu_context, backend) = {
+        let context = match gpu::FfiWgpuContext::new(runtime()) {
+            Ok(c) => Arc::new(c),
+            Err(e) => {
+                log::error!("beacon_new: {e}");
+                return std::ptr::null_mut();
+            }
+        };
+        let backend = match gosub_renderer_vello::VelloBackend::new(context.clone()) {
+            Ok(b) => Arc::new(b),
+            Err(e) => {
+                log::error!("beacon_new: Vello backend: {e:?}");
+                return std::ptr::null_mut();
+            }
+        };
+        (context, backend)
+    };
+
     let mut engine = match BrowserEngine::<FfiConfig>::new(runtime(), private, backend) {
         Ok(engine) => engine,
         Err(e) => {
@@ -242,6 +278,10 @@ pub unsafe extern "C" fn beacon_new(config: *const BeaconConfig) -> *mut BeaconB
         pending: Vec::new(),
         strings: Vec::new(),
         frame: Vec::new(),
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        gpu: gpu_context,
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        views: HashMap::new(),
     }))
 }
 
@@ -618,6 +658,11 @@ pub unsafe extern "C" fn beacon_poll_events(browser: *mut BeaconBrowser, out: *m
 /// Composite the tab's latest frame and lend it to the caller. Returns false when nothing
 /// has been rendered yet. Call [`beacon_release_frame`] when done with the pixels.
 ///
+/// On the GPU path this reads the page texture back off the card, which is deliberately the
+/// slow route: a shell that cares about speed attaches a view with
+/// [`beacon_attach_view`] and never calls this. It exists for headless use — tests,
+/// screenshots, thumbnails.
+///
 /// # Safety
 /// `out` must point at a valid `BeaconFrame`.
 #[no_mangle]
@@ -633,31 +678,49 @@ pub unsafe extern "C" fn beacon_acquire_frame(browser: *mut BeaconBrowser, tab: 
         return false;
     };
 
-    let ExternalHandle::TileCache {
-        tiles,
-        dpr,
-        scroll_x,
-        scroll_y,
-        viewport_width,
-        viewport_height,
-        ..
-    } = handle
-    else {
-        // A GPU-texture frame cannot be lent as CPU pixels; that is the shared-surface
-        // path, and this backend does not produce them.
-        return false;
+    let (width, height, dpr) = match &handle {
+        ExternalHandle::TileCache {
+            dpr,
+            viewport_width,
+            viewport_height,
+            ..
+        } => ((viewport_width * dpr) as usize, (viewport_height * dpr) as usize, *dpr),
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        ExternalHandle::WgpuTextureId { id, .. } => match b.gpu.read_back(*id) {
+            Some((pixels, w, h)) => {
+                b.frame = pixels;
+                unsafe {
+                    std::ptr::write(
+                        out,
+                        BeaconFrame {
+                            pixels: b.frame.as_ptr(),
+                            width: w,
+                            height: h,
+                            stride: w * 4,
+                            dpr: 1,
+                        },
+                    );
+                }
+                return true;
+            }
+            None => return false,
+        },
+        _ => return false,
     };
 
-    let width = (viewport_width * dpr) as usize;
-    let height = (viewport_height * dpr) as usize;
+    let ExternalHandle::TileCache {
+        tiles, scroll_x, scroll_y, ..
+    } = handle
+    else {
+        return false;
+    };
     if width == 0 || height == 0 {
         return false;
     }
 
     // Composite onto opaque white at the frame's own scroll position, exactly as the other
     // frontends do — going through the shared compositor is what gets `fixed` and `sticky`
-    // right, and the offset is what makes scrolling visible at all. Passing (0,0) here drew
-    // the top of the page forever, however far the engine had scrolled.
+    // right, and the offset is what makes scrolling visible at all.
     let mut argb = vec![0xFFFF_FFFFu32; width * height];
     composite_tiles(
         &tiles,
@@ -711,3 +774,115 @@ pub unsafe extern "C" fn beacon_release_frame(browser: *mut BeaconBrowser, _tab:
 /// Unused today; present so the header can promise a stable ABI while the surface grows.
 #[no_mangle]
 pub extern "C" fn beacon_reserved(_: *mut c_void) {}
+
+// ── native views (GPU path) ──────────────────────────────────────────────────
+
+/// Draw `tab` directly into a view the shell owns: an `NSView*` on macOS, an `HWND` on
+/// Windows. The page is rendered into that view with no copy and no readback, which is what
+/// a native chrome wants — it lays the view out among its own widgets and Beacon fills it.
+///
+/// Returns false on platforms without this path, or if the view cannot be wrapped.
+///
+/// # Safety
+/// `view` must be a valid pointer of the platform's expected type, and must outlive the
+/// attachment: call [`beacon_detach_view`] before the view is destroyed.
+#[no_mangle]
+pub unsafe extern "C" fn beacon_attach_view(browser: *mut BeaconBrowser, tab: u64, view: *mut c_void, width: u32, height: u32) -> bool {
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let _ = (browser, tab, view, width, height);
+        false
+    }
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    {
+        let b = browser!(browser, false);
+        let Some(tab_id) = b.tab(tab) else { return false };
+        match unsafe { gpu::ViewSurface::new(&b.gpu, view, width, height) } {
+            Ok(surface) => {
+                b.views.insert(tab_id, surface);
+                true
+            }
+            Err(e) => {
+                log::warn!("beacon_attach_view: {e}");
+                false
+            }
+        }
+    }
+}
+
+/// Stop drawing into the tab's view. Call this before the view is destroyed.
+///
+/// # Safety
+/// `browser` must be a live handle from [`beacon_new`].
+#[no_mangle]
+pub unsafe extern "C" fn beacon_detach_view(browser: *mut BeaconBrowser, tab: u64) {
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let _ = (browser, tab);
+    }
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    {
+        let b = browser!(browser);
+        if let Some(tab_id) = b.tab(tab) {
+            b.views.remove(&tab_id);
+        }
+    }
+}
+
+/// Tell Beacon the attached view changed size, in device pixels.
+///
+/// # Safety
+/// `browser` must be a live handle from [`beacon_new`].
+#[no_mangle]
+pub unsafe extern "C" fn beacon_resize_view(browser: *mut BeaconBrowser, tab: u64, width: u32, height: u32) {
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let _ = (browser, tab, width, height);
+    }
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    {
+        let b = browser!(browser);
+        let Some(tab_id) = b.tab(tab) else { return };
+        let gpu = b.gpu.clone();
+        if let Some(surface) = b.views.get_mut(&tab_id) {
+            surface.resize(&gpu, width, height);
+        }
+    }
+}
+
+/// Draw the tab's latest frame into its attached view. Call this when a `BEACON_REDRAW`
+/// event arrives, from the shell's own draw cycle.
+///
+/// Returns false if the tab has no view attached or nothing has been rendered yet.
+///
+/// # Safety
+/// `browser` must be a live handle from [`beacon_new`].
+#[no_mangle]
+pub unsafe extern "C" fn beacon_draw_view(browser: *mut BeaconBrowser, tab: u64) -> bool {
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let _ = (browser, tab);
+        false
+    }
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    {
+        let b = browser!(browser, false);
+        let Some(tab_id) = b.tab(tab) else { return false };
+        let engine_id = b.tabs.lock().unwrap().get_tab(tab_id).and_then(|t| t.engine_tab_id());
+        let Some(engine_id) = engine_id else { return false };
+        let Some(ExternalHandle::WgpuTextureId { id, .. }) = b.engine.compositor.frame_for(engine_id) else {
+            return false;
+        };
+        let Some((_, page)) = gosub_renderer_vello::WgpuContextProvider::get_texture(&*b.gpu, id) else {
+            return false;
+        };
+        let gpu = b.gpu.clone();
+        match b.views.get(&tab_id) {
+            Some(surface) => {
+                surface.present(&gpu, &page);
+                true
+            }
+            None => false,
+        }
+    }
+}

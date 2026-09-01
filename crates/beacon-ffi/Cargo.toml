@@ -17,11 +17,26 @@ beacon-core = { path = "../beacon-core" }
 
 gosub_engine.workspace = true
 gosub_render_pipeline.workspace = true
-# CPU tile rasterization: the first frame path hands the shell finished pixels, and this is
-# the backend that produces them. A shared-surface path would swap this for Vello.
-gosub_renderer_skia.workspace = true
-skia-safe.workspace = true
 
+anyhow.workspace = true
 log.workspace = true
 tokio.workspace = true
 url.workspace = true
+
+# Two rasterizers, chosen by platform.
+#
+# Where there is no native view to draw into, Skia rasterizes tiles on the CPU and the shell
+# is handed finished pixels. Simple, and it needs no GPU at all -- which is what lets the C
+# smoke test run headless in CI.
+[target.'cfg(not(any(target_os = "macos", target_os = "windows")))'.dependencies]
+gosub_renderer_skia.workspace = true
+skia-safe.workspace = true
+
+# On macOS and Windows the native chrome owns a view, so Vello renders on the GPU and the
+# page is blitted straight into it -- no copy, no readback. Every Mac has Metal, so there is
+# no software-fallback question to answer.
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+gosub_renderer_vello.workspace = true
+vello.workspace = true
+parking_lot.workspace = true
+raw-window-handle = "0.6"
