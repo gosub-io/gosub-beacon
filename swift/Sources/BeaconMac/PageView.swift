@@ -38,18 +38,27 @@ final class PageView: NSView {
     }
 
     private func attachIfPossible() {
-        guard !attached, tab != 0, window != nil else { return }
+        guard !attached, tab != 0 else { return }
+        guard window != nil else {
+            NSLog("beacon: not attaching yet — no window")
+            return
+        }
         let size = devicePixelSize
-        guard size.width > 0, size.height > 0 else { return }
+        guard size.width > 0, size.height > 0 else {
+            // Silence here is how a zero-height page view looks like a broken renderer.
+            NSLog("beacon: not attaching — page view is \(bounds.width)x\(bounds.height) points")
+            return
+        }
 
         // The view pointer is what Rust wraps as a surface. It must outlive the attachment,
         // which is why `detach` happens in viewWillMove(toWindow:) below.
         let pointer = Unmanaged.passUnretained(self).toOpaque()
         attached = browser.attach(tab, to: pointer, width: size.width, height: size.height)
         if attached {
+            NSLog("beacon: attached tab \(tab) to a \(size.width)x\(size.height) device-pixel surface")
             sendViewport()
         } else {
-            NSLog("beacon: could not attach a view for tab \(tab)")
+            NSLog("beacon: could not attach a view for tab \(tab) — see the beacon [WARN] line above")
         }
     }
 
@@ -93,19 +102,31 @@ final class PageView: NSView {
 
     private func sendViewport() {
         guard tab != 0 else { return }
+        NSLog("beacon: viewport \(Int(bounds.width))x\(Int(bounds.height)) CSS px @\(window?.backingScaleFactor ?? 1)x for tab \(tab)")
         // CSS pixels: the logical size, not the backing size.
         let width = UInt32(max(0, bounds.width))
         let height = UInt32(max(0, bounds.height))
         guard width > 0, height > 0 else { return }
-        browser.setViewport(tab, width: width, height: height)
+        // Retina displays are 2.0; an external 1x monitor is 1.0, and dragging the window
+        // between them changes it, which is why this is sent on every resize.
+        let scale = Float(window?.backingScaleFactor ?? 1.0)
+        browser.setViewport(tab, width: width, height: height, scale: scale)
     }
 
     /// Repaint. Called when a redraw event arrives, not from `draw(_:)` — the page is not
     /// drawn with Core Graphics, so AppKit's own drawing cycle is not involved.
     func redraw() {
         guard attached, tab != 0 else { return }
-        browser.draw(tab)
+        let drew = browser.draw(tab)
+        // Report the first few outcomes and then stop: enough to tell "never drew" from
+        // "drew but nothing visible", without a line per frame forever.
+        if drawsLogged < 3 {
+            drawsLogged += 1
+            NSLog("beacon: draw \(drawsLogged) for tab \(tab) returned \(drew)")
+        }
     }
+
+    private var drawsLogged = 0
 
     // ── input ─────────────────────────────────────────────────────────────
 

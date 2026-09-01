@@ -583,6 +583,11 @@ impl eframe::App for BeaconApp {
                     if let Some(view) = self.views.get_mut(&active) {
                         view.viewport = Some(wanted);
                     }
+                    // Rasterize at the display's real resolution. Without this the page is
+                    // drawn at 1x and stretched onto a HiDPI surface, which reads as blurry
+                    // text rather than as the scaling bug it is.
+                    let raster_dpr = (ctx.pixels_per_point().max(1.0).ceil() as u32).clamp(1, 4);
+                    gosub_render_pipeline::render::DEVICE_PIXEL_RATIO.store(raster_dpr, std::sync::atomic::Ordering::Relaxed);
                     self.send_active_and_draw(TabCommand::SetViewport {
                         x: 0,
                         y: 0,

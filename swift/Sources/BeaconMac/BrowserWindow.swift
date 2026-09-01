@@ -90,25 +90,33 @@ final class BrowserWindow: NSObject, NSWindowDelegate, NSTextFieldDelegate {
         statusLabel.textColor = .secondaryLabelColor
         statusLabel.isHidden = true
 
-        let stack = NSStackView(views: [tabStrip, toolbar, pageView, statusLabel])
-        stack.orientation = .vertical
-        stack.spacing = 0
-        stack.alignment = .leading
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        content.addSubview(stack)
+        // Explicit constraints rather than an outer NSStackView. A plain NSView has no
+        // intrinsic content size, so inside a stack the page collapses to zero height --
+        // which looks exactly like "the renderer is broken" and is not.
+        for view in [tabStrip, toolbar, pageView, statusLabel] as [NSView] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            content.addSubview(view)
+        }
 
         NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: content.topAnchor),
-            stack.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            stack.bottomAnchor.constraint(equalTo: content.bottomAnchor),
-            toolbar.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            tabStrip.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            pageView.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            tabStrip.topAnchor.constraint(equalTo: content.topAnchor),
+            tabStrip.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            tabStrip.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+
+            toolbar.topAnchor.constraint(equalTo: tabStrip.bottomAnchor),
+            toolbar.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            toolbar.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+
+            // The page takes everything left over, and is where the window's size goes.
+            pageView.topAnchor.constraint(equalTo: toolbar.bottomAnchor),
+            pageView.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            pageView.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            pageView.bottomAnchor.constraint(equalTo: statusLabel.topAnchor),
+
+            statusLabel.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 8),
+            statusLabel.trailingAnchor.constraint(lessThanOrEqualTo: content.trailingAnchor),
+            statusLabel.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -2),
         ])
-        // The page takes whatever the chrome does not.
-        pageView.setContentHuggingPriority(.defaultLow, for: .vertical)
-        pageView.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
     }
 
     // ── the pump ──────────────────────────────────────────────────────────

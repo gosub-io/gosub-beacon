@@ -188,7 +188,7 @@ int main(void) {
     printf("\nloading and rendering\n");
     BeaconTabId tab = beacon_open_tab(browser, url_a);
     CHECK(tab != 0, "opening a tab returns a handle");
-    beacon_set_viewport(browser, tab, 1024, 768);
+    beacon_set_viewport(browser, tab, 1024, 768, 1.0f);
     CHECK(settle(browser, tab, 15000), "the page finishes loading");
 
     char *url = beacon_tab_url(browser, tab);

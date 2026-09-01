@@ -12,6 +12,12 @@ From the repository root, build the Rust side first:
 cargo build -p beacon-ffi
 ```
 
+**Only that crate.** A bare `cargo build` builds the whole workspace, including
+`beacon-gtk` — the Linux frontend, which wants GTK4 from Homebrew and rasterizes through
+Skia. Skia will not compile here: the engine asks `skia-safe` for the `wayland` feature on
+every platform, `wayland` implies `egl`, and `egl` needs `EGL/egl.h`, which macOS does not
+have. `beacon-ffi` renders through Vello instead and pulls none of it.
+
 Then from this directory:
 
 ```bash

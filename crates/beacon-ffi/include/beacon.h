@@ -131,9 +131,13 @@ void beacon_stop(BeaconBrowser *browser);
 
 /* ── input ─────────────────────────────────────────────────────────────────── */
 
-/* Page area in CSS pixels. Send this whenever your view resizes; nothing renders until
- * the engine knows how big the page is. */
-void beacon_set_viewport(BeaconBrowser *browser, BeaconTabId tab, uint32_t width, uint32_t height);
+/* Page area in CSS pixels, plus device pixels per CSS pixel (NSView.backingScaleFactor,
+ * or 1.0 if you have no idea). Send this whenever your view resizes or moves between
+ * displays; nothing renders until the engine knows how big the page is.
+ *
+ * Get `scale` wrong and text looks blurry: the page is rasterized at 1x and stretched onto
+ * a 2x surface. It is not the font rendering. */
+void beacon_set_viewport(BeaconBrowser *browser, BeaconTabId tab, uint32_t width, uint32_t height, float scale);
 void beacon_mouse_move(BeaconBrowser *browser, BeaconTabId tab, float x, float y);
 void beacon_mouse_down(BeaconBrowser *browser, BeaconTabId tab, float x, float y, BeaconButton button);
 void beacon_scroll(BeaconBrowser *browser, BeaconTabId tab, float delta_x, float delta_y);

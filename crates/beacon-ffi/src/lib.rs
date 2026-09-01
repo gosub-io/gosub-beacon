@@ -98,6 +98,10 @@ pub struct BeaconBrowser {
     beacon: Beacon,
     tabs: Arc<Mutex<GosubTabManager>>,
     events: tokio::sync::broadcast::Receiver<EngineEvent>,
+    /// Fires whenever the compositor has a new frame. This -- not
+    /// `EngineEvent::Redraw`, which nothing emits -- is how a frontend learns there is
+    /// something to draw; the GTK and egui frontends both repaint from it.
+    redraw: Option<tokio::sync::mpsc::UnboundedReceiver<()>>,
 
     /// Stable `uint64_t` handles for the shell. `TabId` is a UUID, which does not fit in a
     /// C integer, and handing out pointers would invite use-after-free.
@@ -225,6 +229,19 @@ impl BeaconBrowser {
 
     /// Drain the engine and translate. Called by `poll_events` before it serves the shell.
     fn pump(&mut self) {
+        // Frames first. Many notifications can pile up between polls, but they all mean the
+        // same thing -- "draw the latest" -- so they coalesce into one event rather than
+        // making the shell repaint once per notification.
+        if let Some(redraw) = self.redraw.as_mut() {
+            let mut any = false;
+            while redraw.try_recv().is_ok() {
+                any = true;
+            }
+            if any {
+                self.pending.push(BeaconEvent::Redraw);
+            }
+        }
+
         loop {
             match self.events.try_recv() {
                 Ok(event) => {
@@ -300,6 +317,7 @@ pub unsafe extern "C" fn beacon_new(config: *const BeaconConfig) -> *mut BeaconB
     let Some(events) = engine.take_event_rx() else {
         return std::ptr::null_mut();
     };
+    let redraw = engine.take_redraw_rx();
 
     let tabs = Arc::new(Mutex::new(GosubTabManager::new()));
     let beacon = Beacon::new(
@@ -313,6 +331,7 @@ pub unsafe extern "C" fn beacon_new(config: *const BeaconConfig) -> *mut BeaconB
         beacon,
         tabs,
         events,
+        redraw,
         handles: HashMap::new(),
         next_handle: 1,
         pending: Vec::new(),
@@ -567,17 +586,30 @@ pub unsafe extern "C" fn beacon_reload(browser: *mut BeaconBrowser, ignore_cache
 
 // ── input ────────────────────────────────────────────────────────────────────
 
-/// Tell the engine how big the page area is, in CSS pixels.
+/// Tell the engine how big the page area is, in CSS pixels, and how many device pixels
+/// there are per CSS pixel.
+///
+/// `scale` is what makes text sharp on a HiDPI display: without it the page is rasterized
+/// at 1x and then stretched onto a 2x surface, which looks exactly like bad font
+/// rendering and is not.
 ///
 /// # Safety
 /// `browser` must be a live handle from [`beacon_new`].
 #[no_mangle]
-pub unsafe extern "C" fn beacon_set_viewport(browser: *mut BeaconBrowser, tab: u64, width: u32, height: u32) {
+pub unsafe extern "C" fn beacon_set_viewport(browser: *mut BeaconBrowser, tab: u64, width: u32, height: u32, scale: f32) {
     let b = browser!(browser);
     let Some(tab_id) = b.tab(tab) else { return };
     if width == 0 || height == 0 {
         return;
     }
+
+    // The rasterizer reads this global rather than taking it per-tab, so it is re-stored
+    // whenever a viewport lands -- which is also what happens on activation and resize.
+    // With several tabs at different scales the last one to be sized wins, exactly as in
+    // the GTK frontend; a per-tab DPR is an engine-side change.
+    let raster_dpr = (scale.max(1.0).ceil() as u32).clamp(1, 4);
+    gosub_render_pipeline::render::DEVICE_PIXEL_RATIO.store(raster_dpr, std::sync::atomic::Ordering::Relaxed);
+
     b.send_and_draw(tab_id, TabCommand::SetViewport { x: 0, y: 0, width, height });
 }
 

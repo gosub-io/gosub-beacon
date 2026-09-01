@@ -67,9 +67,10 @@ final class Browser {
 
     // ── input ─────────────────────────────────────────────────────────────
 
-    /// Page area in CSS pixels. Nothing renders until the engine knows this.
-    func setViewport(_ tab: BeaconTabId, width: UInt32, height: UInt32) {
-        beacon_set_viewport(handle, tab, width, height)
+    /// Page area in CSS pixels, and device pixels per CSS pixel. The scale is what keeps
+    /// text sharp on a Retina display.
+    func setViewport(_ tab: BeaconTabId, width: UInt32, height: UInt32, scale: Float) {
+        beacon_set_viewport(handle, tab, width, height, scale)
     }
 
     func mouseMoved(_ tab: BeaconTabId, x: Float, y: Float) { beacon_mouse_move(handle, tab, x, y) }
