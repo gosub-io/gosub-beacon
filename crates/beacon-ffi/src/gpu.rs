@@ -217,26 +217,22 @@ impl ViewSurface {
     pub unsafe fn new(context: &FfiWgpuContext, handle: *mut std::ffi::c_void, width: u32, height: u32) -> anyhow::Result<Self> {
         let ptr = std::ptr::NonNull::new(handle).ok_or_else(|| anyhow::anyhow!("null view handle"))?;
 
+        // Only the window handle carries information here: AppKit's display handle is an
+        // empty struct, and wgpu itself passes None for it on these platforms.
         #[cfg(target_os = "macos")]
-        let (raw_display, raw_window) = (
-            raw_window_handle::RawDisplayHandle::AppKit(raw_window_handle::AppKitDisplayHandle::new()),
-            raw_window_handle::RawWindowHandle::AppKit(raw_window_handle::AppKitWindowHandle::new(ptr)),
-        );
+        let raw_window = raw_window_handle::RawWindowHandle::AppKit(raw_window_handle::AppKitWindowHandle::new(ptr));
         #[cfg(target_os = "windows")]
-        let (raw_display, raw_window) = {
-            let mut w = raw_window_handle::Win32WindowHandle::new(
+        let raw_window = {
+            let mut handle = raw_window_handle::Win32WindowHandle::new(
                 std::num::NonZeroIsize::new(ptr.as_ptr() as isize).ok_or_else(|| anyhow::anyhow!("null HWND"))?,
             );
-            w.hinstance = None;
-            (
-                raw_window_handle::RawDisplayHandle::Windows(raw_window_handle::WindowsDisplayHandle::new()),
-                raw_window_handle::RawWindowHandle::Win32(w),
-            )
+            handle.hinstance = None;
+            raw_window_handle::RawWindowHandle::Win32(handle)
         };
 
         let surface = unsafe {
             context.instance().create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
-                raw_display_handle: raw_display,
+                raw_display_handle: None,
                 raw_window_handle: raw_window,
             })?
         };
