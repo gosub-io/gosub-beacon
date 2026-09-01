@@ -636,6 +636,8 @@ pub unsafe extern "C" fn beacon_acquire_frame(browser: *mut BeaconBrowser, tab: 
     let ExternalHandle::TileCache {
         tiles,
         dpr,
+        scroll_x,
+        scroll_y,
         viewport_width,
         viewport_height,
         ..
@@ -652,13 +654,15 @@ pub unsafe extern "C" fn beacon_acquire_frame(browser: *mut BeaconBrowser, tab: 
         return false;
     }
 
-    // Composite onto opaque white, exactly as the other frontends do — going through the
-    // shared compositor is what gets `fixed` and `sticky` right.
+    // Composite onto opaque white at the frame's own scroll position, exactly as the other
+    // frontends do — going through the shared compositor is what gets `fixed` and `sticky`
+    // right, and the offset is what makes scrolling visible at all. Passing (0,0) here drew
+    // the top of the page forever, however far the engine had scrolled.
     let mut argb = vec![0xFFFF_FFFFu32; width * height];
     composite_tiles(
         &tiles,
         dpr,
-        (0.0, 0.0),
+        (scroll_x, scroll_y),
         &mut TileTarget {
             buf: &mut argb,
             stride: width,
