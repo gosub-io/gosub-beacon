@@ -46,6 +46,45 @@ type FfiConfig = gosub_engine::DefaultRenderConfig<gosub_renderer_skia::SkiaBack
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 type FfiConfig = gosub_engine::DefaultRenderConfig<gosub_renderer_vello::VelloBackend<gpu::FfiWgpuContext>>;
 
+/// Send this library's logging to stderr, once.
+///
+/// A native shell links a Rust dylib and never installs a logger, so without this every
+/// `log::warn!` in here and in the engine goes nowhere -- which is exactly how a failing
+/// `beacon_attach_view` came back as a bare "false" with no reason attached. Level comes
+/// from `BEACON_LOG` (or `RUST_LOG`), defaulting to warnings.
+fn init_logging() {
+    use std::io::Write;
+    use std::sync::Once;
+
+    struct Stderr(log::LevelFilter);
+    impl log::Log for Stderr {
+        fn enabled(&self, meta: &log::Metadata) -> bool {
+            meta.level() <= self.0
+        }
+        fn log(&self, record: &log::Record) {
+            if self.enabled(record.metadata()) {
+                let _ = writeln!(std::io::stderr(), "beacon [{}] {}", record.level(), record.args());
+            }
+        }
+        fn flush(&self) {
+            let _ = std::io::stderr().flush();
+        }
+    }
+
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        let level = std::env::var("BEACON_LOG")
+            .or_else(|_| std::env::var("RUST_LOG"))
+            .ok()
+            .and_then(|s| s.parse::<log::LevelFilter>().ok())
+            .unwrap_or(log::LevelFilter::Warn);
+        // An embedder may have installed its own logger; that one wins.
+        if log::set_boxed_logger(Box::new(Stderr(level))).is_ok() {
+            log::set_max_level(level);
+        }
+    });
+}
+
 fn runtime() -> &'static Runtime {
     static RT: OnceLock<Runtime> = OnceLock::new();
     RT.get_or_init(|| Runtime::new().expect("tokio runtime"))
@@ -226,6 +265,7 @@ impl BeaconBrowser {
 /// whose `user_data_dir` is NULL or a NUL-terminated string.
 #[no_mangle]
 pub unsafe extern "C" fn beacon_new(config: *const BeaconConfig) -> *mut BeaconBrowser {
+    init_logging();
     let private = unsafe { config.as_ref() }.map(|c| c.private_mode).unwrap_or(false);
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
