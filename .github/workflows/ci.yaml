@@ -105,6 +105,44 @@ jobs:
         working-directory: gosub-beacon
         run: cargo test --verbose -p beacon-core --no-fail-fast
 
+  # The C ABI on Darwin, which is the thing a Swift chrome will actually link against.
+  # Separate from the `macos` job on purpose: beacon-ffi rasterizes through Skia, so this
+  # compiles C++ Skia and is much slower than the egui build, which pulls neither Skia nor
+  # GTK. Keeping them apart means the fast check stays fast.
+  #
+  # It also *runs* the C smoke test. That is the first time anything in this project
+  # executes on macOS rather than merely compiling: the test is headless, needs no network
+  # (its pages are generated into /tmp and loaded over file://) and exits non-zero if the
+  # browser fails to load, navigate, scroll or composite.
+  #
+  # continue-on-error while that is unproven -- same as the `macos` job started out. Drop it
+  # once this is reliably green.
+  macos-ffi:
+    runs-on: macos-14
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: gosub-beacon
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.ENGINE_REPO }}
+          ref: ${{ env.ENGINE_REF }}
+          path: gosub-engine
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: gosub-beacon
+          # Its own cache: this job's dependency graph includes Skia and the egui job's
+          # does not, so sharing a key would thrash both.
+          prefix-key: macos-ffi
+      - name: Build the C ABI
+        working-directory: gosub-beacon
+        run: cargo build --verbose -p beacon-ffi
+      - name: Build and run the C consumer
+        working-directory: gosub-beacon/crates/beacon-ffi
+        run: make run
+
   clippy:
     runs-on: ubuntu-24.04
     steps:

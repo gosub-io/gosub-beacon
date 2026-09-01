@@ -16,8 +16,12 @@
  * needs no network. Exits non-zero if any check fails.
  */
 
-/* nanosleep is POSIX, and -std=c11 alone does not expose it. */
+/* nanosleep is POSIX, and -std=c11 alone does not expose it on glibc. Not on Darwin
+ * though: there this macro sets __DARWIN_C_LEVEL and *narrows* what the headers declare,
+ * so asking for it can hide more than it reveals. macOS exposes nanosleep by default. */
+#if !defined(__APPLE__)
 #define _POSIX_C_SOURCE 199309L
+#endif
 
 #include <stdio.h>
 #include <stdlib.h>
