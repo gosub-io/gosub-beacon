@@ -18,6 +18,10 @@ let package = Package(
         .executableTarget(
             name: "BeaconMac",
             dependencies: ["CBeacon"],
+            // The About artwork, shared in spirit with the GTK shell's GResource copy.
+            // SwiftPM will not reach outside the target directory, so these are copies:
+            // if the art changes, both places need it.
+            resources: [.process("Resources")],
             linkerSettings: [
                 // Link the cdylib cargo just built, and record an rpath so the binary finds
                 // it at runtime without DYLD_LIBRARY_PATH.

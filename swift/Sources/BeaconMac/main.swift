@@ -10,27 +10,6 @@ let app = NSApplication.shared
 // app cannot -- a browser you cannot click into is not much of a test.
 app.setActivationPolicy(.regular)
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
-    var window: BrowserWindow?
-    private let startURL: String
-
-    init(startURL: String) {
-        self.startURL = startURL
-    }
-
-    func applicationDidFinishLaunching(_ notification: Notification) {
-        guard let browser = Browser(profileDirectory: nil, private: false) else {
-            NSLog("beacon: the engine would not start")
-            NSApp.terminate(nil)
-            return
-        }
-        window = BrowserWindow(browser: browser, startURL: startURL)
-        NSApp.activate(ignoringOtherApps: true)
-    }
-
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
-}
-
 let delegate = AppDelegate(startURL: startURL)
 app.delegate = delegate
 app.run()

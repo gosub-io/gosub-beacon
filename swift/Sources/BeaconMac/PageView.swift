@@ -1,16 +1,29 @@
 import AppKit
 import CBeacon
 
-/// The view Beacon draws the page into.
+/// The view Beacon draws the page into, and the one that owns page input.
 ///
 /// AppKit lays it out among the chrome like any other subview; what appears inside it is
 /// rendered by Rust on the GPU, straight into this view's layer. Nothing is copied and this
 /// class never touches a pixel.
-final class PageView: NSView {
+final class PageView: NSView, NSTextInputClient {
     private let browser: Browser
     private var tab: BeaconTabId = 0
     private var attached = false
     private var tracking: NSTrackingArea?
+
+    /// The link under the pointer. The label that shows it is the window's, not this
+    /// view's: wgpu takes ownership of this view's layer to attach a CAMetalLayer, so
+    /// nothing else should be trying to draw inside it.
+    private var hoverURL: String = ""
+    /// Called when the hovered link changes, so the window can show it.
+    var onHoverChanged: ((String) -> Void)?
+
+    /// Reported so the window can offer "Open Link in New Tab" and friends.
+    var onContextMenu: ((NSEvent, String) -> Void)?
+    /// A completed two-finger horizontal swipe: -1 back, +1 forward.
+    var onSwipeNavigate: ((Int) -> Void)?
+    var onZoomGesture: ((CGFloat) -> Void)?
 
     init(browser: Browser) {
         self.browser = browser
@@ -34,15 +47,15 @@ final class PageView: NSView {
             attached = false
         }
         tab = newTab
+        setHover(nil)
         attachIfPossible()
     }
 
+    var currentTab: BeaconTabId { tab }
+
     private func attachIfPossible() {
         guard !attached, tab != 0 else { return }
-        guard window != nil else {
-            NSLog("beacon: not attaching yet — no window")
-            return
-        }
+        guard window != nil else { return }
         let size = devicePixelSize
         guard size.width > 0, size.height > 0 else {
             // Silence here is how a zero-height page view looks like a broken renderer.
@@ -55,7 +68,6 @@ final class PageView: NSView {
         let pointer = Unmanaged.passUnretained(self).toOpaque()
         attached = browser.attach(tab, to: pointer, width: size.width, height: size.height)
         if attached {
-            NSLog("beacon: attached tab \(tab) to a \(size.width)x\(size.height) device-pixel surface")
             sendViewport()
         } else {
             NSLog("beacon: could not attach a view for tab \(tab) — see the beacon [WARN] line above")
@@ -66,6 +78,7 @@ final class PageView: NSView {
         super.viewDidMoveToWindow()
         attachIfPossible()
         updateTracking()
+        window?.makeFirstResponder(self)
     }
 
     override func viewWillMove(toWindow newWindow: NSWindow?) {
@@ -100,10 +113,10 @@ final class PageView: NSView {
         updateTracking()
     }
 
-    private func sendViewport() {
+    func sendViewport() {
         guard tab != 0 else { return }
-        NSLog("beacon: viewport \(Int(bounds.width))x\(Int(bounds.height)) CSS px @\(window?.backingScaleFactor ?? 1)x for tab \(tab)")
-        // CSS pixels: the logical size, not the backing size.
+        // CSS pixels: the logical size, not the backing size. Zoom is applied on the Rust
+        // side, so this stays the view's unzoomed size.
         let width = UInt32(max(0, bounds.width))
         let height = UInt32(max(0, bounds.height))
         guard width > 0, height > 0 else { return }
@@ -117,18 +130,19 @@ final class PageView: NSView {
     /// drawn with Core Graphics, so AppKit's own drawing cycle is not involved.
     func redraw() {
         guard attached, tab != 0 else { return }
-        let drew = browser.draw(tab)
-        // Report the first few outcomes and then stop: enough to tell "never drew" from
-        // "drew but nothing visible", without a line per frame forever.
-        if drawsLogged < 3 {
-            drawsLogged += 1
-            NSLog("beacon: draw \(drawsLogged) for tab \(tab) returned \(drew)")
-        }
+        _ = browser.draw(tab)
     }
 
-    private var drawsLogged = 0
+    // ── the hovered link ──────────────────────────────────────────────────
 
-    // ── input ─────────────────────────────────────────────────────────────
+    func setHover(_ url: String?) {
+        let value = url ?? ""
+        guard value != hoverURL else { return }
+        hoverURL = value
+        onHoverChanged?(value)
+    }
+
+    // ── mouse ─────────────────────────────────────────────────────────────
 
     private func updateTracking() {
         if let tracking { removeTrackingArea(tracking) }
@@ -142,9 +156,12 @@ final class PageView: NSView {
         tracking = area
     }
 
+    /// Page coordinates. The engine works in unzoomed CSS pixels, so a zoomed page needs
+    /// the pointer divided back down or clicks land somewhere other than where you aimed.
     private func pagePoint(_ event: NSEvent) -> (Float, Float) {
         let p = convert(event.locationInWindow, from: nil)
-        return (Float(p.x), Float(p.y))
+        let zoom = CGFloat(browser.zoom(of: tab))
+        return (Float(p.x / zoom), Float(p.y / zoom))
     }
 
     override func mouseMoved(with event: NSEvent) {
@@ -155,21 +172,147 @@ final class PageView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         guard tab != 0 else { return }
+        window?.makeFirstResponder(self)
         let (x, y) = pagePoint(event)
         browser.mouseDown(tab, x: x, y: y)
     }
 
+    override func mouseUp(with event: NSEvent) {
+        guard tab != 0 else { return }
+        let (x, y) = pagePoint(event)
+        browser.mouseUp(tab, x: x, y: y)
+    }
+
+    override func otherMouseDown(with event: NSEvent) {
+        guard tab != 0, event.buttonNumber == 2 else { return }
+        let (x, y) = pagePoint(event)
+        browser.mouseDown(tab, x: x, y: y, button: BEACON_BUTTON_MIDDLE)
+        browser.mouseUp(tab, x: x, y: y, button: BEACON_BUTTON_MIDDLE)
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        guard tab != 0 else { return }
+        // Move first so the engine's hit test — and therefore the hovered link this menu is
+        // built from — refers to where the click actually landed.
+        let (x, y) = pagePoint(event)
+        browser.mouseMoved(tab, x: x, y: y)
+        onContextMenu?(event, hoverURL)
+    }
+
+    // ── scrolling, swiping, pinching ──────────────────────────────────────
+
+    /// Horizontal travel accumulated in the current scroll gesture, for swipe navigation.
+    private var swipeAccumulator: CGFloat = 0
+    private var swipeHandled = false
+
     override func scrollWheel(with event: NSEvent) {
         guard tab != 0 else { return }
+
+        // A mostly-horizontal trackpad gesture is a navigation, not a scroll. This is
+        // accumulated by hand rather than driven through trackSwipeEvent: there is no
+        // rubber-band preview, but it behaves the same at the two ends and cannot get stuck
+        // half-tracked, which matters more on a demo machine.
+        if event.hasPreciseScrollingDeltas, abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) {
+            // NSEvent.Phase is an OptionSet, so this tests membership rather than equality.
+            if event.phase.contains(.began) {
+                swipeAccumulator = 0
+                swipeHandled = false
+            } else if event.phase.contains(.changed) {
+                swipeAccumulator += event.scrollingDeltaX
+                if !swipeHandled, abs(swipeAccumulator) > 80 {
+                    swipeHandled = true
+                    // Content moves with the fingers: swiping right (positive) goes back.
+                    onSwipeNavigate?(swipeAccumulator > 0 ? -1 : 1)
+                }
+            } else if event.phase.contains(.ended) || event.phase.contains(.cancelled) {
+                swipeAccumulator = 0
+            }
+            if swipeHandled { return }
+        }
+
         // AppKit reports a wheel notch as ±1 lines and a trackpad as precise deltas; the
         // engine scrolls in CSS pixels, so lines are scaled and precise deltas passed
         // through. Signs are inverted: scrolling down moves the page up.
-        let scale: Float = event.hasPreciseScrollingDeltas ? 1.0 : 40.0
-        let dx = -Float(event.scrollingDeltaX) * scale
-        let dy = -Float(event.scrollingDeltaY) * scale
+        let step: Float = event.hasPreciseScrollingDeltas ? 1.0 : 40.0
+        let zoom = Float(browser.zoom(of: tab))
+        let dx = -Float(event.scrollingDeltaX) * step / zoom
+        let dy = -Float(event.scrollingDeltaY) * step / zoom
         guard dx != 0 || dy != 0 else { return }
         browser.scroll(tab, dx: dx, dy: dy)
     }
 
+    /// Pinch to zoom, which on a Mac is how people expect to resize a page.
+    override func magnify(with event: NSEvent) {
+        guard tab != 0 else { return }
+        onZoomGesture?(event.magnification)
+    }
+
+    // ── keyboard ──────────────────────────────────────────────────────────
+
     override var acceptsFirstResponder: Bool { true }
+
+    override func keyDown(with event: NSEvent) {
+        guard tab != 0 else { return super.keyDown(with: event) }
+
+        // Command belongs to the menu bar. AppKit has already offered it there by the time
+        // this runs, so anything still arriving with Command is unclaimed and should not be
+        // smuggled into the page as a keystroke.
+        if event.modifierFlags.contains(.command) {
+            super.keyDown(with: event)
+            return
+        }
+
+        if let key = KeyMap.key(for: event) {
+            browser.keyDown(tab, key: key, code: KeyMap.code(for: event), modifiers: KeyMap.modifiers(event.modifierFlags))
+        }
+
+        // Let the input method have the event too: it is what turns a dead key followed by
+        // a vowel into "é", and what makes a CJK candidate window work at all. It calls
+        // back into insertText below when it has committed text.
+        interpretKeyEvents([event])
+    }
+
+    override func keyUp(with event: NSEvent) {
+        guard tab != 0, !event.modifierFlags.contains(.command) else { return }
+        if let key = KeyMap.key(for: event) {
+            browser.keyUp(tab, key: key, code: KeyMap.code(for: event), modifiers: KeyMap.modifiers(event.modifierFlags))
+        }
+    }
+
+    // ── NSTextInputClient ─────────────────────────────────────────────────
+    //
+    // Only enough of it to receive committed text. Marked text (an in-progress CJK
+    // composition) is accepted and dropped rather than drawn inline: the engine has no API
+    // for an inline composition yet, so the alternative is refusing the input entirely.
+
+    func insertText(_ string: Any, replacementRange: NSRange) {
+        guard tab != 0 else { return }
+        let text: String
+        if let attributed = string as? NSAttributedString {
+            text = attributed.string
+        } else if let plain = string as? String {
+            text = plain
+        } else {
+            return
+        }
+        // Control characters arrive here as well as through keyDown; the page already got
+        // those as named keys and does not want them twice.
+        guard !text.isEmpty, text.unicodeScalars.allSatisfy({ $0.value >= 0x20 }) else { return }
+        browser.textInput(tab, text: text)
+    }
+
+    func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {}
+    func unmarkText() {}
+    func selectedRange() -> NSRange { NSRange(location: NSNotFound, length: 0) }
+    func markedRange() -> NSRange { NSRange(location: NSNotFound, length: 0) }
+    func hasMarkedText() -> Bool { false }
+    func attributedSubstring(forProposedRange range: NSRange, actualRange: NSRangePointer?) -> NSAttributedString? { nil }
+    func validAttributesForMarkedText() -> [NSAttributedString.Key] { [] }
+    func firstRect(forCharacterRange range: NSRange, actualRange: NSRangePointer?) -> NSRect {
+        // The caret's screen position, which an input-method candidate window needs. Without
+        // a caret from the engine, the view's own origin is the honest answer.
+        window?.convertToScreen(convert(CGRect(x: 0, y: bounds.height, width: 1, height: 16), to: nil)) ?? .zero
+    }
+    func characterIndex(for point: NSPoint) -> Int { NSNotFound }
+    override func doCommand(by selector: Selector) {}
 }
