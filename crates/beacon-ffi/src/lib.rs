@@ -26,6 +26,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use beacon_core::beacon::{Beacon, DRAW_FPS};
 use beacon_core::command::BeaconCommand;
+use beacon_core::devtools;
 use beacon_core::engine::BrowserEngine;
 use beacon_core::event::{BeaconEvent, Cursor};
 use beacon_core::tab::{GosubTab, GosubTabManager, TabId};
@@ -52,6 +53,15 @@ type FfiConfig = gosub_engine::DefaultRenderConfig<gosub_renderer_vello::VelloBa
 /// `log::warn!` in here and in the engine goes nowhere -- which is exactly how a failing
 /// `beacon_attach_view` came back as a bare "false" with no reason attached. Level comes
 /// from `BEACON_LOG` (or `RUST_LOG`), defaulting to warnings.
+/// Send this library's logging to stderr, once, and keep it for the developer panel.
+///
+/// A native shell links a Rust dylib and never installs a logger, so without this every
+/// `log::warn!` in here and in the engine goes nowhere -- which is exactly how a failing
+/// `beacon_attach_view` came back as a bare "false" with no reason attached. Level comes
+/// from `BEACON_LOG` (or `RUST_LOG`), defaulting to warnings.
+///
+/// The buffer the panel reads lives in `beacon_core::devtools`, shared with every other
+/// frontend; this only decides what stderr sees.
 fn init_logging() {
     use std::io::Write;
     use std::sync::Once;
@@ -73,15 +83,8 @@ fn init_logging() {
 
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
-        let level = std::env::var("BEACON_LOG")
-            .or_else(|_| std::env::var("RUST_LOG"))
-            .ok()
-            .and_then(|s| s.parse::<log::LevelFilter>().ok())
-            .unwrap_or(log::LevelFilter::Warn);
-        // An embedder may have installed its own logger; that one wins.
-        if log::set_boxed_logger(Box::new(Stderr(level))).is_ok() {
-            log::set_max_level(level);
-        }
+        let level = devtools::level_from_env();
+        devtools::install_logger(Box::new(Stderr(level)), level);
     });
 }
 
@@ -123,6 +126,10 @@ pub struct BeaconBrowser {
     /// The last history search, held so the shell can read rows out of it by index rather
     /// than the ABI having to hand back an array of structs.
     history: Vec<gosub_engine::places::VisitedPage>,
+    /// The last developer-panel snapshots, same pattern: take a copy, then read it by index.
+    /// A panel refreshing several times a second must not be walking a live table.
+    timings: Vec<devtools::NamespaceStats>,
+    logs: Vec<devtools::LogLine>,
 
     /// What the shell last said about each tab's page area, so zoom can recompute the
     /// viewport without the shell having to resend it -- and so activating a tab can
@@ -445,6 +452,8 @@ pub unsafe extern "C" fn beacon_new(config: *const BeaconConfig) -> *mut BeaconB
         next_handle: 1,
         favicon: Vec::new(),
         history: Vec::new(),
+        timings: Vec::new(),
+        logs: Vec::new(),
         private,
         viewports: HashMap::new(),
         progress: HashMap::new(),
@@ -1160,6 +1169,174 @@ pub unsafe extern "C" fn beacon_history_title(browser: *mut BeaconBrowser, index
 pub unsafe extern "C" fn beacon_history_visit_count(browser: *mut BeaconBrowser, index: usize) -> u64 {
     let b = browser!(browser, 0);
     b.history.get(index).map(|page| page.visit_count).unwrap_or(0)
+}
+
+// ── developer panel: logs and timings ────────────────────────────────────────
+//
+// Both follow the same shape as the history search: take a snapshot, then read it by index.
+// A panel that refreshes several times a second must never be walking a live table, and
+// handing arrays of structs across a C boundary is how lifetimes get interesting.
+
+/// Levels as `log` orders them, so 1 is the loudest. Matches `log::Level`.
+pub const BEACON_LOG_ERROR: u32 = 1;
+pub const BEACON_LOG_WARN: u32 = 2;
+pub const BEACON_LOG_INFO: u32 = 3;
+pub const BEACON_LOG_DEBUG: u32 = 4;
+pub const BEACON_LOG_TRACE: u32 = 5;
+
+/// Copy the newest `max` log records and return how many are available to read.
+///
+/// What is captured depends on `BEACON_LOG`/`RUST_LOG`, which default to warnings only —
+/// a developer panel showing nothing usually means the level, not a missing feature.
+///
+/// # Safety
+/// `browser` must be a live handle from [`beacon_new`].
+#[no_mangle]
+pub unsafe extern "C" fn beacon_log_snapshot(browser: *mut BeaconBrowser, max: usize) -> usize {
+    let b = browser!(browser, 0);
+    b.logs = devtools::log_snapshot(max);
+    b.logs.len()
+}
+
+/// # Safety
+/// `browser` must be a live handle from [`beacon_new`].
+#[no_mangle]
+pub unsafe extern "C" fn beacon_log_message(browser: *mut BeaconBrowser, index: usize) -> *mut c_char {
+    let b = browser!(browser, std::ptr::null_mut());
+    match b.logs.get(index) {
+        Some(line) => to_c_string(&line.message),
+        None => std::ptr::null_mut(),
+    }
+}
+
+/// Which crate or module emitted it — the useful thing to filter a busy log by.
+///
+/// # Safety
+/// `browser` must be a live handle from [`beacon_new`].
+#[no_mangle]
+pub unsafe extern "C" fn beacon_log_target(browser: *mut BeaconBrowser, index: usize) -> *mut c_char {
+    let b = browser!(browser, std::ptr::null_mut());
+    match b.logs.get(index) {
+        Some(line) => to_c_string(&line.target),
+        None => std::ptr::null_mut(),
+    }
+}
+
+/// # Safety
+/// `browser` must be a live handle from [`beacon_new`].
+#[no_mangle]
+pub unsafe extern "C" fn beacon_log_level(browser: *mut BeaconBrowser, index: usize) -> u32 {
+    let b = browser!(browser, 0);
+    b.logs.get(index).map(|line| line.level as u32).unwrap_or(0)
+}
+
+/// Empty the buffer. Process-wide: every window's panel clears together, because there is
+/// one logger and one buffer behind it.
+///
+/// # Safety
+/// `browser` must be a live handle from [`beacon_new`].
+#[no_mangle]
+pub unsafe extern "C" fn beacon_log_clear(browser: *mut BeaconBrowser) {
+    let b = browser!(browser);
+    b.logs.clear();
+    devtools::clear_logs();
+}
+
+/// When the record was logged, in milliseconds since the Unix epoch. 0 when out of range.
+///
+/// # Safety
+/// `browser` must be a live handle from [`beacon_new`].
+#[no_mangle]
+pub unsafe extern "C" fn beacon_log_timestamp(browser: *mut BeaconBrowser, index: usize) -> u64 {
+    let b = browser!(browser, 0);
+    b.logs.get(index).map(|line| line.timestamp_ms).unwrap_or(0)
+}
+
+/// One row of the engine's timing table, in microseconds.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct BeaconTiming {
+    pub count: u64,
+    pub total_us: u64,
+    pub min_us: u64,
+    pub max_us: u64,
+    pub avg_us: u64,
+    pub p50_us: u64,
+    pub p75_us: u64,
+    pub p95_us: u64,
+    pub p99_us: u64,
+}
+
+/// Take a snapshot of the engine's timing table and return how many namespaces it holds.
+///
+/// Empty when the engine was built without its `timing` feature: the whole subsystem
+/// compiles out, so this is not an error, just nothing to show.
+///
+/// # Safety
+/// `browser` must be a live handle from [`beacon_new`].
+#[no_mangle]
+pub unsafe extern "C" fn beacon_timing_snapshot(browser: *mut BeaconBrowser) -> usize {
+    let b = browser!(browser, 0);
+    b.timings = devtools::timings();
+    b.timings.len()
+}
+
+/// The namespace of a snapshot row -- `html5.parse`, `net.fetch.css`. Free with
+/// [`beacon_string_free`]; NULL when out of range.
+///
+/// # Safety
+/// `browser` must be a live handle from [`beacon_new`].
+#[no_mangle]
+pub unsafe extern "C" fn beacon_timing_namespace(browser: *mut BeaconBrowser, index: usize) -> *mut c_char {
+    let b = browser!(browser, std::ptr::null_mut());
+    match b.timings.get(index) {
+        Some(stats) => to_c_string(&stats.namespace),
+        None => std::ptr::null_mut(),
+    }
+}
+
+/// The numbers for a snapshot row. False when out of range, leaving `out` untouched.
+///
+/// # Safety
+/// `browser` must be a live handle from [`beacon_new`]; `out` a valid `BeaconTiming *`.
+#[no_mangle]
+pub unsafe extern "C" fn beacon_timing_at(browser: *mut BeaconBrowser, index: usize, out: *mut BeaconTiming) -> bool {
+    let b = browser!(browser, false);
+    if out.is_null() {
+        return false;
+    }
+    let Some(stats) = b.timings.get(index) else {
+        return false;
+    };
+    unsafe {
+        std::ptr::write(
+            out,
+            BeaconTiming {
+                count: stats.count,
+                total_us: stats.total_us,
+                min_us: stats.min_us,
+                max_us: stats.max_us,
+                avg_us: stats.avg_us,
+                p50_us: stats.p50_us,
+                p75_us: stats.p75_us,
+                p95_us: stats.p95_us,
+                p99_us: stats.p99_us,
+            },
+        );
+    }
+    true
+}
+
+/// Clear the engine's timing table, so the next measurement starts from nothing. The point
+/// of a reset button: time one navigation rather than every navigation since launch.
+///
+/// # Safety
+/// `browser` must be a live handle from [`beacon_new`].
+#[no_mangle]
+pub unsafe extern "C" fn beacon_timing_reset(browser: *mut BeaconBrowser) {
+    let b = browser!(browser);
+    b.timings.clear();
+    devtools::reset_timings();
 }
 
 // ── downloads ────────────────────────────────────────────────────────────────

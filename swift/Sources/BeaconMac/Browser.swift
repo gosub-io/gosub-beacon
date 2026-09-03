@@ -196,6 +196,74 @@ final class Browser {
         }
     }
 
+    // ── developer panel ───────────────────────────────────────────────────
+
+    struct LogLine {
+        let level: UInt32
+        let target: String
+        let message: String
+
+        var levelName: String {
+            switch level {
+            case BEACON_LOG_ERROR: return "ERROR"
+            case BEACON_LOG_WARN: return "WARN"
+            case BEACON_LOG_INFO: return "INFO"
+            case BEACON_LOG_DEBUG: return "DEBUG"
+            default: return "TRACE"
+            }
+        }
+    }
+
+    /// The newest `max` log records. What is captured depends on `BEACON_LOG`/`RUST_LOG`,
+    /// which default to warnings only.
+    func logSnapshot(max: Int = 1000) -> [LogLine] {
+        let count = beacon_log_snapshot(handle, max)
+        return (0..<count).map { index in
+            LogLine(
+                level: beacon_log_level(handle, index),
+                target: takeString(beacon_log_target(handle, index)),
+                message: takeString(beacon_log_message(handle, index))
+            )
+        }
+    }
+
+    func clearLogs() { beacon_log_clear(handle) }
+
+    struct Timing {
+        let namespace: String
+        let count: UInt64
+        let totalUs: UInt64
+        let minUs: UInt64
+        let maxUs: UInt64
+        let avgUs: UInt64
+        let p50Us: UInt64
+        let p95Us: UInt64
+        let p99Us: UInt64
+    }
+
+    /// The engine's timing table, slowest namespace first. Empty when the engine was built
+    /// without its `timing` feature.
+    func timings() -> [Timing] {
+        let count = beacon_timing_snapshot(handle)
+        return (0..<count).compactMap { index in
+            var row = BeaconTiming()
+            guard beacon_timing_at(handle, index, &row) else { return nil }
+            return Timing(
+                namespace: takeString(beacon_timing_namespace(handle, index)),
+                count: row.count,
+                totalUs: row.total_us,
+                minUs: row.min_us,
+                maxUs: row.max_us,
+                avgUs: row.avg_us,
+                p50Us: row.p50_us,
+                p95Us: row.p95_us,
+                p99Us: row.p99_us
+            )
+        }
+    }
+
+    func resetTimings() { beacon_timing_reset(handle) }
+
     // ── downloads ─────────────────────────────────────────────────────────
 
     struct Download {

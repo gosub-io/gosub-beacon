@@ -166,7 +166,7 @@ impl BrowserWindow {
         // Ctrl+L is the address bar in every mainstream browser; the log console moves
         // aside to Ctrl+Shift+L.
         app.set_accels_for_action("app.focus-address-bar", &["<Primary>L", "<Alt>D", "F6"]);
-        app.set_accels_for_action("app.toggle-log", &["<Primary><Shift>L"]);
+        app.set_accels_for_action("app.toggle-log", &["<Primary><Shift>I", "<Primary><Shift>L"]);
         app.set_accels_for_action("app.reload", &["F5", "<Primary>R"]);
         app.set_accels_for_action("app.navigate-back", &["<Alt>Left"]);
         app.set_accels_for_action("app.navigate-forward", &["<Alt>Right"]);
@@ -200,7 +200,7 @@ impl BrowserWindow {
             let app = app.clone();
             move |_, _| {
                 let Some(window) = BrowserWindow::action_target(&app) else { return };
-                window.imp().log_scroller.set_visible(!window.imp().log_scroller.get_visible());
+                window.imp().toggle_devtools();
             }
         });
         app.add_action(&logwindow_action);

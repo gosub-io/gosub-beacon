@@ -9,6 +9,7 @@ license.workspace = true
 [dependencies]
 gosub_engine.workspace = true
 gosub_render_pipeline.workspace = true
+gosub_shared.workspace = true
 
 anyhow.workspace = true
 clap.workspace = true

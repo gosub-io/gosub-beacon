@@ -36,7 +36,26 @@ that never scrolls away. Back/forward/reload/stop, an address bar that takes wha
 would type, completes from history, selects on click and restores on Escape. Bookmarks with
 a favourites bar, downloads through an `NSSavePanel`, per-tab zoom, keyboard input to pages,
 two-finger swipe navigation, pinch to zoom, page and tab context menus, a hovered-link
-overlay, multiple windows, private windows, and the About window with the shell's artwork.
+overlay, multiple windows, private windows, a developer panel, and the About window with the
+shell's artwork.
+
+**Developer panel** (`⌥⌘I`, or the Develop menu) docks under the page with two tabs:
+
+- **Console** — the engine's own `log` records, not just Beacon's. Level, source crate and
+  message, filterable, and it follows new records only while you are already scrolled to the
+  bottom. What is captured depends on `BEACON_LOG` / `RUST_LOG`, which **default to warnings
+  only** — an empty console usually means the level, not a broken panel. Try
+  `BEACON_LOG=info swift run BeaconMac`.
+- **Timings** — the engine's timing table, slowest namespace first, with count, total,
+  average, p50, p95 and max. *Reset* starts again from nothing, which is how you time one
+  navigation rather than every navigation since launch.
+
+It polls four times a second while open and not at all while closed. Both tabs snapshot
+rather than read a live table: log records arrive on whatever thread the engine is on, and
+the timing table is written continuously.
+
+The buffer and the timing wrapper live in `beacon_core::devtools`, not here — the GTK shell
+has the same pane over the same data. This file only draws it.
 
 **Private windows** (`⇧⌘N`) run a *second engine*, because privacy is a property of the
 engine's zone — memory-only cookies and storage, no visits recorded — and there is no way to

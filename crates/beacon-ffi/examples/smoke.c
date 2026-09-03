@@ -377,6 +377,63 @@ int main(void) {
     CHECK(beacon_history_search(browser, "nothing-matches-this-xyzzy", 8) == 0, "a query with no matches returns 0");
     CHECK(beacon_history_url(browser, 0) == NULL, "and a miss clears the previous result");
 
+    /* Developer panel: logs and timings.
+     *
+     * The engine has been parsing and rendering throughout this run, so its timing table
+     * should not be empty. The log buffer may well be — the default level is warnings, and
+     * a clean run produces none — so that is checked for consistency, not for content. */
+    printf("\ndeveloper panel\n");
+    size_t namespaces = beacon_timing_snapshot(browser);
+    CHECK(namespaces > 0, "the engine recorded timings during this run (%zu namespaces)", namespaces);
+
+    BeaconTiming timing;
+    CHECK(beacon_timing_at(browser, 0, &timing), "the first row reads back");
+    CHECK(timing.count > 0 && timing.total_us > 0, "it has a real count and total");
+    CHECK(timing.min_us <= timing.avg_us && timing.avg_us <= timing.max_us, "min <= avg <= max holds");
+    char *ns = beacon_timing_namespace(browser, 0);
+    CHECK(ns != NULL && ns[0] != '\0', "and a namespace (%s)", ns ? ns : "null");
+    beacon_string_free(ns);
+
+    /* Slowest first, so the totals must not increase down the list. */
+    int ordered = 1;
+    uint64_t previous = timing.total_us;
+    for (size_t i = 1; i < namespaces; i++) {
+        BeaconTiming row;
+        if (!beacon_timing_at(browser, i, &row)) {
+            ordered = 0;
+            break;
+        }
+        if (row.total_us > previous) {
+            ordered = 0;
+            break;
+        }
+        previous = row.total_us;
+    }
+    CHECK(ordered, "rows are ordered slowest first");
+
+    BeaconTiming untouched = {.count = 4242};
+    CHECK(!beacon_timing_at(browser, namespaces, &untouched), "one past the last row returns false");
+    CHECK(untouched.count == 4242, "and leaves the caller's struct alone");
+
+    beacon_timing_reset(browser);
+    CHECK(beacon_timing_snapshot(browser) == 0, "resetting empties the table");
+
+    size_t lines = beacon_log_snapshot(browser, 100);
+    CHECK(beacon_log_message(browser, lines) == NULL, "one past the last log line is NULL");
+    if (lines > 0) {
+        char *message = beacon_log_message(browser, 0);
+        CHECK(message != NULL, "a reported log line is readable");
+        beacon_string_free(message);
+        uint32_t level = beacon_log_level(browser, 0);
+        CHECK(level >= BEACON_LOG_ERROR && level <= BEACON_LOG_TRACE, "its level is in range (%u)", level);
+        CHECK(beacon_log_timestamp(browser, 0) > 0, "and a timestamp");
+    } else {
+        CHECK(beacon_log_message(browser, 0) == NULL, "no lines means nothing readable");
+        CHECK(1, "no warnings logged this run, which is the default level");
+    }
+    beacon_log_clear(browser);
+    CHECK(beacon_log_snapshot(browser, 100) == 0, "clearing empties the log");
+
     /* No download is in flight, so the queries must answer emptily rather than crash. */
     CHECK(beacon_download_count(browser) == 0, "no downloads yet");
     CHECK(beacon_download_at(browser, 0) == 0, "an out-of-range download id is 0");

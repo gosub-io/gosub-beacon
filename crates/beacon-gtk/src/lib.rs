@@ -28,7 +28,11 @@ fn runtime() -> &'static Runtime {
 
 /// Start Beacon under GTK. Blocks until the last window closes.
 pub fn run() {
-    colog::basic_builder()
+    // `build()` rather than `init()`: the logger is handed to beacon-core, which installs
+    // it wrapped so every record it accepts is also kept for the developer pane. colog still
+    // decides what the terminal sees; the pane just gets a copy.
+    let mut builder = colog::basic_builder();
+    builder
         .format_file(true)
         .format_indent(Some(2))
         .format_level(true)
@@ -42,8 +46,23 @@ pub fn run() {
         // on module path, which starts with the crate name -- so they have to be kept in
         // step with the crate names, or our logging silently goes quiet.
         .filter(Some("beacon_gtk"), log::LevelFilter::Warn)
-        .filter(Some("beacon_core"), log::LevelFilter::Warn)
-        .init();
+        .filter(Some("beacon_core"), log::LevelFilter::Warn);
+
+    // Only when actually asked: BEACON_LOG / RUST_LOG raises the global default, which is
+    // how the developer pane is made to show more than warnings. Applying it unconditionally
+    // would quietly make every run noisier than the filters above intend.
+    if let Some(level) = beacon_core::devtools::env_level() {
+        builder.filter(None, level);
+    }
+
+    // `build()` rather than `init()`: the logger goes to beacon-core, which installs it
+    // wrapped so every record it accepts is also kept for the developer pane. colog still
+    // decides what the terminal sees; the pane gets a copy.
+    let logger = builder.build();
+    // `log` drops anything above the global max before a logger is consulted, so this must
+    // be at least as permissive as colog's own filtering -- which is what `filter()` reports.
+    let max_level = logger.filter();
+    beacon_core::devtools::install_logger(Box::new(logger), max_level);
 
     // Parse argv first: `--help` / `--version` must answer cleanly, without a display.
     // Everything downstream reads the parsed result rather than re-scanning argv.

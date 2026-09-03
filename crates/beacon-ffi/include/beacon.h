@@ -220,6 +220,63 @@ char *beacon_history_url(BeaconBrowser *browser, size_t index);
 char *beacon_history_title(BeaconBrowser *browser, size_t index);
 uint64_t beacon_history_visit_count(BeaconBrowser *browser, size_t index);
 
+/* ── developer panel ───────────────────────────────────────────────────────────
+ *
+ * Both of these follow the history pattern: take a snapshot, then read it by index. A panel
+ * refreshing several times a second must not be walking a live table, and handing arrays of
+ * structs across a C boundary is how lifetimes get interesting.
+ *
+ * The buffer behind them lives in beacon-core, shared with every other frontend, so a GTK
+ * pane and an AppKit table show the same records rather than each keeping their own.
+ */
+
+/* Levels as the Rust `log` crate orders them: 1 is the loudest. */
+#define BEACON_LOG_ERROR 1u
+#define BEACON_LOG_WARN 2u
+#define BEACON_LOG_INFO 3u
+#define BEACON_LOG_DEBUG 4u
+#define BEACON_LOG_TRACE 5u
+
+/* Copy the newest `max` records and return how many are readable.
+ *
+ * What gets captured depends on BEACON_LOG / RUST_LOG, which default to warnings only. An
+ * empty console usually means the level, not a broken panel. */
+size_t beacon_log_snapshot(BeaconBrowser *browser, size_t max);
+/* Free with beacon_string_free; NULL when out of range. */
+char *beacon_log_message(BeaconBrowser *browser, size_t index);
+/* The emitting crate or module — what you filter a busy log by. */
+char *beacon_log_target(BeaconBrowser *browser, size_t index);
+uint32_t beacon_log_level(BeaconBrowser *browser, size_t index);
+/* Milliseconds since the Unix epoch. Stored rather than formatted, because how a timestamp
+ * should look is your shell's business and its locale's. */
+uint64_t beacon_log_timestamp(BeaconBrowser *browser, size_t index);
+/* Process-wide: there is one logger, so every window's console clears together. */
+void beacon_log_clear(BeaconBrowser *browser);
+
+/* One row of the engine's timing table, in microseconds. */
+typedef struct {
+    uint64_t count;
+    uint64_t total_us;
+    uint64_t min_us;
+    uint64_t max_us;
+    uint64_t avg_us;
+    uint64_t p50_us;
+    uint64_t p75_us;
+    uint64_t p95_us;
+    uint64_t p99_us;
+} BeaconTiming;
+
+/* Snapshot the engine's timing table, slowest namespace first, and return its size. Zero
+ * when the engine was built without its `timing` feature — that compiles the whole
+ * subsystem out, so it is nothing to show rather than an error. */
+size_t beacon_timing_snapshot(BeaconBrowser *browser);
+/* e.g. "html5.parse", "net.fetch.css". Free with beacon_string_free. */
+char *beacon_timing_namespace(BeaconBrowser *browser, size_t index);
+/* False when out of range, leaving *out untouched. */
+bool beacon_timing_at(BeaconBrowser *browser, size_t index, BeaconTiming *out);
+/* Start measuring again from nothing — time one navigation, not every one since launch. */
+void beacon_timing_reset(BeaconBrowser *browser);
+
 /* ── downloads ─────────────────────────────────────────────────────────────── */
 
 typedef enum {

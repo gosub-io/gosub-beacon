@@ -16,6 +16,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
     let browser: Browser
     private let pageView: PageView
     private let tabStrip: TabStripView
+    private let devPanel: DeveloperPanel
+    private var devPanelHeight: NSLayoutConstraint?
     private let bookmarksBar = NSStackView()
     private let addressField = AddressField()
     private let progressLine = ProgressLine()
@@ -58,6 +60,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
         self.browser = browser
         self.pageView = PageView(browser: browser)
         self.tabStrip = TabStripView(browser: browser)
+        self.devPanel = DeveloperPanel(browser: browser)
 
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1200, height: 820),
@@ -247,13 +250,18 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
         hoverLabel.wantsLayer = true
         hoverLabel.layer?.cornerRadius = 3
 
-        for view in [tabStrip, bookmarksBar, progressLine, pageView, hoverLabel] as [NSView] {
+        devPanel.isHidden = true
+        devPanel.onClose = { [weak self] in self?.toggleDeveloperTools(nil) }
+
+        for view in [tabStrip, bookmarksBar, progressLine, pageView, devPanel, hoverLabel] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             content.addSubview(view)
         }
 
         let barHeight = bookmarksBar.heightAnchor.constraint(equalToConstant: 0)
         bookmarksBarHeight = barHeight
+        let panelHeight = devPanel.heightAnchor.constraint(equalToConstant: 0)
+        devPanelHeight = panelHeight
 
         NSLayoutConstraint.activate([
             tabStrip.topAnchor.constraint(equalTo: content.topAnchor),
@@ -275,7 +283,12 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
             pageView.topAnchor.constraint(equalTo: progressLine.bottomAnchor),
             pageView.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             pageView.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            pageView.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+            pageView.bottomAnchor.constraint(equalTo: devPanel.topAnchor),
+
+            devPanel.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            devPanel.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            devPanel.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+            panelHeight,
 
             hoverLabel.leadingAnchor.constraint(equalTo: pageView.leadingAnchor, constant: 4),
             hoverLabel.bottomAnchor.constraint(equalTo: pageView.bottomAnchor, constant: -4),
@@ -592,6 +605,38 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
         openTab("gosub://config", activate: true)
     }
 
+    // ── developer panel ───────────────────────────────────────────────────
+
+    var isDeveloperPanelOpen: Bool { !devPanel.isHidden }
+
+    @objc func toggleDeveloperTools(_ sender: Any?) {
+        setDeveloperPanel(open: devPanel.isHidden)
+    }
+
+    @objc func showConsole(_ sender: Any?) {
+        setDeveloperPanel(open: true)
+        devPanel.show(.console)
+    }
+
+    @objc func showTimings(_ sender: Any?) {
+        setDeveloperPanel(open: true)
+        devPanel.show(.timings)
+    }
+
+    @objc func resetTimings(_ sender: Any?) {
+        browser.resetTimings()
+    }
+
+    private func setDeveloperPanel(open: Bool) {
+        devPanel.isHidden = !open
+        devPanelHeight?.constant = open ? DeveloperPanel.defaultHeight : 0
+        // Polling stops with the panel: a closed panel should cost nothing at all.
+        devPanel.setActive(open)
+        // The page view is resized by the constraint change, and its own setFrameSize sends
+        // the new viewport — but only once AppKit has actually laid out.
+        window?.contentView?.layoutSubtreeIfNeeded()
+    }
+
     // ── bookmarks bar ─────────────────────────────────────────────────────
 
     private func rebuildBookmarksBar() {
@@ -713,7 +758,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
         NSPasteboard.general.setString(url, forType: .string)
     }
 
-    @objc private func viewSource(_ sender: Any?) {
+    @objc func viewSource(_ sender: Any?) {
         guard currentTab != 0 else { return }
         openTab("view-source:" + browser.url(of: currentTab), activate: true)
     }

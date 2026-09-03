@@ -16,6 +16,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private let startURL: String
     /// Held so the window survives being closed and can be reopened.
     private var aboutWindow: AboutWindowController?
+    /// Kept so its title can follow the panel's state — a menu item that says "Show" while
+    /// the thing is already showing is a small lie the user has to work around.
+    private weak var developToggleItem: NSMenuItem?
 
     init(startURL: String) {
         self.startURL = startURL
@@ -100,6 +103,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     @objc private func selectNextTab(_ sender: Any?) { front?.selectNextTab(sender) }
     @objc private func selectPreviousTab(_ sender: Any?) { front?.selectPreviousTab(sender) }
     @objc private func engineSettings(_ sender: Any?) { front?.showEngineSettings(sender) }
+    @objc private func toggleDeveloperTools(_ sender: Any?) { front?.toggleDeveloperTools(sender) }
+    @objc private func showConsole(_ sender: Any?) { front?.showConsole(sender) }
+    @objc private func showTimings(_ sender: Any?) { front?.showTimings(sender) }
+    @objc private func resetTimings(_ sender: Any?) { front?.resetTimings(sender) }
+    @objc private func viewSource(_ sender: Any?) { front?.viewSource(sender) }
 
     @objc private func selectTabByNumber(_ sender: NSMenuItem) {
         front?.selectTab(number: sender.tag)
@@ -114,6 +122,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             return front.canGoBack
         case #selector(goForward(_:)):
             return front.canGoForward
+        case #selector(toggleDeveloperTools(_:)):
+            // Validation is the hook AppKit gives for "just before this is shown", which is
+            // exactly when the title should be decided.
+            item.title = front.isDeveloperPanelOpen ? "Hide Developer Tools" : "Show Developer Tools"
+            return true
         default:
             return true
         }
@@ -138,6 +151,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         mainMenu.addItem(viewMenu())
         mainMenu.addItem(historyMenu())
         mainMenu.addItem(bookmarksMenu())
+        mainMenu.addItem(developMenu())
         mainMenu.addItem(windowMenu())
         mainMenu.addItem(helpMenu())
 
@@ -261,6 +275,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         submenu("Bookmarks", [
             item("Add Bookmark", #selector(toggleBookmark(_:)), "d"),
             item("Show Favorites Bar", #selector(toggleBookmarksBar(_:)), "B", [.command, .shift]),
+        ])
+    }
+
+    /// A Develop menu, where a Mac browser keeps this. Safari's bindings where they exist:
+    /// ⌥⌘I for the inspector, ⌥⌘U for source.
+    private func developMenu() -> NSMenuItem {
+        let toggle = item("Show Developer Tools", #selector(toggleDeveloperTools(_:)), "i", [.command, .option])
+        developToggleItem = toggle
+        return submenu("Develop", [
+            toggle,
+            .separator(),
+            item("Console", #selector(showConsole(_:)), "c", [.command, .option]),
+            item("Timings", #selector(showTimings(_:)), "t", [.command, .option]),
+            item("Reset Timings", #selector(resetTimings(_:))),
+            .separator(),
+            item("View Source", #selector(viewSource(_:)), "u", [.command, .option]),
+            item("Engine Settings", #selector(engineSettings(_:))),
         ])
     }
 

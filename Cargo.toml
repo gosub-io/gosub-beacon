@@ -26,6 +26,9 @@ license = "MIT"
 # cache. Paths are relative to this file, i.e. to the workspace root.
 gosub_engine = { path = "../gosub-engine/crates/gosub_engine", features = ["sqlite_cookie_store", "sqlite_places"] }
 gosub_render_pipeline = { path = "../gosub-engine/crates/gosub_render_pipeline" }
+# The engine's timing table, for the developer panel. `timing` is on by default; with it off
+# the whole subsystem compiles out and every snapshot is simply empty.
+gosub_shared = { path = "../gosub-engine/crates/gosub_shared" }
 gosub_renderer_skia = { path = "../gosub-engine/crates/gosub_renderer_skia" }
 gosub_renderer_vello = { path = "../gosub-engine/crates/gosub_renderer_vello" }
 

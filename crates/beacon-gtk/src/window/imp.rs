@@ -19,7 +19,7 @@ use gtk4::prelude::*;
 use gtk4::subclass::prelude::*;
 use gtk4::{
     gdk, glib, Button, CompositeTemplate, Entry, GLArea, GestureClick, Image, Popover, PopoverMenu, PopoverMenuFlags, ScrolledWindow,
-    Settings, Stack, TemplateChild, TextView, ToggleButton, Widget,
+    SearchEntry, Settings, Stack, TemplateChild, TextView, ToggleButton, Widget,
 };
 use log::info;
 use once_cell::sync::Lazy;
@@ -88,9 +88,55 @@ pub struct BrowserWindow {
     #[template_child]
     pub content_stack: TemplateChild<Stack>,
     #[template_child]
+    pub content_paned: TemplateChild<gtk4::Paned>,
+    #[template_child]
+    pub devtools_pane: TemplateChild<gtk4::Box>,
+    #[template_child]
+    pub devtools_stack: TemplateChild<Stack>,
+    #[template_child]
+    pub devtools_action: TemplateChild<Button>,
+    #[template_child]
+    pub devtools_summary: TemplateChild<gtk4::Label>,
+    #[template_child]
+    pub devtools_filter: TemplateChild<SearchEntry>,
+    #[template_child]
     pub log_scroller: TemplateChild<ScrolledWindow>,
     #[template_child]
     pub log: TemplateChild<TextView>,
+    #[template_child]
+    pub timings_header: TemplateChild<gtk4::Label>,
+    #[template_child]
+    pub timings_scroller: TemplateChild<ScrolledWindow>,
+    #[template_child]
+    pub timings_view: TemplateChild<TextView>,
+    #[template_child]
+    pub network_scroller: TemplateChild<ScrolledWindow>,
+    #[template_child]
+    pub network_header: TemplateChild<gtk4::Label>,
+    #[template_child]
+    pub network_list: TemplateChild<gtk4::ListBox>,
+    #[template_child]
+    pub network_detail_stack: TemplateChild<Stack>,
+    #[template_child]
+    pub network_request_view: TemplateChild<TextView>,
+    #[template_child]
+    pub network_response_view: TemplateChild<TextView>,
+    #[template_child]
+    pub network_body_view: TemplateChild<TextView>,
+    #[template_child]
+    pub network_sub_view: TemplateChild<TextView>,
+
+    /// The request currently shown in the detail pane, so a refresh can reselect it.
+    pub network_selected: RefCell<Option<uuid::Uuid>>,
+    /// What the timings view last rendered. Comparing against it avoids replacing identical
+    /// text four times a second, which is what was throwing the scroll position away.
+    pub timings_rendered: RefCell<String>,
+
+    /// The repeating refresh, live only while the pane is open. A closed pane costs nothing.
+    pub devtools_tick: RefCell<Option<glib::SourceId>>,
+    /// How tall the pane was when it was last closed, so reopening it comes back the size
+    /// the user left it rather than snapping to a default they already rejected.
+    pub devtools_height: Cell<i32>,
     #[template_child]
     pub statusbar: TemplateChild<gtk4::Label>,
     #[template_child]
@@ -160,7 +206,28 @@ impl Default for BrowserWindow {
             tab_row: TemplateChild::default(),
             nav_toolbar: TemplateChild::default(),
             content_stack: TemplateChild::default(),
+            content_paned: TemplateChild::default(),
+            devtools_pane: TemplateChild::default(),
+            devtools_stack: TemplateChild::default(),
+            devtools_action: TemplateChild::default(),
+            devtools_summary: TemplateChild::default(),
+            devtools_filter: TemplateChild::default(),
             log_scroller: TemplateChild::default(),
+            timings_header: TemplateChild::default(),
+            timings_scroller: TemplateChild::default(),
+            timings_view: TemplateChild::default(),
+            network_scroller: TemplateChild::default(),
+            network_header: TemplateChild::default(),
+            network_list: TemplateChild::default(),
+            network_detail_stack: TemplateChild::default(),
+            network_request_view: TemplateChild::default(),
+            network_response_view: TemplateChild::default(),
+            network_body_view: TemplateChild::default(),
+            network_sub_view: TemplateChild::default(),
+            network_selected: RefCell::new(None),
+            timings_rendered: RefCell::new(String::new()),
+            devtools_tick: RefCell::new(None),
+            devtools_height: Cell::new(260),
             log: TemplateChild::default(),
             statusbar: TemplateChild::default(),
             btn_downloads: TemplateChild::default(),
@@ -244,6 +311,7 @@ impl ObjectImpl for BrowserWindow {
         self.setup_tab_strip_sizing();
         self.setup_downloads_popover();
         self.setup_bookmark_button();
+        self.setup_devtools();
         self.setup_url_completion();
         self.sync_dark_mode_button();
         self.log("Browser created...");
@@ -404,16 +472,487 @@ impl BrowserWindow {
 }
 
 impl BrowserWindow {
+    /// The window's own running commentary. It goes into the same buffer the engine's
+    /// records do, so the console is one list rather than two views that disagree about
+    /// what happened and in what order.
     pub fn log(&self, message: &str) {
-        let s = format!("[{}] {}\n", chrono::Local::now().format("%X"), message);
-        info!(target: "ftk", "Logmessage: {}", s.as_str());
+        beacon_core::devtools::record(log::Level::Info, "beacon", message);
+    }
 
-        let buf = self.log.buffer();
-        let mut iter = buf.end_iter();
-        buf.insert(&mut iter, s.as_str());
+    // ── developer pane ────────────────────────────────────────────────────
 
-        let mark = buf.create_mark(None, &iter, false);
-        self.log.scroll_to_mark(&mark, 0.0, true, 0.0, 1.0);
+    /// Show or hide the pane, starting and stopping its refresh with it.
+    pub(crate) fn toggle_devtools(&self) {
+        let showing = !self.devtools_pane.get_visible();
+
+        // Remember the height on the way out. Read before hiding: once the child is gone the
+        // paned position no longer means anything.
+        if !showing {
+            let height = self.content_paned.height() - self.content_paned.position();
+            if height > 0 {
+                self.devtools_height.set(height);
+            }
+        }
+
+        self.devtools_pane.set_visible(showing);
+
+        // Bodies are only copied while someone can look at them. This is the switch that
+        // keeps the network panel free for every page that is not being inspected.
+        beacon_core::devtools::set_capture_bodies(showing);
+
+        if let Some(source) = self.devtools_tick.borrow_mut().take() {
+            source.remove();
+        }
+        if !showing {
+            return;
+        }
+
+        // The paned position is measured from the top, so the pane's height is whatever is
+        // left below it. Deferred: at this moment the paned may not have been allocated yet
+        // -- on the very first toggle its height is still 0, and a position computed from
+        // that puts the divider at the top of the window.
+        let paned = self.content_paned.get();
+        let wanted = self.devtools_height.get();
+        glib::idle_add_local_once(move || {
+            let available = paned.height();
+            if available > 0 {
+                paned.set_position((available - wanted).max(0));
+            }
+        });
+
+        self.refresh_devtools();
+        let window = self.obj().clone();
+        // Four times a second: fast enough to watch a page load, slow enough that the pane
+        // is not the reason the page loads slowly.
+        let source = glib::timeout_add_local(std::time::Duration::from_millis(250), move || {
+            window.imp().refresh_devtools();
+            glib::ControlFlow::Continue
+        });
+        *self.devtools_tick.borrow_mut() = Some(source);
+    }
+
+    /// Wire the pane's own controls. Called once, at construction.
+    pub(crate) fn setup_devtools(&self) {
+        let window = self.obj().clone();
+        self.devtools_action.connect_clicked(move |_| {
+            let imp = window.imp();
+            match imp.devtools_page().as_str() {
+                "timings" => beacon_core::devtools::reset_timings(),
+                "network" => {
+                    beacon_core::devtools::clear_requests();
+                    imp.network_selected.replace(None);
+                }
+                _ => beacon_core::devtools::clear_logs(),
+            }
+            imp.refresh_devtools();
+        });
+
+        // With the page area shrinkable there is nothing stopping a drag from closing it
+        // entirely, and a browser whose page is zero pixels tall looks broken rather than
+        // resized. Clamping here rather than through `shrink-start-child` keeps the floor a
+        // number we chose. Re-setting the same position is a no-op, so this cannot recurse.
+        self.content_paned.connect_position_notify(|paned| {
+            const MIN_PAGE: i32 = 120;
+            if paned.position() < MIN_PAGE && paned.height() > MIN_PAGE {
+                paned.set_position(MIN_PAGE);
+            }
+        });
+
+        // Selecting a request shows it in full. The list is rebuilt on every refresh, so the
+        // row carries its request id rather than the panel trusting a row index.
+        let window = self.obj().clone();
+        self.network_list.connect_row_selected(move |_, row| {
+            let imp = window.imp();
+            let Some(row) = row else { return };
+            let id = unsafe { row.data::<uuid::Uuid>("request-id") };
+            if let Some(id) = id {
+                imp.network_selected.replace(Some(unsafe { *id.as_ref() }));
+                imp.show_request_detail();
+            }
+        });
+
+        let window = self.obj().clone();
+        self.devtools_filter.connect_search_changed(move |_| {
+            window.imp().refresh_devtools();
+        });
+
+        // The action button means different things on the two pages, so it has to follow
+        // whichever is showing.
+        let window = self.obj().clone();
+        self.devtools_stack.connect_visible_child_notify(move |_| {
+            let imp = window.imp();
+            let (label, tooltip) = match imp.devtools_page().as_str() {
+                "timings" => (
+                    "Reset",
+                    "Start timing again from nothing, so the next navigation is measured on its own",
+                ),
+                "network" => ("Clear", "Forget the requests recorded so far"),
+                _ => ("Clear", "Discard the captured log records"),
+            };
+            imp.devtools_action.set_label(label);
+            imp.devtools_action.set_tooltip_text(Some(tooltip));
+            imp.refresh_devtools();
+        });
+    }
+
+    fn devtools_page(&self) -> String {
+        self.devtools_stack
+            .visible_child_name()
+            .map(|name| name.to_string())
+            .unwrap_or_else(|| "console".to_string())
+    }
+
+    fn refresh_devtools(&self) {
+        if !self.devtools_pane.get_visible() {
+            return;
+        }
+        let needle = self.devtools_filter.text().to_lowercase();
+        match self.devtools_page().as_str() {
+            "timings" => self.refresh_timings(&needle),
+            "network" => self.refresh_network(&needle),
+            _ => self.refresh_console(&needle),
+        }
+    }
+
+    fn refresh_console(&self, needle: &str) {
+        let lines = beacon_core::devtools::log_snapshot(2000);
+        let total = lines.len();
+
+        let mut text = String::new();
+        let mut shown = 0;
+        for line in &lines {
+            if !needle.is_empty() && !line.message.to_lowercase().contains(needle) && !line.target.to_lowercase().contains(needle) {
+                continue;
+            }
+            shown += 1;
+            text.push_str(&format!(
+                "{}  {:<5}  {:<28}  {}\n",
+                format_clock(line.timestamp_ms),
+                line.level,
+                truncate(&line.target, 28),
+                line.message
+            ));
+        }
+
+        self.devtools_summary.set_text(&format!("{shown} of {total} records"));
+
+        // Whether the view was already at the end, decided before replacing the text: a
+        // console being watched should follow, one being read should stay put.
+        let adjustment = self.log_scroller.vadjustment();
+        let at_bottom = adjustment.value() + adjustment.page_size() >= adjustment.upper() - 8.0;
+
+        self.log.buffer().set_text(&text);
+        if at_bottom {
+            let buffer = self.log.buffer();
+            let mut end = buffer.end_iter();
+            let mark = buffer.create_mark(None, &end, false);
+            self.log.scroll_to_mark(&mark, 0.0, true, 0.0, 1.0);
+            buffer.delete_mark(&mark);
+            let _ = &mut end;
+        }
+    }
+
+    /// Header and rows share this, for the same reason the network table's do: two format
+    /// strings a few lines apart is how columns quietly stop lining up.
+    #[allow(clippy::too_many_arguments)]
+    fn timings_row(namespace: &str, count: &str, total: &str, avg: &str, p50: &str, p95: &str, max: &str) -> String {
+        format!("{namespace:<34}{count:>8}{total:>12}{avg:>12}{p50:>12}{p95:>12}{max:>12}")
+    }
+
+    fn refresh_timings(&self, needle: &str) {
+        use beacon_core::devtools::format_duration;
+
+        let rows = beacon_core::devtools::timings();
+        let total: u64 = rows.iter().map(|row| row.total_us).sum();
+        self.devtools_summary
+            .set_text(&format!("{} namespaces · {} total", rows.len(), format_duration(total)));
+
+        self.timings_header
+            .set_text(&Self::timings_row("Namespace", "Count", "Total", "Avg", "p50", "p95", "Max"));
+
+        let mut text = String::new();
+        for row in &rows {
+            if !needle.is_empty() && !row.namespace.to_lowercase().contains(needle) {
+                continue;
+            }
+            text.push_str(&Self::timings_row(
+                &truncate(&row.namespace, 33),
+                &row.count.to_string(),
+                &format_duration(row.total_us),
+                &format_duration(row.avg_us),
+                &format_duration(row.p50_us),
+                &format_duration(row.p95_us),
+                &format_duration(row.max_us),
+            ));
+            text.push('\n');
+        }
+        // Replacing the buffer resets the scroll position, and this refreshes four times a
+        // second -- which made the view unreadable: every attempt to scroll down snapped
+        // straight back to the top. Two guards. First, skip entirely when nothing changed,
+        // which is the common case once a page has settled.
+        if *self.timings_rendered.borrow() == text {
+            return;
+        }
+        let adjustment = self.timings_scroller.vadjustment();
+        let previous = adjustment.value();
+        self.timings_view.buffer().set_text(&text);
+        self.timings_rendered.replace(text);
+
+        // Second, put the position back once GTK has laid the new text out. Restoring it
+        // immediately does nothing: `upper` is still the old extent, so the value is
+        // clamped to it and the view stays at the top anyway.
+        glib::idle_add_local_once(move || {
+            adjustment.set_value(previous);
+        });
+    }
+
+    // ── network ───────────────────────────────────────────────────────────
+
+    /// Header and rows share this, because two format strings a few lines apart is how
+    /// columns quietly stop lining up.
+    fn network_row(status: &str, kind: &str, size: &str, time: &str, url: &str) -> String {
+        format!("{status:<7}{kind:<19}{size:>10}{time:>10}  {url}")
+    }
+
+    /// The line above the request list. Mentions held bodies only when there are some, so
+    /// the common case stays short.
+    fn network_summary(&self, count: usize, transferred: u64) -> String {
+        use beacon_core::devtools::format_bytes;
+        let mut summary = format!("{count} requests · {} transferred", format_bytes(transferred));
+        let held = beacon_core::devtools::captured_body_bytes();
+        if held > 0 {
+            summary.push_str(&format!(" · {} of bodies held", format_bytes(held as u64)));
+        }
+        summary
+    }
+
+    fn refresh_network(&self, needle: &str) {
+        use beacon_core::devtools::{format_bytes, format_duration};
+
+        self.network_header
+            .set_text(&Self::network_row("Status", "Type", "Size", "Time", "URL"));
+
+        // Only this window's active tab: a request list mixing several tabs together is a
+        // log, not a network panel.
+        let requests = beacon_core::devtools::requests(self.active_tab_id());
+        let total: u64 = requests.iter().map(|r| r.received_bytes).sum();
+        self.devtools_summary.set_text(&self.network_summary(requests.len(), total));
+
+        let selected = *self.network_selected.borrow();
+
+        // Rebuilt wholesale. A request list is short and changes shape as rows arrive, and
+        // the alternative -- diffing it against the widgets already there -- is a great deal
+        // of bookkeeping to save a few dozen labels.
+        while let Some(child) = self.network_list.first_child() {
+            self.network_list.remove(&child);
+        }
+
+        let mut to_select = None;
+        for request in &requests {
+            if !needle.is_empty() && !request.url.to_lowercase().contains(needle) && !request.kind.contains(needle) {
+                continue;
+            }
+
+            let status = match (request.status, request.state) {
+                (Some(code), _) => code.to_string(),
+                (None, beacon_core::devtools::RequestState::Failed) => "err".to_string(),
+                _ => "—".to_string(),
+            };
+            let size = if request.received_bytes > 0 {
+                format_bytes(request.received_bytes)
+            } else {
+                request.content_length.map(format_bytes).unwrap_or_else(|| "—".to_string())
+            };
+            let time = request
+                .elapsed_us
+                .map(format_duration)
+                .unwrap_or_else(|| request.state.label().to_string());
+
+            let label = gtk4::Label::new(Some(&Self::network_row(
+                &status,
+                &truncate(&request.kind, 18),
+                &size,
+                &time,
+                &short_url(&request.url),
+            )));
+            label.set_xalign(0.0);
+            label.set_ellipsize(gtk4::pango::EllipsizeMode::Middle);
+            label.add_css_class("monospace");
+            if request.error.is_some() {
+                label.add_css_class("error");
+            }
+
+            let row = gtk4::ListBoxRow::new();
+            row.set_child(Some(&label));
+            // The id rides on the row, so a rebuild cannot leave the detail pane showing a
+            // different request than the one highlighted.
+            unsafe { row.set_data("request-id", request.id) };
+            self.network_list.append(&row);
+
+            if selected == Some(request.id) {
+                to_select = Some(row);
+            }
+        }
+
+        // Reselect without re-firing the handler into a loop: setting the same row back is
+        // what keeps the detail pane steady while the list rebuilds under it.
+        if let Some(row) = to_select {
+            if self.network_list.selected_row().as_ref() != Some(&row) {
+                self.network_list.select_row(Some(&row));
+            }
+        }
+        self.show_request_detail();
+    }
+
+    /// Fill the detail tabs for the selected request.
+    ///
+    /// Split the way a developer thinks about a request rather than the way the events
+    /// arrive: what was asked for, what came back, what the bytes were, and what the page
+    /// went on to fetch because of it.
+    fn show_request_detail(&self) {
+        use beacon_core::devtools::{format_bytes, format_duration};
+
+        let views = [
+            self.network_request_view.get(),
+            self.network_response_view.get(),
+            self.network_body_view.get(),
+            self.network_sub_view.get(),
+        ];
+
+        let Some(id) = *self.network_selected.borrow() else {
+            for view in &views {
+                view.buffer().set_text("Select a request.");
+            }
+            return;
+        };
+        let requests = beacon_core::devtools::requests(self.active_tab_id());
+        let Some(request) = requests.iter().find(|r| r.id == id) else {
+            for view in &views {
+                view.buffer().set_text("That request is no longer recorded.");
+            }
+            return;
+        };
+
+        // ── Request ───────────────────────────────────────────────────────
+        let mut text = format!("{}\n\n", request.url);
+        text.push_str(&format!("{:<16}{}\n", "Kind", request.kind));
+        text.push_str(&format!("{:<16}{}\n", "Initiated by", request.initiator));
+        text.push_str(&format!("{:<16}{}\n", "State", request.state.label()));
+        if !request.redirects.is_empty() {
+            text.push_str("\nRedirect chain\n");
+            for (status, to) in &request.redirects {
+                text.push_str(&format!("  {status} → {to}\n"));
+            }
+        }
+        if request.request_headers.is_empty() && request.method.is_none() {
+            // Only reachable for a request that never reached the wire -- blocked, or
+            // answered from cache before a hop was built.
+            text.push_str("\nNo request line recorded: this never reached the network.\n");
+        } else {
+            text.push_str(&format!("\n{} {}\n\n", request.method.as_deref().unwrap_or("GET"), request.url));
+            text.push_str("Request headers\n");
+            for (name, value) in &request.request_headers {
+                text.push_str(&format!("  {name}: {value}\n"));
+            }
+            text.push_str("\nThe headers the engine set. The HTTP client adds a few of its\n");
+            text.push_str("own below that layer -- host, accept-encoding, user-agent.\n");
+        }
+        self.network_request_view.buffer().set_text(&text);
+
+        // ── Response ──────────────────────────────────────────────────────
+        let mut text = String::new();
+        text.push_str(&format!(
+            "{:<16}{}\n",
+            "Status",
+            request
+                .status
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| request.state.label().to_string())
+        ));
+        if let Some(content_type) = &request.content_type {
+            text.push_str(&format!("{:<16}{}\n", "Content-Type", content_type));
+        }
+        text.push_str(&format!("{:<16}{}\n", "Received", format_bytes(request.received_bytes)));
+        if let Some(length) = request.content_length {
+            text.push_str(&format!("{:<16}{}\n", "Declared", format_bytes(length)));
+        }
+        if let Some(us) = request.elapsed_us {
+            text.push_str(&format!("{:<16}{}\n", "Took", format_duration(us)));
+        }
+        if let Some(error) = &request.error {
+            text.push_str(&format!("{:<16}{}\n", "Error", error));
+        }
+        if request.headers.is_empty() {
+            text.push_str("\nNo response headers recorded.\n");
+        } else {
+            text.push_str("\nResponse headers\n");
+            for (name, value) in &request.headers {
+                text.push_str(&format!("  {name}: {value}\n"));
+            }
+        }
+        self.network_response_view.buffer().set_text(&text);
+
+        // ── Body ──────────────────────────────────────────────────────────
+        //
+        // Deliberately empty rather than refetched. Asking for the URL again would show a
+        // *different* response than the one on this row -- a second request, possibly a
+        // different result, and doubled traffic -- which is worse than showing nothing in a
+        // panel whose whole job is to report what actually happened.
+        let text = match &request.body {
+            Some(bytes) => beacon_core::devtools::format_body(bytes, request.body_truncated),
+            // Evicted is not the same as never captured, and a developer needs to tell them
+            // apart: one means "look sooner", the other means "this kind is not captured".
+            None if request.body_evicted => "Captured, then dropped.\n\n                 The panel keeps a fixed total of body bytes and this was among the oldest \n                 when that ran out. Reload to capture it again.\n"
+                .to_string(),
+            None if !self.devtools_pane.get_visible() => "No body captured.\n".to_string(),
+            None => {
+                let mut text = String::from("No body captured for this request.\n\n");
+                text.push_str("Capture starts when this pane opens, so anything that finished\n");
+                text.push_str("earlier has none -- reload the page to record it.\n\n");
+                text.push_str("Video, audio and downloads are never captured, and neither is\n");
+                text.push_str("a response that declares itself larger than the per-request cap.\n");
+                text
+            }
+        };
+        self.network_body_view.buffer().set_text(&text);
+
+        // ── Subresources ──────────────────────────────────────────────────
+        //
+        // The engine records no parent per request, so this is everything the page fetched
+        // that a navigation did not -- an approximation, and labelled as one.
+        let mut text = String::new();
+        if request.kind == "document" {
+            let children: Vec<_> = requests
+                .iter()
+                .filter(|r| r.id != request.id && r.initiator != "navigation")
+                .collect();
+            if children.is_empty() {
+                text.push_str("This document pulled in no subresources.\n");
+            } else {
+                text.push_str(&format!("{} loaded for this document\n\n", children.len()));
+                for child in children {
+                    // A failed subresource has no size worth printing; "0 B" reads as an
+                    // empty file rather than as something that never arrived.
+                    let size = if child.error.is_some() {
+                        child.state.label().to_string()
+                    } else {
+                        format_bytes(child.received_bytes)
+                    };
+                    text.push_str(&format!(
+                        "{:<18}{:>10}  {}\n",
+                        truncate(&child.kind, 18),
+                        size,
+                        short_url(&child.url)
+                    ));
+                }
+                text.push_str("\nGrouped by exclusion, not by parentage: the engine records\n");
+                text.push_str("no initiating request id, so this is everything the page fetched\n");
+                text.push_str("that a navigation did not.\n");
+            }
+        } else {
+            text.push_str("Only a document has subresources.\n");
+        }
+        self.network_sub_view.buffer().set_text(&text);
     }
 
     pub(crate) fn close_tab(&self, tab_id: TabId) {
@@ -2645,4 +3184,43 @@ fn human_bytes(bytes: u64) -> String {
     } else {
         format!("{value:.1} {}", UNITS[unit])
     }
+}
+
+/// A wall-clock time from a Unix millisecond stamp. The core stores the number and leaves
+/// the formatting to whoever is showing it.
+fn format_clock(timestamp_ms: u64) -> String {
+    use chrono::TimeZone;
+    match chrono::Local.timestamp_millis_opt(timestamp_ms as i64) {
+        chrono::LocalResult::Single(time) => time.format("%H:%M:%S%.3f").to_string(),
+        _ => "--:--:--".to_string(),
+    }
+}
+
+/// A URL short enough for a list row: host plus the tail of the path, which is the part
+/// that tells one request from another.
+fn short_url(url: &str) -> String {
+    match url::Url::parse(url) {
+        Ok(parsed) => {
+            let host = parsed.host_str().unwrap_or("");
+            let path = parsed.path();
+            let tail = path.rsplit('/').next().unwrap_or(path);
+            if tail.is_empty() {
+                format!("{host}{path}")
+            } else {
+                format!("{host}/…/{tail}")
+            }
+        }
+        Err(_) => url.to_string(),
+    }
+}
+
+/// Clip to `width` characters, marking that something was dropped. Counts characters, not
+/// bytes -- slicing a UTF-8 string by byte index panics mid-codepoint.
+fn truncate(value: &str, width: usize) -> String {
+    if value.chars().count() <= width {
+        return value.to_string();
+    }
+    let mut out: String = value.chars().take(width.saturating_sub(1)).collect();
+    out.push('…');
+    out
 }
