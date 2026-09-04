@@ -710,8 +710,8 @@ impl BrowserWindow {
 
     /// Header and rows share this, because two format strings a few lines apart is how
     /// columns quietly stop lining up.
-    fn network_row(status: &str, kind: &str, size: &str, time: &str, url: &str) -> String {
-        format!("{status:<7}{kind:<19}{size:>10}{time:>10}  {url}")
+    fn network_row(status: &str, method: &str, kind: &str, size: &str, time: &str, url: &str) -> String {
+        format!("{status:<7}{method:<8}{kind:<19}{size:>10}{time:>10}  {url}")
     }
 
     /// The line above the request list. Mentions held bodies only when there are some, so
@@ -730,7 +730,7 @@ impl BrowserWindow {
         use beacon_core::devtools::{format_bytes, format_duration};
 
         self.network_header
-            .set_text(&Self::network_row("Status", "Type", "Size", "Time", "URL"));
+            .set_text(&Self::network_row("Status", "Method", "Type", "Size", "Time", "URL"));
 
         // Only this window's active tab: a request list mixing several tabs together is a
         // log, not a network panel.
@@ -768,15 +768,22 @@ impl BrowserWindow {
                 .map(format_duration)
                 .unwrap_or_else(|| request.state.label().to_string());
 
+            // A request that never reached the wire has no method to report -- a file://
+            // load, or one answered from cache before a hop was built.
+            let method = request.method.as_deref().unwrap_or("—");
             let label = gtk4::Label::new(Some(&Self::network_row(
                 &status,
+                method,
                 &truncate(&request.kind, 18),
                 &size,
                 &time,
                 &short_url(&request.url),
             )));
             label.set_xalign(0.0);
-            label.set_ellipsize(gtk4::pango::EllipsizeMode::Middle);
+            // No ellipsizing. A row is one label holding fixed-width columns, and Pango
+            // removes characters from wherever the mode says -- with Middle that was the
+            // Time column, so a long URL silently ate the number next to it. The URL is
+            // shortened by `short_url` instead, where we choose what is lost.
             label.add_css_class("monospace");
             if request.error.is_some() {
                 label.add_css_class("error");
@@ -854,8 +861,9 @@ impl BrowserWindow {
             for (name, value) in &request.request_headers {
                 text.push_str(&format!("  {name}: {value}\n"));
             }
-            text.push_str("\nThe headers the engine set. The HTTP client adds a few of its\n");
-            text.push_str("own below that layer -- host, accept-encoding, user-agent.\n");
+            text.push_str("\nWhat the engine set, plus the client's user agent. Not shown:\n");
+            text.push_str("accept-encoding, which the client composes from the codecs it was\n");
+            text.push_str("built with, and host, which the connection adds below that layer.\n");
         }
         self.network_request_view.buffer().set_text(&text);
 
@@ -3199,7 +3207,11 @@ fn format_clock(timestamp_ms: u64) -> String {
 /// A URL short enough for a list row: host plus the tail of the path, which is the part
 /// that tells one request from another.
 fn short_url(url: &str) -> String {
-    match url::Url::parse(url) {
+    /// Long enough for a host and a filename, short enough that a row does not overflow
+    /// its label and start losing columns.
+    const MAX: usize = 58;
+
+    let short = match url::Url::parse(url) {
         Ok(parsed) => {
             let host = parsed.host_str().unwrap_or("");
             let path = parsed.path();
@@ -3211,6 +3223,15 @@ fn short_url(url: &str) -> String {
             }
         }
         Err(_) => url.to_string(),
+    };
+
+    // Trimmed from the front: the file name at the end is what tells one request from
+    // another, and the host is usually repeated down the whole list anyway.
+    if short.chars().count() > MAX {
+        let tail: String = short.chars().skip(short.chars().count() - (MAX - 1)).collect();
+        format!("…{tail}")
+    } else {
+        short
     }
 }
 
