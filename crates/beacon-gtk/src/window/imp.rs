@@ -112,25 +112,39 @@ pub struct BrowserWindow {
     #[template_child]
     pub network_scroller: TemplateChild<ScrolledWindow>,
     #[template_child]
-    pub network_header: TemplateChild<gtk4::Label>,
+    pub network_header: TemplateChild<gtk4::Box>,
     #[template_child]
     pub network_list: TemplateChild<gtk4::ListBox>,
     #[template_child]
     pub network_detail_stack: TemplateChild<Stack>,
+    #[template_child]
+    pub detail_raw: TemplateChild<gtk4::ToggleButton>,
+    #[template_child]
+    pub request_stack: TemplateChild<Stack>,
+    #[template_child]
+    pub response_stack: TemplateChild<Stack>,
+    #[template_child]
+    pub request_list: TemplateChild<gtk4::ListBox>,
+    #[template_child]
+    pub response_list: TemplateChild<gtk4::ListBox>,
+    #[template_child]
+    pub sub_list: TemplateChild<gtk4::ListBox>,
     #[template_child]
     pub network_request_view: TemplateChild<TextView>,
     #[template_child]
     pub network_response_view: TemplateChild<TextView>,
     #[template_child]
     pub network_body_view: TemplateChild<TextView>,
-    #[template_child]
-    pub network_sub_view: TemplateChild<TextView>,
 
     /// The request currently shown in the detail pane, so a refresh can reselect it.
     pub network_selected: RefCell<Option<uuid::Uuid>>,
     /// What the timings view last rendered. Comparing against it avoids replacing identical
     /// text four times a second, which is what was throwing the scroll position away.
     pub timings_rendered: RefCell<String>,
+    /// The same guard for each detail pane, keyed by pane name. Without it a pane is rebuilt
+    /// four times a second and jumps back to the top on every rebuild, so anything below the
+    /// fold cannot be read at all.
+    pub detail_rendered: RefCell<std::collections::HashMap<&'static str, String>>,
 
     /// The repeating refresh, live only while the pane is open. A closed pane costs nothing.
     pub devtools_tick: RefCell<Option<glib::SourceId>>,
@@ -220,12 +234,18 @@ impl Default for BrowserWindow {
             network_header: TemplateChild::default(),
             network_list: TemplateChild::default(),
             network_detail_stack: TemplateChild::default(),
+            detail_raw: TemplateChild::default(),
+            request_stack: TemplateChild::default(),
+            response_stack: TemplateChild::default(),
+            request_list: TemplateChild::default(),
+            response_list: TemplateChild::default(),
+            sub_list: TemplateChild::default(),
             network_request_view: TemplateChild::default(),
             network_response_view: TemplateChild::default(),
             network_body_view: TemplateChild::default(),
-            network_sub_view: TemplateChild::default(),
             network_selected: RefCell::new(None),
             timings_rendered: RefCell::new(String::new()),
+            detail_rendered: RefCell::new(std::collections::HashMap::new()),
             devtools_tick: RefCell::new(None),
             devtools_height: Cell::new(260),
             log: TemplateChild::default(),
@@ -558,6 +578,16 @@ impl BrowserWindow {
             }
         });
 
+        // Raw or formatted, for both the request and the response at once: a developer
+        // reading one wire dump wants the other in the same shape.
+        let window = self.obj().clone();
+        self.detail_raw.connect_toggled(move |button| {
+            let imp = window.imp();
+            let page = if button.is_active() { "raw" } else { "formatted" };
+            imp.request_stack.set_visible_child_name(page);
+            imp.response_stack.set_visible_child_name(page);
+        });
+
         // Selecting a request shows it in full. The list is rebuilt on every refresh, so the
         // row carries its request id rather than the panel trusting a row index.
         let window = self.obj().clone();
@@ -708,10 +738,42 @@ impl BrowserWindow {
 
     // ── network ───────────────────────────────────────────────────────────
 
-    /// Header and rows share this, because two format strings a few lines apart is how
-    /// columns quietly stop lining up.
-    fn network_row(status: &str, method: &str, kind: &str, size: &str, time: &str, url: &str) -> String {
-        format!("{status:<7}{method:<8}{kind:<19}{size:>10}{time:>10}  {url}")
+    /// The request list's columns, in pixels.
+    ///
+    /// Real columns rather than a single label padded with spaces. Padding only lines up
+    /// while every row fits: once the pane is narrower than the text, the label clips and
+    /// whole columns disappear -- which is how Status, Method and Type went missing from a
+    /// narrowed pane while the header above them lost the same three words.
+    const NETWORK_COLUMNS: [(i32, f32); 5] = [
+        (46.0 as i32, 0.0),  // Status
+        (46.0 as i32, 0.0),  // Method
+        (128.0 as i32, 0.0), // Type
+        (76.0 as i32, 1.0),  // Size, right-aligned like the numbers it holds
+        (76.0 as i32, 1.0),  // Time
+    ];
+
+    /// One cell: fixed width, its own alignment, no ellipsizing so it never eats a neighbour.
+    fn cell(text: &str, width: i32, xalign: f32) -> gtk4::Label {
+        let label = gtk4::Label::new(Some(text));
+        label.set_xalign(xalign);
+        label.set_width_chars(0);
+        label.set_size_request(width, -1);
+        label
+    }
+
+    /// A row of the request list. The URL takes what is left and ellipsizes, so a long one
+    /// shortens itself instead of pushing the columns off the edge.
+    fn network_row(status: &str, method: &str, kind: &str, size: &str, time: &str, url: &str) -> gtk4::Box {
+        let row = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
+        for (text, (width, xalign)) in [status, method, kind, size, time].iter().zip(Self::NETWORK_COLUMNS) {
+            row.append(&Self::cell(text, width, xalign));
+        }
+        let tail = gtk4::Label::new(Some(url));
+        tail.set_xalign(0.0);
+        tail.set_hexpand(true);
+        tail.set_ellipsize(gtk4::pango::EllipsizeMode::End);
+        row.append(&tail);
+        row
     }
 
     /// The line above the request list. Mentions held bodies only when there are some, so
@@ -729,8 +791,10 @@ impl BrowserWindow {
     fn refresh_network(&self, needle: &str) {
         use beacon_core::devtools::{format_bytes, format_duration};
 
-        self.network_header
-            .set_text(&Self::network_row("Status", "Method", "Type", "Size", "Time", "URL"));
+        if self.network_header.first_child().is_none() {
+            self.network_header
+                .append(&Self::network_row("Status", "Method", "Type", "Size", "Time", "URL"));
+        }
 
         // Only this window's active tab: a request list mixing several tabs together is a
         // log, not a network panel.
@@ -771,19 +835,14 @@ impl BrowserWindow {
             // A request that never reached the wire has no method to report -- a file://
             // load, or one answered from cache before a hop was built.
             let method = request.method.as_deref().unwrap_or("—");
-            let label = gtk4::Label::new(Some(&Self::network_row(
+            let label = Self::network_row(
                 &status,
                 method,
                 &truncate(&request.kind, 18),
                 &size,
                 &time,
                 &short_url(&request.url),
-            )));
-            label.set_xalign(0.0);
-            // No ellipsizing. A row is one label holding fixed-width columns, and Pango
-            // removes characters from wherever the mode says -- with Middle that was the
-            // Time column, so a long URL silently ate the number next to it. The URL is
-            // shortened by `short_url` instead, where we choose what is lost.
+            );
             label.add_css_class("monospace");
             if request.error.is_some() {
                 label.add_css_class("error");
@@ -791,6 +850,9 @@ impl BrowserWindow {
 
             let row = gtk4::ListBoxRow::new();
             row.set_child(Some(&label));
+            // The shortened URL in the row cannot show a query string, which is the only
+            // thing telling three `load.php` requests apart. The full one is a hover away.
+            row.set_tooltip_text(Some(&request.url));
             // The id rides on the row, so a rebuild cannot leave the detail pane showing a
             // different request than the one highlighted.
             unsafe { row.set_data("request-id", request.id) };
@@ -819,99 +881,118 @@ impl BrowserWindow {
     fn show_request_detail(&self) {
         use beacon_core::devtools::{format_bytes, format_duration};
 
-        let views = [
-            self.network_request_view.get(),
-            self.network_response_view.get(),
-            self.network_body_view.get(),
-            self.network_sub_view.get(),
-        ];
-
-        let Some(id) = *self.network_selected.borrow() else {
-            for view in &views {
-                view.buffer().set_text("Select a request.");
-            }
-            return;
-        };
+        let selected = *self.network_selected.borrow();
         let requests = beacon_core::devtools::requests(self.active_tab_id());
-        let Some(request) = requests.iter().find(|r| r.id == id) else {
-            for view in &views {
-                view.buffer().set_text("That request is no longer recorded.");
-            }
+        let request = selected.and_then(|id| requests.iter().find(|r| r.id == id));
+
+        let Some(request) = request else {
+            let empty = if selected.is_some() {
+                "That request is no longer recorded."
+            } else {
+                "Select a request."
+            };
+            let rows = [DetailRow::Note(empty.to_string())];
+            self.fill_pairs("request", &self.request_list, &rows);
+            self.fill_pairs("response", &self.response_list, &rows);
+            self.fill_pairs("subresources", &self.sub_list, &rows);
+            self.set_raw("request-raw", &self.network_request_view, empty);
+            self.set_raw("response-raw", &self.network_response_view, empty);
+            self.set_raw("body", &self.network_body_view, empty);
             return;
         };
 
         // ── Request ───────────────────────────────────────────────────────
-        let mut text = format!("{}\n\n", request.url);
-        text.push_str(&format!("{:<16}{}\n", "Kind", request.kind));
-        text.push_str(&format!("{:<16}{}\n", "Initiated by", request.initiator));
-        text.push_str(&format!("{:<16}{}\n", "State", request.state.label()));
+        let mut rows = vec![
+            DetailRow::Section("Request".into()),
+            DetailRow::Pair("URL".into(), request.url.clone()),
+            DetailRow::Pair("Method".into(), request.method.clone().unwrap_or_else(|| "—".into())),
+            DetailRow::Pair("Kind".into(), request.kind.clone()),
+            DetailRow::Pair("Initiated by".into(), request.initiator.clone()),
+            DetailRow::Pair("State".into(), request.state.label().into()),
+        ];
         if !request.redirects.is_empty() {
-            text.push_str("\nRedirect chain\n");
+            rows.push(DetailRow::Section("Redirects".into()));
             for (status, to) in &request.redirects {
-                text.push_str(&format!("  {status} → {to}\n"));
+                rows.push(DetailRow::Pair(status.to_string(), to.clone()));
             }
         }
-        if request.request_headers.is_empty() && request.method.is_none() {
-            // Only reachable for a request that never reached the wire -- blocked, or
-            // answered from cache before a hop was built.
-            text.push_str("\nNo request line recorded: this never reached the network.\n");
+        if request.request_headers.is_empty() {
+            rows.push(DetailRow::Note("No request line recorded: this never reached the network.".into()));
         } else {
-            text.push_str(&format!("\n{} {}\n\n", request.method.as_deref().unwrap_or("GET"), request.url));
-            text.push_str("Request headers\n");
+            rows.push(DetailRow::Section("Request headers".into()));
             for (name, value) in &request.request_headers {
-                text.push_str(&format!("  {name}: {value}\n"));
+                rows.push(DetailRow::Pair(name.clone(), value.clone()));
             }
-            text.push_str("\nWhat the engine set, plus the client's user agent. Not shown:\n");
-            text.push_str("accept-encoding, which the client composes from the codecs it was\n");
-            text.push_str("built with, and host, which the connection adds below that layer.\n");
+            // Derived from what is actually here rather than written out once. Twice now a
+            // hard-coded note has gone on claiming a header was unavailable after the
+            // network stack started reporting it -- the pane showing the header and denying
+            // it in the same breath.
+            let mut absent = vec!["host, added by the connection below this layer"];
+            if !request
+                .request_headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case("accept-encoding"))
+            {
+                absent.push("accept-encoding, added by the HTTP client as it sends");
+            }
+            rows.push(DetailRow::Note(format!(
+                "What the engine actually sent. Not shown: {}.",
+                absent.join("; ")
+            )));
         }
-        self.network_request_view.buffer().set_text(&text);
+        self.fill_pairs("request", &self.request_list, &rows);
+
+        let mut raw = format!("{} {} HTTP/1.1\n", request.method.as_deref().unwrap_or("GET"), request.url);
+        for (name, value) in &request.request_headers {
+            raw.push_str(&format!("{name}: {value}\n"));
+        }
+        if request.request_headers.is_empty() {
+            raw.push_str("\n(no request line recorded: this never reached the network)\n");
+        }
+        self.set_raw("request-raw", &self.network_request_view, &raw);
 
         // ── Response ──────────────────────────────────────────────────────
-        let mut text = String::new();
-        text.push_str(&format!(
-            "{:<16}{}\n",
-            "Status",
-            request
-                .status
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| request.state.label().to_string())
-        ));
+        let status = request
+            .status
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| request.state.label().to_string());
+        let mut rows = vec![DetailRow::Section("Response".into()), DetailRow::Pair("Status".into(), status)];
         if let Some(content_type) = &request.content_type {
-            text.push_str(&format!("{:<16}{}\n", "Content-Type", content_type));
+            rows.push(DetailRow::Pair("Content-Type".into(), content_type.clone()));
         }
-        text.push_str(&format!("{:<16}{}\n", "Received", format_bytes(request.received_bytes)));
+        rows.push(DetailRow::Pair("Received".into(), format_bytes(request.received_bytes)));
         if let Some(length) = request.content_length {
-            text.push_str(&format!("{:<16}{}\n", "Declared", format_bytes(length)));
+            rows.push(DetailRow::Pair("Declared".into(), format_bytes(length)));
         }
         if let Some(us) = request.elapsed_us {
-            text.push_str(&format!("{:<16}{}\n", "Took", format_duration(us)));
+            rows.push(DetailRow::Pair("Took".into(), format_duration(us)));
         }
         if let Some(error) = &request.error {
-            text.push_str(&format!("{:<16}{}\n", "Error", error));
+            rows.push(DetailRow::Pair("Error".into(), error.clone()));
         }
         if request.headers.is_empty() {
-            text.push_str("\nNo response headers recorded.\n");
+            rows.push(DetailRow::Note("No response headers recorded.".into()));
         } else {
-            text.push_str("\nResponse headers\n");
+            rows.push(DetailRow::Section("Response headers".into()));
             for (name, value) in &request.headers {
-                text.push_str(&format!("  {name}: {value}\n"));
+                rows.push(DetailRow::Pair(name.clone(), value.clone()));
             }
         }
-        self.network_response_view.buffer().set_text(&text);
+        self.fill_pairs("response", &self.response_list, &rows);
+
+        let mut raw = match request.status {
+            Some(code) => format!("HTTP/1.1 {code}\n"),
+            None => format!("(no response: {})\n", request.state.label()),
+        };
+        for (name, value) in &request.headers {
+            raw.push_str(&format!("{name}: {value}\n"));
+        }
+        self.set_raw("response-raw", &self.network_response_view, &raw);
 
         // ── Body ──────────────────────────────────────────────────────────
-        //
-        // Deliberately empty rather than refetched. Asking for the URL again would show a
-        // *different* response than the one on this row -- a second request, possibly a
-        // different result, and doubled traffic -- which is worse than showing nothing in a
-        // panel whose whole job is to report what actually happened.
         let text = match &request.body {
             Some(bytes) => beacon_core::devtools::format_body(bytes, request.body_truncated),
-            // Evicted is not the same as never captured, and a developer needs to tell them
-            // apart: one means "look sooner", the other means "this kind is not captured".
-            None if request.body_evicted => "Captured, then dropped.\n\n                 The panel keeps a fixed total of body bytes and this was among the oldest \n                 when that ran out. Reload to capture it again.\n"
-                .to_string(),
+            None if request.body_evicted => "Captured, then dropped.\n\nThe panel keeps a fixed total of body bytes and this was among the\noldest when that ran out. Reload to capture it again.\n".to_string(),
             None if !self.devtools_pane.get_visible() => "No body captured.\n".to_string(),
             None => {
                 let mut text = String::from("No body captured for this request.\n\n");
@@ -922,45 +1003,124 @@ impl BrowserWindow {
                 text
             }
         };
-        self.network_body_view.buffer().set_text(&text);
+        self.set_raw("body", &self.network_body_view, &text);
 
         // ── Subresources ──────────────────────────────────────────────────
-        //
-        // The engine records no parent per request, so this is everything the page fetched
-        // that a navigation did not -- an approximation, and labelled as one.
-        let mut text = String::new();
+        let mut rows = Vec::new();
         if request.kind == "document" {
             let children: Vec<_> = requests
                 .iter()
                 .filter(|r| r.id != request.id && r.initiator != "navigation")
                 .collect();
             if children.is_empty() {
-                text.push_str("This document pulled in no subresources.\n");
+                rows.push(DetailRow::Note("This document pulled in no subresources.".into()));
             } else {
-                text.push_str(&format!("{} loaded for this document\n\n", children.len()));
+                rows.push(DetailRow::Section(format!("{} loaded for this document", children.len())));
+                rows.push(DetailRow::Columns(("Type".into(), "Size".into(), "URL".into())));
                 for child in children {
-                    // A failed subresource has no size worth printing; "0 B" reads as an
-                    // empty file rather than as something that never arrived.
                     let size = if child.error.is_some() {
                         child.state.label().to_string()
                     } else {
                         format_bytes(child.received_bytes)
                     };
-                    text.push_str(&format!(
-                        "{:<18}{:>10}  {}\n",
-                        truncate(&child.kind, 18),
-                        size,
-                        short_url(&child.url)
-                    ));
+                    rows.push(DetailRow::Columns((child.kind.clone(), size, short_url(&child.url))));
                 }
-                text.push_str("\nGrouped by exclusion, not by parentage: the engine records\n");
-                text.push_str("no initiating request id, so this is everything the page fetched\n");
-                text.push_str("that a navigation did not.\n");
+                rows.push(DetailRow::Note(
+                    "Grouped by exclusion, not by parentage: the engine records no initiating \
+                     request id, so this is everything the page fetched that a navigation did not."
+                        .into(),
+                ));
             }
         } else {
-            text.push_str("Only a document has subresources.\n");
+            rows.push(DetailRow::Note("Only a document has subresources.".into()));
         }
-        self.network_sub_view.buffer().set_text(&text);
+        self.fill_pairs("subresources", &self.sub_list, &rows);
+    }
+
+    /// Fill a striped list with rows, but only when something changed.
+    ///
+    /// The guard is what makes these panes readable: they refresh four times a second, and
+    /// rebuilding a list resets its scroll, so anything past the first screenful could never
+    /// be reached.
+    fn fill_pairs(&self, key: &'static str, list: &gtk4::ListBox, rows: &[DetailRow]) {
+        let signature: String = rows.iter().map(DetailRow::signature).collect();
+        if self.detail_rendered.borrow().get(key) == Some(&signature) {
+            return;
+        }
+        self.detail_rendered.borrow_mut().insert(key, signature);
+
+        while let Some(child) = list.first_child() {
+            list.remove(&child);
+        }
+        for entry in rows {
+            let row = gtk4::ListBoxRow::new();
+            row.set_activatable(false);
+            match entry {
+                // A heading, not data: it gets its own look and is skipped by the banding,
+                // so a long header list reads as sections rather than one undifferentiated
+                // run of rows.
+                DetailRow::Section(title) => {
+                    let label = gtk4::Label::new(Some(title));
+                    label.set_xalign(0.0);
+                    label.add_css_class("detail-section");
+                    row.set_child(Some(&label));
+                    row.add_css_class("section-row");
+                }
+                DetailRow::Pair(name, value) => {
+                    // Two real columns, so every value starts at the same x whether its name
+                    // is "URL" or "content-security-policy".
+                    let line = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+                    let key_label = Self::cell(name, 150, 0.0);
+                    key_label.add_css_class("detail-key");
+                    line.append(&key_label);
+                    let value_label = gtk4::Label::new(Some(value));
+                    value_label.set_xalign(0.0);
+                    value_label.set_hexpand(true);
+                    value_label.set_selectable(true);
+                    // Wrapped, not ellipsized. A URL's query string and a long
+                    // content-security-policy are exactly the parts worth reading, and they
+                    // live at the end -- cutting them off leaves three `load.php` rows that
+                    // cannot be told apart. The pane scrolls; a taller row is the cheaper
+                    // price.
+                    value_label.set_wrap(true);
+                    value_label.set_wrap_mode(gtk4::pango::WrapMode::WordChar);
+                    line.append(&value_label);
+                    line.add_css_class("monospace");
+                    row.set_child(Some(&line));
+                }
+                DetailRow::Columns(cells) => {
+                    let line = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+                    line.append(&Self::cell(&cells.0, 120, 0.0));
+                    line.append(&Self::cell(&cells.1, 76, 1.0));
+                    let tail = gtk4::Label::new(Some(&cells.2));
+                    tail.set_xalign(0.0);
+                    tail.set_hexpand(true);
+                    tail.set_ellipsize(gtk4::pango::EllipsizeMode::End);
+                    tail.set_tooltip_text(Some(&cells.2));
+                    line.append(&tail);
+                    line.add_css_class("monospace");
+                    row.set_child(Some(&line));
+                }
+                DetailRow::Note(text) => {
+                    let label = gtk4::Label::new(Some(text));
+                    label.set_xalign(0.0);
+                    label.set_wrap(true);
+                    label.add_css_class("dim-label");
+                    row.set_child(Some(&label));
+                    row.add_css_class("section-row");
+                }
+            }
+            list.append(&row);
+        }
+    }
+
+    /// Same guard for the plain-text panes.
+    fn set_raw(&self, key: &'static str, view: &TextView, text: &str) {
+        if self.detail_rendered.borrow().get(key).map(String::as_str) == Some(text) {
+            return;
+        }
+        self.detail_rendered.borrow_mut().insert(key, text.to_string());
+        view.buffer().set_text(text);
     }
 
     pub(crate) fn close_tab(&self, tab_id: TabId) {
@@ -3216,10 +3376,14 @@ fn short_url(url: &str) -> String {
             let host = parsed.host_str().unwrap_or("");
             let path = parsed.path();
             let tail = path.rsplit('/').next().unwrap_or(path);
+            // The query comes along: on a site that serves everything through one endpoint
+            // it is the only thing that distinguishes one request from the next, and a list
+            // of identical `load.php` rows is no use to anyone.
+            let query = parsed.query().map(|q| format!("?{q}")).unwrap_or_default();
             if tail.is_empty() {
-                format!("{host}{path}")
+                format!("{host}{path}{query}")
             } else {
-                format!("{host}/…/{tail}")
+                format!("{host}/…/{tail}{query}")
             }
         }
         Err(_) => url.to_string(),
@@ -3244,4 +3408,33 @@ fn truncate(value: &str, width: usize) -> String {
     let mut out: String = value.chars().take(width.saturating_sub(1)).collect();
     out.push('…');
     out
+}
+
+/// A line in one of the request-detail panes.
+///
+/// Typed rather than pre-formatted strings so the pane can lay each kind out properly: a
+/// heading is not a value, and a value column that starts wherever the previous name happened
+/// to end is what made these read as a wall of text.
+pub(crate) enum DetailRow {
+    /// A heading above the rows that follow.
+    Section(String),
+    /// A name and its value, in two aligned columns.
+    Pair(String, String),
+    /// Three columns: kind, size, URL. Used by the subresource list.
+    Columns((String, String, String)),
+    /// Explanatory prose, wrapped.
+    Note(String),
+}
+
+impl DetailRow {
+    /// What this row would render as, for the "has anything changed" check that stops these
+    /// panes rebuilding -- and losing their scroll position -- four times a second.
+    fn signature(&self) -> String {
+        match self {
+            DetailRow::Section(t) => format!("S\u{1}{t}\u{2}"),
+            DetailRow::Pair(k, v) => format!("P\u{1}{k}\u{1}{v}\u{2}"),
+            DetailRow::Columns((a, b, c)) => format!("C\u{1}{a}\u{1}{b}\u{1}{c}\u{2}"),
+            DetailRow::Note(t) => format!("N\u{1}{t}\u{2}"),
+        }
+    }
 }

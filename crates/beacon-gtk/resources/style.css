@@ -361,6 +361,42 @@ window.private-window menubar.header-menubar > item {
     font-size: 0.78em;
 }
 
+/* The detail panes are tables too: same banding, same small monospace. */
+.striped-list row label {
+    font-size: 0.78em;
+    padding: 1px 6px 1px 8px;
+}
+
+.striped-list row {
+    min-height: 0;
+}
+
+/* A section heading is chrome inside the list: it breaks a long run of headers into
+   readable groups and is skipped by the banding so it does not look like another row. */
+.detail-section {
+    font-size: 0.78em;
+    font-weight: bold;
+    padding: 6px 6px 2px 8px;
+    color: alpha(currentColor, 0.75);
+}
+
+.striped-list row.section-row {
+    background: none;
+}
+
+.striped-list row.section-row label {
+    padding: 2px 6px 2px 8px;
+}
+
+/* The name column, muted so the eye lands on the values. */
+.detail-key {
+    color: alpha(currentColor, 0.65);
+}
+
+.striped-list row:nth-child(even) {
+    background: alpha(currentColor, 0.045);
+}
+
 .network-list row label {
     font-size: 0.78em;
     padding: 1px 6px 1px 8px;

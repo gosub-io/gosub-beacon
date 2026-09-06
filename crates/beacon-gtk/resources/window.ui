@@ -366,9 +366,8 @@
                                                              scroller, so they stay put while
                                                              the list scrolls under them. -->
                                                         <child>
-                                                            <object class="GtkLabel" id="network_header">
-                                                                <property name="xalign">0</property>
-                                                                <property name="single-line-mode">True</property>
+                                                            <object class="GtkBox" id="network_header">
+                                                                <property name="orientation">horizontal</property>
                                                                 <style><class name="table-header"/></style>
                                                             </object>
                                                         </child>
@@ -396,13 +395,26 @@
                                                         <property name="orientation">vertical</property>
                                                         <property name="width-request">340</property>
                                                         <child>
-                                                            <object class="GtkStackSwitcher" id="network_detail_switcher">
-                                                                <property name="stack">network_detail_stack</property>
-                                                                <property name="halign">start</property>
+                                                            <object class="GtkBox">
+                                                                <property name="orientation">horizontal</property>
+                                                                <property name="spacing">6</property>
                                                                 <property name="margin-start">6</property>
+                                                                <property name="margin-end">6</property>
                                                                 <property name="margin-top">3</property>
                                                                 <property name="margin-bottom">3</property>
                                                                 <style><class name="devtools-header"/></style>
+                                                                <child>
+                                                                    <object class="GtkStackSwitcher" id="network_detail_switcher">
+                                                                        <property name="stack">network_detail_stack</property>
+                                                                        <property name="halign">start</property>
+                                                                    </object>
+                                                                </child>
+                                                                <child>
+                                                                    <object class="GtkToggleButton" id="detail_raw">
+                                                                        <property name="label">Raw</property>
+                                                                        <property name="tooltip-text">Show the request and response as they went over the wire</property>
+                                                                    </object>
+                                                                </child>
                                                             </object>
                                                         </child>
                                                         <child>
@@ -413,7 +425,26 @@
                                                                 <property name="name">request</property>
                                                                 <property name="title">Request</property>
                                                                 <property name="child">
-                                                                    <object class="GtkScrolledWindow">
+                                                                    <object class="GtkStack" id="request_stack">
+                                                                        <child>
+                                                                            <object class="GtkStackPage">
+                                                                                <property name="name">formatted</property>
+                                                                                <property name="child"><object class="GtkScrolledWindow">
+                                                                        <property name="hscrollbar-policy">never</property>
+                                                                        <property name="vscrollbar-policy">automatic</property>
+                                                                        <child>
+                                                                            <object class="GtkListBox" id="request_list">
+                                                                                <property name="selection-mode">none</property>
+                                                                                <style><class name="striped-list"/></style>
+                                                                            </object>
+                                                                        </child>
+                                                                    </object></property>
+                                                                            </object>
+                                                                        </child>
+                                                                        <child>
+                                                                            <object class="GtkStackPage">
+                                                                                <property name="name">raw</property>
+                                                                                <property name="child"><object class="GtkScrolledWindow">
                                                                         <property name="hscrollbar-policy">automatic</property>
                                                                         <property name="vscrollbar-policy">automatic</property>
                                                                         <child>
@@ -427,6 +458,9 @@
                                                                                 <style><class name="table-body"/></style>
                                                                             </object>
                                                                         </child>
+                                                                    </object></property>
+                                                                            </object>
+                                                                        </child>
                                                                     </object>
                                                                 </property>
                                                             </object>
@@ -436,7 +470,26 @@
                                                                 <property name="name">response</property>
                                                                 <property name="title">Response</property>
                                                                 <property name="child">
-                                                                    <object class="GtkScrolledWindow">
+                                                                    <object class="GtkStack" id="response_stack">
+                                                                        <child>
+                                                                            <object class="GtkStackPage">
+                                                                                <property name="name">formatted</property>
+                                                                                <property name="child"><object class="GtkScrolledWindow">
+                                                                        <property name="hscrollbar-policy">never</property>
+                                                                        <property name="vscrollbar-policy">automatic</property>
+                                                                        <child>
+                                                                            <object class="GtkListBox" id="response_list">
+                                                                                <property name="selection-mode">none</property>
+                                                                                <style><class name="striped-list"/></style>
+                                                                            </object>
+                                                                        </child>
+                                                                    </object></property>
+                                                                            </object>
+                                                                        </child>
+                                                                        <child>
+                                                                            <object class="GtkStackPage">
+                                                                                <property name="name">raw</property>
+                                                                                <property name="child"><object class="GtkScrolledWindow">
                                                                         <property name="hscrollbar-policy">automatic</property>
                                                                         <property name="vscrollbar-policy">automatic</property>
                                                                         <child>
@@ -450,6 +503,9 @@
                                                                                 <style><class name="table-body"/></style>
                                                                             </object>
                                                                         </child>
+                                                                    </object></property>
+                                                                            </object>
+                                                                        </child>
                                                                     </object>
                                                                 </property>
                                                             </object>
@@ -458,8 +514,7 @@
                                                             <object class="GtkStackPage">
                                                                 <property name="name">body</property>
                                                                 <property name="title">Body</property>
-                                                                <property name="child">
-                                                                    <object class="GtkScrolledWindow">
+                                                                <property name="child"><object class="GtkScrolledWindow">
                                                                         <property name="hscrollbar-policy">automatic</property>
                                                                         <property name="vscrollbar-policy">automatic</property>
                                                                         <child>
@@ -473,31 +528,23 @@
                                                                                 <style><class name="table-body"/></style>
                                                                             </object>
                                                                         </child>
-                                                                    </object>
-                                                                </property>
+                                                                    </object></property>
                                                             </object>
                                                         </child>
                                                         <child>
                                                             <object class="GtkStackPage">
                                                                 <property name="name">subresources</property>
                                                                 <property name="title">Subresources</property>
-                                                                <property name="child">
-                                                                    <object class="GtkScrolledWindow">
-                                                                        <property name="hscrollbar-policy">automatic</property>
+                                                                <property name="child"><object class="GtkScrolledWindow">
+                                                                        <property name="hscrollbar-policy">never</property>
                                                                         <property name="vscrollbar-policy">automatic</property>
                                                                         <child>
-                                                                            <object class="GtkTextView" id="network_sub_view">
-                                                                                <property name="monospace">True</property>
-                                                                                <property name="editable">False</property>
-                                                                                <property name="cursor-visible">False</property>
-                                                                                <property name="left-margin">8</property>
-                                                                                <property name="top-margin">6</property>
-                                                                                <property name="wrap-mode">word-char</property>
-                                                                                <style><class name="table-body"/></style>
+                                                                            <object class="GtkListBox" id="sub_list">
+                                                                                <property name="selection-mode">none</property>
+                                                                                <style><class name="striped-list"/></style>
                                                                             </object>
                                                                         </child>
-                                                                    </object>
-                                                                </property>
+                                                                    </object></property>
                                                             </object>
                                                         </child>
                                                             </object>
