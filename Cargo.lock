@@ -2854,7 +2854,6 @@ name = "gosub_html5"
 version = "0.1.1"
 dependencies = [
  "cow-utils",
- "gosub-sonar",
  "gosub_css3",
  "gosub_interface",
  "gosub_shared",

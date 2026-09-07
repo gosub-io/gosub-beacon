@@ -128,6 +128,8 @@ pub struct BrowserWindow {
     #[template_child]
     pub response_list: TemplateChild<gtk4::ListBox>,
     #[template_child]
+    pub timing_list: TemplateChild<gtk4::ListBox>,
+    #[template_child]
     pub sub_list: TemplateChild<gtk4::ListBox>,
     #[template_child]
     pub network_request_view: TemplateChild<TextView>,
@@ -239,6 +241,7 @@ impl Default for BrowserWindow {
             response_stack: TemplateChild::default(),
             request_list: TemplateChild::default(),
             response_list: TemplateChild::default(),
+            timing_list: TemplateChild::default(),
             sub_list: TemplateChild::default(),
             network_request_view: TemplateChild::default(),
             network_response_view: TemplateChild::default(),
@@ -761,9 +764,64 @@ impl BrowserWindow {
         label
     }
 
+    /// Width of the waterfall column, in pixels.
+    const WATERFALL_WIDTH: i32 = 200;
+
+    /// One request's bar, drawn against the page's whole load.
+    ///
+    /// `window` is the span every bar is measured in: the earliest start and the latest
+    /// finish across the list. Without a shared span each bar would be drawn to its own
+    /// scale, and the picture -- what overlapped what, what the page waited on -- is the
+    /// only reason to draw it at all.
+    ///
+    /// Two tones: pale up to the response headers, solid after. A row that is mostly pale
+    /// was waiting on the server; one that is mostly solid was reading a large body.
+    fn waterfall(start_ms: u64, headers_ms: Option<u64>, end_ms: u64, window: (u64, u64)) -> gtk4::DrawingArea {
+        let area = gtk4::DrawingArea::new();
+        area.set_content_width(Self::WATERFALL_WIDTH);
+        area.set_size_request(Self::WATERFALL_WIDTH, -1);
+
+        let (window_start, window_end) = window;
+        let span = window_end.saturating_sub(window_start).max(1) as f64;
+        let offset = start_ms.saturating_sub(window_start) as f64 / span;
+        let wait_end = headers_ms.unwrap_or(end_ms).clamp(start_ms, end_ms);
+        let wait = wait_end.saturating_sub(start_ms) as f64 / span;
+        let body = end_ms.saturating_sub(wait_end) as f64 / span;
+
+        area.set_draw_func(move |widget, cr, width, height| {
+            let w = width as f64;
+            let h = height as f64;
+            let ink = widget.color();
+            let bar_h = (h - 6.0).clamp(3.0, 8.0);
+            let y = (h - bar_h) / 2.0;
+
+            // A hairline track, so a bar's position reads against the whole load rather
+            // than floating in space.
+            cr.set_source_rgba(ink.red() as f64, ink.green() as f64, ink.blue() as f64, 0.10);
+            cr.rectangle(0.0, h / 2.0 - 0.5, w, 1.0);
+            let _ = cr.fill();
+
+            let x = offset * w;
+            // A request too fast to have any width still gets a mark: a bar that vanishes
+            // reads as a request that never happened.
+            let wait_w = (wait * w).max(if wait > 0.0 { 1.0 } else { 0.0 });
+            let body_w = (body * w).max(1.0);
+
+            if wait_w > 0.0 {
+                cr.set_source_rgba(ink.red() as f64, ink.green() as f64, ink.blue() as f64, 0.30);
+                cr.rectangle(x, y, wait_w, bar_h);
+                let _ = cr.fill();
+            }
+            cr.set_source_rgba(0.20, 0.45, 0.85, 0.85);
+            cr.rectangle(x + wait_w, y, body_w, bar_h);
+            let _ = cr.fill();
+        });
+        area
+    }
+
     /// A row of the request list. The URL takes what is left and ellipsizes, so a long one
     /// shortens itself instead of pushing the columns off the edge.
-    fn network_row(status: &str, method: &str, kind: &str, size: &str, time: &str, url: &str) -> gtk4::Box {
+    fn network_row(status: &str, method: &str, kind: &str, size: &str, time: &str, url: &str, bar: Option<gtk4::DrawingArea>) -> gtk4::Box {
         let row = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
         for (text, (width, xalign)) in [status, method, kind, size, time].iter().zip(Self::NETWORK_COLUMNS) {
             row.append(&Self::cell(text, width, xalign));
@@ -773,6 +831,11 @@ impl BrowserWindow {
         tail.set_hexpand(true);
         tail.set_ellipsize(gtk4::pango::EllipsizeMode::End);
         row.append(&tail);
+        match bar {
+            Some(bar) => row.append(&bar),
+            // Only the header passes no bar, and it wants the column named.
+            None => row.append(&Self::cell("Waterfall", Self::WATERFALL_WIDTH, 0.0)),
+        }
         row
     }
 
@@ -785,6 +848,29 @@ impl BrowserWindow {
         if held > 0 {
             summary.push_str(&format!(" · {} of bodies held", format_bytes(held as u64)));
         }
+
+        // What the page is still waiting on, and for how long. The first question anyone
+        // asks of an unresponsive page, answered without having to read down the list.
+        let now = now_ms();
+        let stuck: Vec<(u64, beacon_core::devtools::Phase)> = beacon_core::devtools::requests(self.active_tab_id())
+            .iter()
+            .filter(|r| {
+                r.elapsed_us.is_none()
+                    && matches!(
+                        r.state,
+                        beacon_core::devtools::RequestState::Running | beacon_core::devtools::RequestState::Queued
+                    )
+            })
+            .map(|r| (now.saturating_sub(r.started_ms), r.phase()))
+            .collect();
+        if let Some((longest, phase)) = stuck.iter().max_by_key(|(age, _)| *age) {
+            summary.push_str(&format!(
+                " · {} in flight, longest {} {}",
+                stuck.len(),
+                beacon_core::devtools::format_duration(longest * 1000),
+                phase.label(),
+            ));
+        }
         summary
     }
 
@@ -793,7 +879,7 @@ impl BrowserWindow {
 
         if self.network_header.first_child().is_none() {
             self.network_header
-                .append(&Self::network_row("Status", "Method", "Type", "Size", "Time", "URL"));
+                .append(&Self::network_row("Status", "Method", "Type", "Size", "Time", "URL", None));
         }
 
         // Only this window's active tab: a request list mixing several tabs together is a
@@ -803,6 +889,17 @@ impl BrowserWindow {
         self.devtools_summary.set_text(&self.network_summary(requests.len(), total));
 
         let selected = *self.network_selected.borrow();
+
+        // The span every bar is drawn against: from the first request the page made to the
+        // last byte of the last one. Computed once, so the bars share a scale and can be
+        // read against each other.
+        let window_start = requests.iter().map(|r| r.started_ms).min().unwrap_or(0);
+        let window_end = requests
+            .iter()
+            .map(|r| r.started_ms + r.elapsed_us.unwrap_or(0) / 1000)
+            .max()
+            .unwrap_or(window_start + 1)
+            .max(window_start + 1);
 
         // Rebuilt wholesale. A request list is short and changes shape as rows arrive, and
         // the alternative -- diffing it against the widgets already there -- is a great deal
@@ -817,9 +914,12 @@ impl BrowserWindow {
                 continue;
             }
 
+            // A failed request has no status code, and "err" says nothing a developer can
+            // act on. The kind the engine derived does: "TLS" and "no connection" send you
+            // to different places.
             let status = match (request.status, request.state) {
                 (Some(code), _) => code.to_string(),
-                (None, beacon_core::devtools::RequestState::Failed) => "err".to_string(),
+                (None, beacon_core::devtools::RequestState::Failed) => request.failure_label().unwrap_or("err").to_string(),
                 _ => "—".to_string(),
             };
             let size = if request.received_bytes > 0 {
@@ -827,14 +927,37 @@ impl BrowserWindow {
             } else {
                 request.content_length.map(format_bytes).unwrap_or_else(|| "—".to_string())
             };
-            let time = request
-                .elapsed_us
-                .map(format_duration)
-                .unwrap_or_else(|| request.state.label().to_string());
+            // A request still in flight shows how long it has been in flight, not the word
+            // "loading". A page that is not responding is a page with a request sitting at
+            // twelve seconds, and that is only visible if the number is on screen.
+            let time = match request.elapsed_us {
+                Some(us) => format_duration(us),
+                None if matches!(
+                    request.state,
+                    beacon_core::devtools::RequestState::Running | beacon_core::devtools::RequestState::Queued
+                ) =>
+                {
+                    // Which phase it has been sitting in, not just how long: twelve seconds
+                    // waiting for a reply and twelve seconds part way through a body are
+                    // different problems with different fixes.
+                    format!(
+                        "{} {}…",
+                        request.phase().label(),
+                        format_duration(now_ms().saturating_sub(request.started_ms) * 1000)
+                    )
+                }
+                None => request.state.label().to_string(),
+            };
 
             // A request that never reached the wire has no method to report -- a file://
             // load, or one answered from cache before a hop was built.
             let method = request.method.as_deref().unwrap_or("—");
+            let bar = Self::waterfall(
+                request.started_ms,
+                request.headers_ms,
+                request.started_ms + request.elapsed_us.unwrap_or(0) / 1000,
+                (window_start, window_end),
+            );
             let label = Self::network_row(
                 &status,
                 method,
@@ -842,6 +965,7 @@ impl BrowserWindow {
                 &size,
                 &time,
                 &short_url(&request.url),
+                Some(bar),
             );
             label.add_css_class("monospace");
             if request.error.is_some() {
@@ -895,6 +1019,7 @@ impl BrowserWindow {
             self.fill_pairs("request", &self.request_list, &rows);
             self.fill_pairs("response", &self.response_list, &rows);
             self.fill_pairs("subresources", &self.sub_list, &rows);
+            self.fill_pairs("timing", &self.timing_list, &rows);
             self.set_raw("request-raw", &self.network_request_view, empty);
             self.set_raw("response-raw", &self.network_response_view, empty);
             self.set_raw("body", &self.network_body_view, empty);
@@ -923,21 +1048,24 @@ impl BrowserWindow {
             for (name, value) in &request.request_headers {
                 rows.push(DetailRow::Pair(name.clone(), value.clone()));
             }
-            // Derived from what is actually here rather than written out once. Twice now a
-            // hard-coded note has gone on claiming a header was unavailable after the
-            // network stack started reporting it -- the pane showing the header and denying
-            // it in the same breath.
-            let mut absent = vec!["host, added by the connection below this layer"];
+            // Everything the stack sends is now listed, so the note is down to the one
+            // header that cannot be: `host` is added by the connection, and a developer
+            // used to seeing it in another inspector would otherwise wonder where it went.
+            //
+            // Still derived rather than written out, because twice a hard-coded version
+            // went on claiming a header was unavailable after the network stack had started
+            // reporting it -- the pane showing the header and denying it in the same breath.
+            let mut absent: Vec<&str> = vec!["host"];
             if !request
                 .request_headers
                 .iter()
                 .any(|(name, _)| name.eq_ignore_ascii_case("accept-encoding"))
             {
-                absent.push("accept-encoding, added by the HTTP client as it sends");
+                absent.push("accept-encoding");
             }
             rows.push(DetailRow::Note(format!(
-                "What the engine actually sent. Not shown: {}.",
-                absent.join("; ")
+                "Added below this layer and not visible here: {}.",
+                absent.join(", ")
             )));
         }
         self.fill_pairs("request", &self.request_list, &rows);
@@ -968,7 +1096,14 @@ impl BrowserWindow {
             rows.push(DetailRow::Pair("Took".into(), format_duration(us)));
         }
         if let Some(error) = &request.error {
+            rows.push(DetailRow::Section("Failure".into()));
+            if let Some(label) = request.failure_label() {
+                rows.push(DetailRow::Pair("Cause".into(), label.into()));
+            }
             rows.push(DetailRow::Pair("Error".into(), error.clone()));
+            if let Some(hint) = request.failure_hint() {
+                rows.push(DetailRow::Note(hint.into()));
+            }
         }
         if request.headers.is_empty() {
             rows.push(DetailRow::Note("No response headers recorded.".into()));
@@ -1004,6 +1139,92 @@ impl BrowserWindow {
             }
         };
         self.set_raw("body", &self.network_body_view, &text);
+
+        // ── Timing ────────────────────────────────────────────────────────
+        //
+        // Laid out end to end against the request's own total rather than the page's, so
+        // this answers "where did *this* request's time go" -- which is a different question
+        // from the waterfall column's "when did it happen relative to everything else".
+        let total_us = request.elapsed_us.unwrap_or(0);
+        let wait_us = match (request.headers_ms, request.elapsed_us) {
+            (Some(headers), Some(_)) => headers.saturating_sub(request.started_ms) * 1000,
+            _ => 0,
+        };
+        let receive_us = total_us.saturating_sub(wait_us);
+
+        let mut rows = Vec::new();
+        // A request still running has no phase breakdown to show yet, but it does have the
+        // one fact worth having: which phase it has been sitting in, and for how long. That
+        // is the answer to "why is this page not responding", so it goes first.
+        let phase = request.phase();
+        if phase != beacon_core::devtools::Phase::Done {
+            // No breakdown yet -- the totals it divides up only exist once the request
+            // ends. What does exist is the one fact worth having: which phase it has been
+            // sitting in, and for how long.
+            rows.push(DetailRow::Section("Still running".into()));
+            rows.push(DetailRow::Pair("Phase".into(), phase.label().into()));
+            rows.push(DetailRow::Pair(
+                "Running for".into(),
+                format_duration(now_ms().saturating_sub(request.started_ms) * 1000),
+            ));
+            rows.push(DetailRow::Note(phase.hint().into()));
+            if let Some(us) = request.dns_us {
+                rows.push(DetailRow::Pair("DNS took".into(), format_duration(us)));
+            }
+            if let Some(us) = request.connect_us {
+                rows.push(DetailRow::Pair("Connect took".into(), format_duration(us)));
+            }
+        } else if total_us == 0 && request.dns_us.is_none() {
+            rows.push(DetailRow::Note(format!(
+                "No timing recorded: this request is {}.",
+                request.state.label()
+            )));
+        } else {
+            let span = total_us.max(1) as f64;
+
+            // Built as a list first, then laid out. A closure that both captured the running
+            // offset and had to be reset around the DNS/connect pair could not borrow-check,
+            // and the reset is the interesting part: `Connect` encloses `DNS` rather than
+            // following it, so both are drawn from the same origin.
+            let mut phases: Vec<(&str, u64, f64)> = Vec::new();
+            match (request.dns_us, request.connect_us) {
+                (None, None) => rows.push(DetailRow::Note(
+                    "Connection reused: nothing was resolved or dialled for this request.".into(),
+                )),
+                (dns, connect) => {
+                    if let Some(us) = dns {
+                        phases.push(("DNS", us, 0.0));
+                    }
+                    if let Some(us) = connect {
+                        phases.push(("Connect", us, 0.0));
+                    }
+                }
+            }
+
+            // The transfer runs end to end after the connection is up.
+            let mut at = 0.0;
+            for (name, us) in [("Waiting", wait_us), ("Receiving", receive_us)] {
+                phases.push((name, us, at));
+                at += us as f64 / span;
+            }
+
+            for (name, us, offset) in phases {
+                rows.push(DetailRow::Phase {
+                    name: name.to_string(),
+                    offset,
+                    fraction: us as f64 / span,
+                    label: format_duration(us),
+                });
+            }
+            rows.push(DetailRow::Pair("Total".into(), format_duration(total_us)));
+            rows.push(DetailRow::Note(
+                "Waiting is the time to the response headers; receiving is the body after \
+                 them. Connect encloses DNS rather than following it. Blocked, TLS setup and \
+                 send time are not reported by the network stack."
+                    .into(),
+            ));
+        }
+        self.fill_pairs("timing", &self.timing_list, &rows);
 
         // ── Subresources ──────────────────────────────────────────────────
         let mut rows = Vec::new();
@@ -1099,6 +1320,45 @@ impl BrowserWindow {
                     tail.set_tooltip_text(Some(&cells.2));
                     line.append(&tail);
                     line.add_css_class("monospace");
+                    row.set_child(Some(&line));
+                }
+                DetailRow::Phase {
+                    name,
+                    offset,
+                    fraction,
+                    label,
+                } => {
+                    let line = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+                    let name_label = Self::cell(name, 120, 0.0);
+                    name_label.add_css_class("detail-key");
+                    line.append(&name_label);
+
+                    // The bar takes the room between the name and the number, so every
+                    // phase is drawn against the same width and can be compared by eye.
+                    let (offset, fraction) = (*offset, *fraction);
+                    let bar = gtk4::DrawingArea::new();
+                    bar.set_hexpand(true);
+                    bar.set_content_height(12);
+                    bar.set_draw_func(move |widget, cr, width, height| {
+                        let w = width as f64;
+                        let h = height as f64;
+                        let ink = widget.color();
+                        cr.set_source_rgba(ink.red() as f64, ink.green() as f64, ink.blue() as f64, 0.10);
+                        cr.rectangle(0.0, h / 2.0 - 0.5, w, 1.0);
+                        let _ = cr.fill();
+
+                        // A phase too short to have width still shows a tick: zero is a
+                        // measurement, and a blank row looks like missing data.
+                        let bar_w = (fraction * w).max(1.5);
+                        cr.set_source_rgba(0.20, 0.45, 0.85, 0.85);
+                        cr.rectangle(offset * w, 2.0, bar_w, h - 4.0);
+                        let _ = cr.fill();
+                    });
+                    line.append(&bar);
+
+                    let value = Self::cell(label, 76, 1.0);
+                    value.add_css_class("monospace");
+                    line.append(&value);
                     row.set_child(Some(&line));
                 }
                 DetailRow::Note(text) => {
@@ -3367,11 +3627,7 @@ fn format_clock(timestamp_ms: u64) -> String {
 /// A URL short enough for a list row: host plus the tail of the path, which is the part
 /// that tells one request from another.
 fn short_url(url: &str) -> String {
-    /// Long enough for a host and a filename, short enough that a row does not overflow
-    /// its label and start losing columns.
-    const MAX: usize = 58;
-
-    let short = match url::Url::parse(url) {
+    match url::Url::parse(url) {
         Ok(parsed) => {
             let host = parsed.host_str().unwrap_or("");
             let path = parsed.path();
@@ -3387,16 +3643,11 @@ fn short_url(url: &str) -> String {
             }
         }
         Err(_) => url.to_string(),
-    };
-
-    // Trimmed from the front: the file name at the end is what tells one request from
-    // another, and the host is usually repeated down the whole list anyway.
-    if short.chars().count() > MAX {
-        let tail: String = short.chars().skip(short.chars().count() - (MAX - 1)).collect();
-        format!("…{tail}")
-    } else {
-        short
     }
+    // No length cap here. The cell this lands in ellipsizes at the end, so it shortens
+    // itself to whatever room there is -- and it cuts the query first, which is the part
+    // worth losing, leaving the host and file name visible. Trimming here as well used to
+    // eat the start of the URL before the label had a chance.
 }
 
 /// Clip to `width` characters, marking that something was dropped. Counts characters, not
@@ -3422,6 +3673,18 @@ pub(crate) enum DetailRow {
     Pair(String, String),
     /// Three columns: kind, size, URL. Used by the subresource list.
     Columns((String, String, String)),
+    /// One phase of a request's life: a name, a bar drawn to `fraction` of the row's width
+    /// starting at `offset`, and the duration written out.
+    Phase {
+        /// What this phase is called
+        name: String,
+        /// Where the bar starts, 0.0-1.0 of the total
+        offset: f64,
+        /// How much of the total it spans
+        fraction: f64,
+        /// The duration, already formatted
+        label: String,
+    },
     /// Explanatory prose, wrapped.
     Note(String),
 }
@@ -3434,7 +3697,21 @@ impl DetailRow {
             DetailRow::Section(t) => format!("S\u{1}{t}\u{2}"),
             DetailRow::Pair(k, v) => format!("P\u{1}{k}\u{1}{v}\u{2}"),
             DetailRow::Columns((a, b, c)) => format!("C\u{1}{a}\u{1}{b}\u{1}{c}\u{2}"),
+            DetailRow::Phase {
+                name,
+                offset,
+                fraction,
+                label,
+            } => format!("T\u{1}{name}\u{1}{offset:.4}\u{1}{fraction:.4}\u{1}{label}\u{2}"),
             DetailRow::Note(t) => format!("N\u{1}{t}\u{2}"),
         }
     }
+}
+
+/// Milliseconds since the Unix epoch, for measuring how long a request has been in flight.
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }

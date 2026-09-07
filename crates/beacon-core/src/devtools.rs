@@ -171,6 +171,58 @@ impl RequestState {
     }
 }
 
+/// How far an unfinished request got, so a slow load can be told from a stuck one.
+///
+/// "Loading" for thirty seconds says nothing. *Where* it has been loading for thirty
+/// seconds says everything: a request stuck before the connection is a host problem, one
+/// stuck after the request went out is a server that took it and answered nothing, and one
+/// stuck part way through the body is a transfer that died mid-stream.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Phase {
+    /// Not dispatched yet -- waiting behind other requests, or on the scheduler.
+    Queued,
+    /// Dispatched, and nothing has come back. Name resolution and connection setup both
+    /// live here, and so does a request reusing a pooled connection, which reports no
+    /// setup at all. Hence the vague name: this means "no news yet", not "connecting".
+    Opening,
+    /// Resolution finished and the connection has not. Stuck here means a host that
+    /// resolves but will not accept a connection.
+    Connecting,
+    /// On the wire, with no response headers yet. Stuck here means a server that took the
+    /// request and said nothing -- the case that looks most like a hung browser.
+    Waiting,
+    /// Headers arrived, body still coming. Stuck here means a stalled transfer, and the
+    /// received byte count says whether anything is moving at all.
+    Receiving,
+    /// Nothing in flight: the request finished, failed or was cancelled.
+    Done,
+}
+
+impl Phase {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Phase::Queued => "queued",
+            Phase::Opening => "opening",
+            Phase::Connecting => "connecting",
+            Phase::Waiting => "waiting",
+            Phase::Receiving => "receiving",
+            Phase::Done => "done",
+        }
+    }
+
+    /// What a developer looking at a stuck request should suspect.
+    pub fn hint(&self) -> &'static str {
+        match self {
+            Phase::Queued => "not sent yet: waiting behind other requests",
+            Phase::Opening => "no response from the connection attempt: DNS, or a host that never answers",
+            Phase::Connecting => "the host resolves but is not accepting the connection",
+            Phase::Waiting => "the server took the request and has not started replying",
+            Phase::Receiving => "the response started but the body has not finished arriving",
+            Phase::Done => "not in flight",
+        }
+    }
+}
+
 /// One request the engine made, folded together from the events it emitted about it.
 ///
 /// The engine reports a request's life as half a dozen separate events -- queued, started,
@@ -198,6 +250,9 @@ pub struct NetRequest {
     /// developer is looking hardest.
     pub elapsed_us: Option<u64>,
     pub error: Option<String>,
+    /// What kind of failure it was, when the engine could tell. A message alone leaves a
+    /// panel guessing; this is what lets it say "certificate" rather than "error".
+    pub failure: Option<gosub_engine::events::FailureKind>,
     /// The method actually sent. `None` until the request line is reported.
     pub method: Option<String>,
     /// The headers the net stack set on the way out.
@@ -217,6 +272,71 @@ pub struct NetRequest {
     /// When it was first seen, in milliseconds since the epoch. Rows are kept in this
     /// order, which is the order a page actually fetched things.
     pub started_ms: u64,
+    /// How long name resolution took, when this request opened a connection. `None` for one
+    /// served by a pooled connection, which resolved nothing.
+    pub dns_us: Option<u64>,
+    /// How long the connection took to establish. Encloses `dns_us` rather than following
+    /// it: resolution happens inside the connector this times.
+    pub connect_us: Option<u64>,
+    /// When the response headers arrived, same clock. The split between waiting for the
+    /// server and reading the body, which is the whole point of a waterfall: a row that is
+    /// mostly wait is a slow server, one that is mostly body is a big file.
+    pub headers_ms: Option<u64>,
+}
+
+impl NetRequest {
+    /// Where this request has got to, derived only from what was reported.
+    ///
+    /// Note what is *not* claimed: with no connection timing there is no way to tell a
+    /// name that will not resolve from a pooled connection being reused, so both are
+    /// [`Phase::Opening`] rather than a guess dressed up as a fact.
+    pub fn phase(&self) -> Phase {
+        match self.state {
+            RequestState::Queued => Phase::Queued,
+            RequestState::Finished | RequestState::Failed | RequestState::Cancelled => Phase::Done,
+            RequestState::Running => {
+                if self.headers_ms.is_some() {
+                    Phase::Receiving
+                } else if self.connect_us.is_some() {
+                    Phase::Waiting
+                } else if self.dns_us.is_some() {
+                    Phase::Connecting
+                } else {
+                    Phase::Opening
+                }
+            }
+        }
+    }
+
+    /// A short name for why it failed, for a status column.
+    pub fn failure_label(&self) -> Option<&'static str> {
+        use gosub_engine::events::FailureKind;
+        Some(match self.failure? {
+            FailureKind::Blocked => "blocked",
+            FailureKind::Tls => "TLS",
+            FailureKind::Timeout => "timeout",
+            FailureKind::Connect => "no connection",
+            FailureKind::Transfer => "transfer broke",
+            FailureKind::Redirect => "bad redirect",
+            FailureKind::Cancelled => "cancelled",
+            FailureKind::Other => "failed",
+        })
+    }
+
+    /// What that failure means, in the words someone debugging a dead page needs.
+    pub fn failure_hint(&self) -> Option<&'static str> {
+        use gosub_engine::events::FailureKind;
+        Some(match self.failure? {
+            FailureKind::Blocked => "refused by policy before it was sent -- mixed content, or a URL the embedder disallows",
+            FailureKind::Tls => "the TLS handshake failed: an expired, untrusted or mismatched certificate",
+            FailureKind::Timeout => "no answer within the time limit",
+            FailureKind::Connect => "no connection was established: the name did not resolve, or nothing accepted it",
+            FailureKind::Transfer => "the connection worked and then broke part way through",
+            FailureKind::Redirect => "a redirect could not be followed: too many hops, or an invalid target",
+            FailureKind::Cancelled => "something gave up on the request",
+            FailureKind::Other => "the network stack did not say what went wrong",
+        })
+    }
 }
 
 /// Plenty for a page load; oldest requests fall off the front.
@@ -263,6 +383,7 @@ pub fn record_resource(tab: Option<crate::tab::TabId>, event: &gosub_engine::eve
             received_bytes: 0,
             elapsed_us: None,
             error: None,
+            failure: None,
             method: None,
             request_headers: Vec::new(),
             headers: Vec::new(),
@@ -270,6 +391,9 @@ pub fn record_resource(tab: Option<crate::tab::TabId>, event: &gosub_engine::eve
             body_truncated: false,
             body_evicted: false,
             redirects: Vec::new(),
+            dns_us: None,
+            connect_us: None,
+            headers_ms: None,
             started_ms: now_ms(),
         });
         requests.last_mut().expect("just pushed")
@@ -326,6 +450,18 @@ pub fn record_resource(tab: Option<crate::tab::TabId>, event: &gosub_engine::eve
             entry.body_truncated = *truncated;
             evict_bodies_over_budget(&mut requests);
         }
+        ResourceEvent::DnsResolved {
+            request_id, elapsed_us, ..
+        } => {
+            let entry = row(&mut requests, request_id.0, "", tab);
+            entry.dns_us = Some(*elapsed_us);
+        }
+        ResourceEvent::Connected {
+            request_id, elapsed_us, ..
+        } => {
+            let entry = row(&mut requests, request_id.0, "", tab);
+            entry.connect_us = Some(*elapsed_us);
+        }
         ResourceEvent::Redirected {
             request_id, to, status, ..
         } => {
@@ -345,6 +481,7 @@ pub fn record_resource(tab: Option<crate::tab::TabId>, event: &gosub_engine::eve
             ..
         } => {
             let entry = row(&mut requests, request_id.0, url, tab);
+            entry.headers_ms.get_or_insert_with(now_ms);
             entry.status = Some(*status);
             entry.content_length = *content_length;
             entry.content_type = content_type.clone();
@@ -372,10 +509,15 @@ pub fn record_resource(tab: Option<crate::tab::TabId>, event: &gosub_engine::eve
             entry.state = RequestState::Finished;
         }
         ResourceEvent::Failed {
-            request_id, url, error, ..
+            request_id,
+            url,
+            kind,
+            error,
+            ..
         } => {
             let entry = row(&mut requests, request_id.0, url, tab);
             entry.error = Some(error.to_string());
+            entry.failure = Some(*kind);
             entry.state = RequestState::Failed;
         }
         ResourceEvent::Cancelled {
@@ -588,7 +730,11 @@ mod tests {
                 content_length: None,
                 received_bytes: size as u64,
                 elapsed_us: None,
+                dns_us: None,
+                connect_us: None,
+                headers_ms: None,
                 error: None,
+                failure: None,
                 method: None,
                 request_headers: Vec::new(),
                 headers: Vec::new(),
@@ -643,5 +789,59 @@ mod tests {
         assert_eq!(log_len(), 1);
         clear_logs();
         assert!(log_snapshot(10).is_empty());
+    }
+
+    /// A row in flight, with whatever the network has reported about it so far.
+    fn in_flight(dns_us: Option<u64>, connect_us: Option<u64>, headers_ms: Option<u64>) -> NetRequest {
+        let mut row = rows_with_bodies(1, 0).remove(0);
+        row.state = RequestState::Running;
+        row.dns_us = dns_us;
+        row.connect_us = connect_us;
+        row.headers_ms = headers_ms;
+        row
+    }
+
+    #[test]
+    fn a_request_is_placed_by_the_last_thing_that_reported() {
+        assert_eq!(in_flight(None, None, None).phase(), Phase::Opening);
+        assert_eq!(in_flight(Some(900), None, None).phase(), Phase::Connecting);
+        assert_eq!(in_flight(Some(900), Some(4_000), None).phase(), Phase::Waiting);
+        assert_eq!(in_flight(Some(900), Some(4_000), Some(12)).phase(), Phase::Receiving);
+    }
+
+    /// The distinction the whole thing exists for: both have been running for ages, and
+    /// they are different problems. One is a server that never replied, the other a body
+    /// that stopped arriving part way through.
+    #[test]
+    fn a_silent_server_and_a_stalled_transfer_do_not_look_alike() {
+        assert_ne!(
+            in_flight(Some(900), Some(4_000), None).phase(),
+            in_flight(Some(900), Some(4_000), Some(12)).phase()
+        );
+    }
+
+    /// A pooled connection reports no setup at all, which looks exactly like a name that
+    /// has not resolved yet. Neither is claimed: both are "opening".
+    #[test]
+    fn a_reused_connection_is_not_mistaken_for_a_stalled_lookup() {
+        assert_eq!(in_flight(None, None, None).phase(), Phase::Opening);
+    }
+
+    #[test]
+    fn a_finished_request_is_in_no_phase() {
+        let mut row = in_flight(Some(900), Some(4_000), Some(12));
+        row.state = RequestState::Finished;
+        assert_eq!(row.phase(), Phase::Done);
+    }
+
+    #[test]
+    fn a_failure_the_engine_did_not_classify_gets_no_label() {
+        let mut row = in_flight(None, None, None);
+        row.state = RequestState::Failed;
+        assert_eq!(row.failure_label(), None);
+
+        row.failure = Some(gosub_engine::events::FailureKind::Tls);
+        assert_eq!(row.failure_label(), Some("TLS"));
+        assert!(row.failure_hint().is_some());
     }
 }
