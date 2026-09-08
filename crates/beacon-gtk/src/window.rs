@@ -5,6 +5,7 @@ mod config_page;
 mod imp;
 mod message;
 mod page_context_menu;
+mod rows;
 mod tab_context_menu;
 
 use crate::application::Application;

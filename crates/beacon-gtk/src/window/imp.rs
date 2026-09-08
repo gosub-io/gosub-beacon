@@ -102,19 +102,15 @@ pub struct BrowserWindow {
     #[template_child]
     pub log_scroller: TemplateChild<ScrolledWindow>,
     #[template_child]
-    pub log: TemplateChild<TextView>,
-    #[template_child]
-    pub timings_header: TemplateChild<gtk4::Label>,
+    pub log_list: TemplateChild<gtk4::ColumnView>,
     #[template_child]
     pub timings_scroller: TemplateChild<ScrolledWindow>,
     #[template_child]
-    pub timings_view: TemplateChild<TextView>,
+    pub timings_list: TemplateChild<gtk4::ColumnView>,
     #[template_child]
     pub network_scroller: TemplateChild<ScrolledWindow>,
     #[template_child]
-    pub network_header: TemplateChild<gtk4::Box>,
-    #[template_child]
-    pub network_list: TemplateChild<gtk4::ListBox>,
+    pub network_list: TemplateChild<gtk4::ColumnView>,
     #[template_child]
     pub network_detail_stack: TemplateChild<Stack>,
     #[template_child]
@@ -140,20 +136,18 @@ pub struct BrowserWindow {
 
     /// The request currently shown in the detail pane, so a refresh can reselect it.
     pub network_selected: RefCell<Option<uuid::Uuid>>,
-    /// What the timings view last rendered. Comparing against it avoids replacing identical
-    /// text four times a second, which is what was throwing the scroll position away.
-    pub timings_rendered: RefCell<String>,
-    /// What the console last rendered, for the same reason: the buffer holds up to 2000
-    /// lines and replacing it wholesale drops any selection the reader had made.
-    pub console_rendered: RefCell<String>,
-    /// What the request list last rendered. The list is rebuilt from scratch when it
-    /// changes, so without this every row is destroyed and recreated four times a second --
-    /// which is slow, and eats clicks: the row being clicked is gone before the button is
-    /// released. A page that has finished loading now renders once and stays put.
-    pub network_rendered: RefCell<String>,
-    /// The time cell of each row on screen, in row order, so a running request's clock can
-    /// be written in place rather than by rebuilding the row it sits in.
-    pub network_time_cells: RefCell<Vec<(uuid::Uuid, gtk4::Label)>>,
+    /// The timings table's rows, updated in place like the others'.
+    pub timings_model: gtk4::gio::ListStore,
+    /// The rows the network table is showing, in order. Held rather than rebuilt: a refresh
+    /// writes new values into the objects already here, and the view updates the labels it
+    /// has bound to them. Rows are only added or removed when the request list really
+    /// changes, which is what keeps selection, scroll position and clicks intact.
+    /// The debug log's rows, updated in place like the network table's.
+    pub log_model: gtk4::gio::ListStore,
+    pub network_model: gtk4::gio::ListStore,
+    /// The selection the view drives, kept so a refresh can put the highlight back on the
+    /// row the user chose.
+    pub network_selection: gtk4::SingleSelection,
     /// The same guard for each detail pane, keyed by pane name. Without it a pane is rebuilt
     /// four times a second and jumps back to the top on every rebuild, so anything below the
     /// fold cannot be read at all.
@@ -240,11 +234,9 @@ impl Default for BrowserWindow {
             devtools_summary: TemplateChild::default(),
             devtools_filter: TemplateChild::default(),
             log_scroller: TemplateChild::default(),
-            timings_header: TemplateChild::default(),
             timings_scroller: TemplateChild::default(),
-            timings_view: TemplateChild::default(),
+            timings_list: TemplateChild::default(),
             network_scroller: TemplateChild::default(),
-            network_header: TemplateChild::default(),
             network_list: TemplateChild::default(),
             network_detail_stack: TemplateChild::default(),
             detail_raw: TemplateChild::default(),
@@ -258,14 +250,14 @@ impl Default for BrowserWindow {
             network_response_view: TemplateChild::default(),
             network_body_view: TemplateChild::default(),
             network_selected: RefCell::new(None),
-            console_rendered: RefCell::new(String::new()),
-            network_rendered: RefCell::new(String::new()),
-            network_time_cells: RefCell::new(Vec::new()),
-            timings_rendered: RefCell::new(String::new()),
+            log_model: gtk4::gio::ListStore::new::<super::rows::LogRow>(),
+            network_model: gtk4::gio::ListStore::new::<super::rows::RequestRow>(),
+            network_selection: gtk4::SingleSelection::builder().autoselect(false).can_unselect(true).build(),
+            timings_model: gtk4::gio::ListStore::new::<super::rows::TimingRow>(),
             detail_rendered: RefCell::new(std::collections::HashMap::new()),
             devtools_tick: RefCell::new(None),
             devtools_height: Cell::new(260),
-            log: TemplateChild::default(),
+            log_list: TemplateChild::default(),
             statusbar: TemplateChild::default(),
             btn_downloads: TemplateChild::default(),
             btn_bookmark: TemplateChild::default(),
@@ -518,10 +510,24 @@ struct NetworkRow {
     size: String,
     time: String,
     url: String,
-    full_url: String,
-    failed: bool,
+    /// The CSS classes this row's cells carry.
+    css: &'static str,
     /// `(started, headers arrived, ended)` in epoch milliseconds, for the waterfall bar.
     span: (u64, Option<u64>, u64),
+}
+
+impl NetworkRow {
+    /// The bar as fractions of the page's whole load: where it starts, how much of it was
+    /// waiting for the server, and how much was the body arriving.
+    fn bar(&self, window_start: u64, span: f64) -> (f64, f64, f64) {
+        let (start, headers, end) = self.span;
+        let wait_end = headers.unwrap_or(end).clamp(start, end);
+        (
+            start.saturating_sub(window_start) as f64 / span,
+            wait_end.saturating_sub(start) as f64 / span,
+            end.saturating_sub(wait_end) as f64 / span,
+        )
+    }
 }
 
 impl BrowserWindow {
@@ -621,17 +627,21 @@ impl BrowserWindow {
             imp.response_stack.set_visible_child_name(page);
         });
 
-        // Selecting a request shows it in full. The list is rebuilt on every refresh, so the
-        // row carries its request id rather than the panel trusting a row index.
+        self.build_network_columns();
+        self.build_log_columns();
+        self.build_timings_columns();
+
+        // Selecting a request shows it in full. The row object carries the id, so a refresh
+        // that reorders or trims the list cannot leave the detail pane on the wrong request.
         let window = self.obj().clone();
-        self.network_list.connect_row_selected(move |_, row| {
+        self.network_selection.connect_selected_item_notify(move |selection| {
             let imp = window.imp();
-            let Some(row) = row else { return };
-            let id = unsafe { row.data::<uuid::Uuid>("request-id") };
-            if let Some(id) = id {
-                imp.network_selected.replace(Some(unsafe { *id.as_ref() }));
-                imp.show_request_detail();
-            }
+            let id = selection
+                .selected_item()
+                .and_downcast::<super::rows::RequestRow>()
+                .and_then(|row| row.request_id());
+            imp.network_selected.replace(id);
+            imp.show_request_detail();
         });
 
         let window = self.obj().clone();
@@ -654,6 +664,10 @@ impl BrowserWindow {
             };
             imp.devtools_action.set_label(label);
             imp.devtools_action.set_tooltip_text(Some(tooltip));
+            // Nothing to clear or filter on a page with nothing on it.
+            let has_content = imp.devtools_page() != "console";
+            imp.devtools_action.set_visible(has_content);
+            imp.devtools_filter.set_visible(has_content);
             imp.refresh_devtools();
         });
     }
@@ -662,7 +676,7 @@ impl BrowserWindow {
         self.devtools_stack
             .visible_child_name()
             .map(|name| name.to_string())
-            .unwrap_or_else(|| "console".to_string())
+            .unwrap_or_else(|| "log".to_string())
     }
 
     fn refresh_devtools(&self) {
@@ -673,105 +687,124 @@ impl BrowserWindow {
         match self.devtools_page().as_str() {
             "timings" => self.refresh_timings(&needle),
             "network" => self.refresh_network(&needle),
-            _ => self.refresh_console(&needle),
+            // The page's own console, which has nothing to say until scripts run. Its
+            // summary line would otherwise keep whatever the last page put there.
+            "console" => self.devtools_summary.set_text(""),
+            _ => self.refresh_log(&needle),
         }
     }
 
-    fn refresh_console(&self, needle: &str) {
+    fn refresh_log(&self, needle: &str) {
         let lines = beacon_core::devtools::log_snapshot(2000);
         let total = lines.len();
 
-        let mut text = String::new();
-        let mut shown = 0;
-        for line in &lines {
-            if !needle.is_empty() && !line.message.to_lowercase().contains(needle) && !line.target.to_lowercase().contains(needle) {
-                continue;
-            }
-            shown += 1;
-            text.push_str(&format!(
-                "{}  {:<5}  {:<28}  {}\n",
-                format_clock(line.timestamp_ms),
-                line.level,
-                truncate(&line.target, 28),
-                line.message
-            ));
-        }
+        let rows: Vec<_> = lines
+            .iter()
+            .filter(|line| needle.is_empty() || line.message.to_lowercase().contains(needle) || line.target.to_lowercase().contains(needle))
+            .collect();
+        self.devtools_summary.set_text(&format!("{} of {total} records", rows.len()));
 
-        self.devtools_summary.set_text(&format!("{shown} of {total} records"));
-
-        if *self.console_rendered.borrow() == text {
-            return;
-        }
-        self.console_rendered.replace(text.clone());
-
-        // Whether the view was already at the end, decided before replacing the text: a
-        // console being watched should follow, one being read should stay put.
+        // Following the tail is the reason to watch a log; reading one is the reason to stop
+        // following. Decided before the rows change, so a record arriving mid-read does not
+        // yank the view away.
         let adjustment = self.log_scroller.vadjustment();
         let at_bottom = adjustment.value() + adjustment.page_size() >= adjustment.upper() - 8.0;
 
-        self.log.buffer().set_text(&text);
-        if at_bottom {
-            let buffer = self.log.buffer();
-            let mut end = buffer.end_iter();
-            let mark = buffer.create_mark(None, &end, false);
-            self.log.scroll_to_mark(&mark, 0.0, true, 0.0, 1.0);
-            buffer.delete_mark(&mark);
-            let _ = &mut end;
+        for (index, line) in rows.iter().enumerate() {
+            let level = line.level.to_string();
+            // Warnings and errors carry their own class, which is the whole reason a row
+            // knows about CSS at all.
+            let css = match line.level {
+                log::Level::Error => "monospace error",
+                log::Level::Warn => "monospace warn",
+                _ => "monospace",
+            };
+            match self.log_model.item(index as u32).and_downcast::<super::rows::LogRow>() {
+                Some(item) => {
+                    item.set_time(format_clock(line.timestamp_ms));
+                    item.set_level(level.as_str());
+                    item.set_target(line.target.as_str());
+                    item.set_message(line.message.as_str());
+                    item.set_css(css);
+                }
+                None => {
+                    let item = super::rows::LogRow::default();
+                    item.set_time(format_clock(line.timestamp_ms));
+                    item.set_level(level.as_str());
+                    item.set_target(line.target.as_str());
+                    item.set_message(line.message.as_str());
+                    item.set_css(css);
+                    self.log_model.append(&item);
+                }
+            }
         }
-    }
+        // The buffer is a ring: once it is full the oldest records fall off the front, and
+        // the rows shift under whatever is on screen.
+        let wanted = rows.len() as u32;
+        if self.log_model.n_items() > wanted {
+            self.log_model
+                .splice(wanted, self.log_model.n_items() - wanted, &[] as &[super::rows::LogRow]);
+        }
 
-    /// Header and rows share this, for the same reason the network table's do: two format
-    /// strings a few lines apart is how columns quietly stop lining up.
-    #[allow(clippy::too_many_arguments)]
-    fn timings_row(namespace: &str, count: &str, total: &str, avg: &str, p50: &str, p95: &str, max: &str) -> String {
-        format!("{namespace:<34}{count:>8}{total:>12}{avg:>12}{p50:>12}{p95:>12}{max:>12}")
+        if at_bottom && wanted > 0 {
+            self.log_list.scroll_to(wanted - 1, None, gtk4::ListScrollFlags::empty(), None);
+        }
     }
 
     fn refresh_timings(&self, needle: &str) {
         use beacon_core::devtools::format_duration;
 
-        let rows = beacon_core::devtools::timings();
-        let total: u64 = rows.iter().map(|row| row.total_us).sum();
+        let all = beacon_core::devtools::timings();
+        let total: u64 = all.iter().map(|row| row.total_us).sum();
         self.devtools_summary
-            .set_text(&format!("{} namespaces · {} total", rows.len(), format_duration(total)));
+            .set_text(&format!("{} namespaces · {} total", all.len(), format_duration(total)));
 
-        self.timings_header
-            .set_text(&Self::timings_row("Namespace", "Count", "Total", "Avg", "p50", "p95", "Max"));
+        let rows: Vec<_> = all
+            .iter()
+            .filter(|row| needle.is_empty() || row.namespace.to_lowercase().contains(needle))
+            .collect();
 
-        let mut text = String::new();
-        for row in &rows {
-            if !needle.is_empty() && !row.namespace.to_lowercase().contains(needle) {
-                continue;
-            }
-            text.push_str(&Self::timings_row(
-                &truncate(&row.namespace, 33),
-                &row.count.to_string(),
-                &format_duration(row.total_us),
-                &format_duration(row.avg_us),
-                &format_duration(row.p50_us),
-                &format_duration(row.p95_us),
-                &format_duration(row.max_us),
-            ));
-            text.push('\n');
+        for (index, row) in rows.iter().enumerate() {
+            let item = match self.timings_model.item(index as u32).and_downcast::<super::rows::TimingRow>() {
+                Some(item) => item,
+                None => {
+                    let item = super::rows::TimingRow::default();
+                    self.timings_model.append(&item);
+                    item
+                }
+            };
+            item.set_namespace(row.namespace.as_str());
+            item.set_count(row.count.to_string());
+            item.set_total(format_duration(row.total_us));
+            item.set_avg(format_duration(row.avg_us));
+            item.set_p50(format_duration(row.p50_us));
+            item.set_p95(format_duration(row.p95_us));
+            item.set_max(format_duration(row.max_us));
+            item.set_css("monospace");
         }
-        // Replacing the buffer resets the scroll position, and this refreshes four times a
-        // second -- which made the view unreadable: every attempt to scroll down snapped
-        // straight back to the top. Two guards. First, skip entirely when nothing changed,
-        // which is the common case once a page has settled.
-        if *self.timings_rendered.borrow() == text {
-            return;
+        let wanted = rows.len() as u32;
+        if self.timings_model.n_items() > wanted {
+            self.timings_model
+                .splice(wanted, self.timings_model.n_items() - wanted, &[] as &[super::rows::TimingRow]);
         }
-        let adjustment = self.timings_scroller.vadjustment();
-        let previous = adjustment.value();
-        self.timings_view.buffer().set_text(&text);
-        self.timings_rendered.replace(text);
+    }
 
-        // Second, put the position back once GTK has laid the new text out. Restoring it
-        // immediately does nothing: `upper` is still the old extent, so the value is
-        // clamped to it and the view stays at the top anyway.
-        glib::idle_add_local_once(move || {
-            adjustment.set_value(previous);
-        });
+    /// The timings table's columns. The namespace is the only one whose width is anyone's
+    /// guess; the rest hold a duration.
+    fn build_timings_columns(&self) {
+        self.timings_list
+            .set_model(Some(&gtk4::NoSelection::new(Some(self.timings_model.clone()))));
+        for (title, property, width, xalign) in [
+            ("Namespace", "namespace", None, 0.0),
+            ("Count", "count", Some(64), 1.0),
+            ("Total", "total", Some(88), 1.0),
+            ("Avg", "avg", Some(88), 1.0),
+            ("p50", "p50", Some(88), 1.0),
+            ("p95", "p95", Some(88), 1.0),
+            ("Max", "max", Some(88), 1.0),
+        ] {
+            self.timings_list.append_column(&Self::text_column(title, property, width, xalign));
+        }
     }
 
     // ── network ───────────────────────────────────────────────────────────
@@ -782,12 +815,16 @@ impl BrowserWindow {
     /// while every row fits: once the pane is narrower than the text, the label clips and
     /// whole columns disappear -- which is how Status, Method and Type went missing from a
     /// narrowed pane while the header above them lost the same three words.
-    const NETWORK_COLUMNS: [(i32, f32); 5] = [
-        (46.0 as i32, 0.0), // Status
-        (46.0 as i32, 0.0), // Method
-        (96.0 as i32, 0.0), // Type
-        (76.0 as i32, 1.0), // Size, right-aligned like the numbers it holds
-        (76.0 as i32, 1.0), // Time
+    /// The table's columns: title, the row property each one shows, its starting width
+    /// (`None` for the column that takes the remaining space), and its alignment. Widths are
+    /// a starting point only -- the header's dividers resize them from here.
+    const NETWORK_COLUMNS: [(&'static str, &'static str, Option<i32>, f32); 6] = [
+        ("Status", "status", Some(56), 0.0),
+        ("Method", "method", Some(56), 0.0),
+        ("Type", "kind", Some(96), 0.0),
+        ("Size", "size", Some(72), 1.0),
+        ("Time", "time", Some(88), 1.0),
+        ("URL", "url", Some(200), 0.0),
     ];
 
     /// One cell: fixed width, its own alignment, no ellipsizing so it never eats a neighbour.
@@ -812,85 +849,180 @@ impl BrowserWindow {
     ///
     /// Two tones: pale up to the response headers, solid after. A row that is mostly pale
     /// was waiting on the server; one that is mostly solid was reading a large body.
-    fn waterfall(start_ms: u64, headers_ms: Option<u64>, end_ms: u64, window: (u64, u64)) -> gtk4::DrawingArea {
-        let area = gtk4::DrawingArea::new();
-        area.set_content_width(Self::WATERFALL_WIDTH);
-        area.set_size_request(Self::WATERFALL_WIDTH, -1);
+    /// Draw one request's bar. The fractions are of the page's whole load, worked out where
+    /// that span is known; this only has to paint them.
+    fn draw_waterfall(widget: &gtk4::DrawingArea, cr: &gtk4::cairo::Context, width: i32, height: i32, offset: f64, wait: f64, body: f64) {
+        let w = width as f64;
+        let h = height as f64;
+        let ink = widget.color();
+        let bar_h = (h - 6.0).clamp(3.0, 8.0);
+        let y = (h - bar_h) / 2.0;
 
-        let (window_start, window_end) = window;
-        let span = window_end.saturating_sub(window_start).max(1) as f64;
-        let offset = start_ms.saturating_sub(window_start) as f64 / span;
-        let wait_end = headers_ms.unwrap_or(end_ms).clamp(start_ms, end_ms);
-        let wait = wait_end.saturating_sub(start_ms) as f64 / span;
-        let body = end_ms.saturating_sub(wait_end) as f64 / span;
+        // A hairline track, so a bar's position reads against the whole load rather
+        // than floating in space.
+        cr.set_source_rgba(ink.red() as f64, ink.green() as f64, ink.blue() as f64, 0.10);
+        cr.rectangle(0.0, h / 2.0 - 0.5, w, 1.0);
+        let _ = cr.fill();
 
-        area.set_draw_func(move |widget, cr, width, height| {
-            let w = width as f64;
-            let h = height as f64;
-            let ink = widget.color();
-            let bar_h = (h - 6.0).clamp(3.0, 8.0);
-            let y = (h - bar_h) / 2.0;
+        let x = offset * w;
+        // A request too fast to have any width still gets a mark: a bar that vanishes
+        // reads as a request that never happened.
+        let wait_w = (wait * w).max(if wait > 0.0 { 1.0 } else { 0.0 });
+        let body_w = (body * w).max(1.0);
 
-            // A hairline track, so a bar's position reads against the whole load rather
-            // than floating in space.
-            cr.set_source_rgba(ink.red() as f64, ink.green() as f64, ink.blue() as f64, 0.10);
-            cr.rectangle(0.0, h / 2.0 - 0.5, w, 1.0);
+        if wait_w > 0.0 {
+            cr.set_source_rgba(ink.red() as f64, ink.green() as f64, ink.blue() as f64, 0.30);
+            cr.rectangle(x, y, wait_w, bar_h);
             let _ = cr.fill();
-
-            let x = offset * w;
-            // A request too fast to have any width still gets a mark: a bar that vanishes
-            // reads as a request that never happened.
-            let wait_w = (wait * w).max(if wait > 0.0 { 1.0 } else { 0.0 });
-            let body_w = (body * w).max(1.0);
-
-            if wait_w > 0.0 {
-                cr.set_source_rgba(ink.red() as f64, ink.green() as f64, ink.blue() as f64, 0.30);
-                cr.rectangle(x, y, wait_w, bar_h);
-                let _ = cr.fill();
-            }
-            cr.set_source_rgba(0.20, 0.45, 0.85, 0.85);
-            cr.rectangle(x + wait_w, y, body_w, bar_h);
-            let _ = cr.fill();
-        });
-        area
+        }
+        cr.set_source_rgba(0.20, 0.45, 0.85, 0.85);
+        cr.rectangle(x + wait_w, y, body_w, bar_h);
+        let _ = cr.fill();
     }
 
-    /// A row of the request list. The URL takes what is left and ellipsizes, so a long one
-    /// shortens itself instead of pushing the columns off the edge.
-    fn network_row(
-        status: &str,
-        method: &str,
-        kind: &str,
-        size: &str,
-        time: &str,
-        url: &str,
-        bar: Option<gtk4::DrawingArea>,
-    ) -> (gtk4::Box, gtk4::Label) {
-        let row = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
-        // The time cell is handed back so a running request's clock can be updated without
-        // rebuilding the row around it. Rebuilding is what loses a click, and a page with
-        // anything still loading would otherwise rebuild four times a second, forever.
-        let mut time_cell = None;
-        for (index, (text, (width, xalign))) in [status, method, kind, size, time].iter().zip(Self::NETWORK_COLUMNS).enumerate() {
-            let cell = Self::cell(text, width, xalign);
-            if index == 4 {
-                time_cell = Some(cell.clone());
+    /// Build the table's columns, once, at construction.
+    ///
+    /// Each column binds a property of the row object to the widget it makes, so a value
+    /// that changes while a request runs reaches the label already on screen. Widths are the
+    /// view's to manage from here on: every column is resizable by dragging the divider in
+    /// the header, and the URL column takes whatever is left.
+    fn build_network_columns(&self) {
+        self.network_selection.set_model(Some(&self.network_model));
+        self.network_list.set_model(Some(&self.network_selection));
+
+        for (title, property, width, xalign) in Self::NETWORK_COLUMNS {
+            self.network_list.append_column(&Self::text_column(title, property, width, xalign));
+        }
+        self.network_list.append_column(&self.waterfall_column());
+    }
+
+    /// The debug log's columns. Level and target are narrow and fixed; the message takes
+    /// what is left, because it is the only part whose length is anyone's guess.
+    fn build_log_columns(&self) {
+        self.log_list.set_model(Some(&gtk4::NoSelection::new(Some(self.log_model.clone()))));
+        for (title, property, width, xalign) in [
+            ("Time", "time", Some(96), 0.0),
+            ("Level", "level", Some(64), 0.0),
+            ("Source", "target", Some(180), 0.0),
+            ("Message", "message", None, 0.0),
+        ] {
+            self.log_list.append_column(&Self::text_column(title, property, width, xalign));
+        }
+    }
+
+    /// One column of a devtools table.
+    ///
+    /// Every table here is a list of rows with a `css` property and one property per column,
+    /// so they all want the same column: a label bound to a property, ellipsized, classed by
+    /// the row. Resizable, because the widths that suit one page suit another badly, and the
+    /// reader is better placed to decide than a constant in this file.
+    fn text_column(title: &str, property: &'static str, width: Option<i32>, xalign: f32) -> gtk4::ColumnViewColumn {
+        let factory = gtk4::SignalListItemFactory::new();
+        factory.connect_setup(move |_, item| {
+            let label = gtk4::Label::new(None);
+            label.set_xalign(xalign);
+            label.set_ellipsize(gtk4::pango::EllipsizeMode::End);
+            Self::as_list_item(item).set_child(Some(&label));
+        });
+        factory.connect_bind(move |_, item| {
+            let item = Self::as_list_item(item);
+            let (Some(row), Some(label)) = (item.item(), item.child().and_downcast::<gtk4::Label>()) else {
+                return;
+            };
+            // Bindings rather than one-off setters: the row object outlives this widget and
+            // keeps changing, and the binding is what carries those changes across without
+            // anything being rebuilt.
+            let mut bindings = vec![row.bind_property(property, &label, "label").sync_create().build()];
+            // Text wider than its column is still readable on hover. A column of numbers has
+            // nothing to add, so only the ones that can overflow get a tooltip.
+            if matches!(property, "url" | "message" | "namespace" | "target") {
+                bindings.push(row.bind_property(property, &label, "tooltip-text").sync_create().build());
             }
-            row.append(&cell);
+            bindings.push(
+                row.bind_property("css", &label, "css-classes")
+                    .transform_to(|_, classes: String| {
+                        let classes: glib::StrV = classes.split_whitespace().collect::<Vec<_>>().into();
+                        Some(classes.to_value())
+                    })
+                    .sync_create()
+                    .build(),
+            );
+            unsafe { item.set_data("bindings", bindings) };
+        });
+        // Bindings are per-row, and list items are recycled: one left in place would go on
+        // writing a departed row's values into a widget now showing something else.
+        factory.connect_unbind(move |_, item| {
+            let item = Self::as_list_item(item);
+            if let Some(bindings) = unsafe { item.steal_data::<Vec<glib::Binding>>("bindings") } {
+                for binding in bindings {
+                    binding.unbind();
+                }
+            }
+        });
+
+        let column = gtk4::ColumnViewColumn::builder()
+            .title(title)
+            .factory(&factory)
+            .resizable(true)
+            .build();
+        match width {
+            Some(width) => column.set_fixed_width(width),
+            None => column.set_expand(true),
         }
-        #[allow(clippy::expect_used)] // PANIC-SAFE: the loop above always visits index 4
-        let time_cell = time_cell.expect("time column");
-        let tail = gtk4::Label::new(Some(url));
-        tail.set_xalign(0.0);
-        tail.set_hexpand(true);
-        tail.set_ellipsize(gtk4::pango::EllipsizeMode::End);
-        row.append(&tail);
-        match bar {
-            Some(bar) => row.append(&bar),
-            // Only the header passes no bar, and it wants the column named.
-            None => row.append(&Self::cell("Waterfall", Self::WATERFALL_WIDTH, 0.0)),
-        }
-        (row, time_cell)
+        column
+    }
+
+    /// The waterfall column: one bar per request, drawn against the page's whole load.
+    fn waterfall_column(&self) -> gtk4::ColumnViewColumn {
+        let factory = gtk4::SignalListItemFactory::new();
+        factory.connect_setup(|_, item| {
+            let area = gtk4::DrawingArea::new();
+            area.set_content_width(Self::WATERFALL_WIDTH);
+            Self::as_list_item(item).set_child(Some(&area));
+        });
+        factory.connect_bind(|_, item| {
+            let item = Self::as_list_item(item);
+            let (Some(row), Some(area)) = (
+                item.item().and_downcast::<super::rows::RequestRow>(),
+                item.child().and_downcast::<gtk4::DrawingArea>(),
+            ) else {
+                return;
+            };
+            let drawn = row.clone();
+            area.set_draw_func(move |widget, cr, width, height| {
+                Self::draw_waterfall(widget, cr, width, height, drawn.bar_offset(), drawn.bar_wait(), drawn.bar_body());
+            });
+            // The bar moves while a request runs, and a property change does not redraw a
+            // canvas the way it repaints a label.
+            let handler = row.connect_notify_local(None, {
+                let area = area.clone();
+                move |_, _| area.queue_draw()
+            });
+            unsafe { item.set_data("notify", (row, handler)) };
+        });
+        factory.connect_unbind(|_, item| {
+            let item = Self::as_list_item(item);
+            if let Some(data) = unsafe { item.steal_data::<(super::rows::RequestRow, glib::SignalHandlerId)>("notify") } {
+                let (row, handler) = data;
+                row.disconnect(handler);
+            }
+        });
+
+        // The bar takes whatever is left rather than a width of its own: at a narrow pane it
+        // is the column that can afford to be a stub, and the columns that carry words keep
+        // their space. Widening the pane, or dragging any divider, gives it room again.
+        gtk4::ColumnViewColumn::builder()
+            .title("Waterfall")
+            .factory(&factory)
+            .resizable(true)
+            .expand(true)
+            .build()
+    }
+
+    /// The list item a factory callback is talking about.
+    fn as_list_item(item: &glib::Object) -> gtk4::ListItem {
+        #[allow(clippy::expect_used)] // PANIC-SAFE: a list factory is only ever passed ListItems
+        item.clone().downcast::<gtk4::ListItem>().expect("list item")
     }
 
     /// The line above the request list. Mentions held bodies only when there are some, so
@@ -931,18 +1063,11 @@ impl BrowserWindow {
     fn refresh_network(&self, needle: &str) {
         use beacon_core::devtools::{format_bytes, format_duration};
 
-        if self.network_header.first_child().is_none() {
-            self.network_header
-                .append(&Self::network_row("Status", "Method", "Type", "Size", "Time", "URL", None).0);
-        }
-
         // Only this window's active tab: a request list mixing several tabs together is a
         // log, not a network panel.
         let requests = beacon_core::devtools::requests(self.active_tab_id());
         let total: u64 = requests.iter().map(|r| r.received_bytes).sum();
         self.devtools_summary.set_text(&self.network_summary(requests.len(), total));
-
-        let selected = *self.network_selected.borrow();
 
         // The span every bar is drawn against: from the first request the page made to the
         // last byte of the last one. Computed once, so the bars share a scale and can be
@@ -1011,9 +1136,8 @@ impl BrowserWindow {
                 kind: truncate(&request.kind, 18),
                 size,
                 time,
-                url: short_url(&request.url),
-                full_url: request.url.clone(),
-                failed: request.error.is_some(),
+                url: request.url.clone(),
+                css: if request.error.is_some() { "monospace error" } else { "monospace" },
                 span: (
                     request.started_ms,
                     request.headers_ms,
@@ -1022,91 +1146,78 @@ impl BrowserWindow {
             });
         }
 
-        // Everything a row draws *except* its clock, the waterfall's geometry included, so a
-        // bar that moves still redraws. The clock is left out on purpose: a request in
-        // flight reports a new elapsed time on every tick, and if that forced a rebuild then
-        // any page still loading would destroy and recreate its rows four times a second --
-        // losing the scroll position, and any click that lands in between.
-        let structure: String = rows
-            .iter()
-            .map(|r| {
-                format!(
-                    "{}{}{}{}{}{}{}{:?}{:?}",
-                    r.id,
-                    r.status,
-                    r.method,
-                    r.kind,
-                    r.size,
-                    r.url,
-                    r.failed,
-                    r.span,
-                    (window_start, window_end)
-                )
-            })
-            .collect();
+        // The model is updated, not replaced: a row already on screen keeps its widgets and
+        // its place, and only the values that changed are written into it. That is what lets
+        // a clock tick without the row underneath the pointer being destroyed, and what keeps
+        // the selection and the scroll position where the reader left them.
+        let span = window_end.saturating_sub(window_start).max(1) as f64;
+        for (index, row) in rows.iter().enumerate() {
+            let (offset, wait, body) = row.bar(window_start, span);
+            let existing = self
+                .network_model
+                .item(index as u32)
+                .and_downcast::<super::rows::RequestRow>()
+                .filter(|item| item.id() == row.id.to_string());
 
-        if *self.network_rendered.borrow() == structure {
-            // Same rows, so only the running clocks can have moved. Write them straight into
-            // the cells the rows already have.
-            for (row, cell) in rows.iter().zip(self.network_time_cells.borrow().iter()) {
-                if row.id == cell.0 && cell.1.text() != row.time.as_str() {
-                    cell.1.set_text(&row.time);
+            match existing {
+                // Same request in the same place: write over what changed. Setting a property
+                // to the value it already has is a no-op in glib, so this is cheap even when
+                // nothing moved.
+                Some(item) => {
+                    item.set_status(row.status.as_str());
+                    item.set_method(row.method.as_str());
+                    item.set_kind(row.kind.as_str());
+                    item.set_size(row.size.as_str());
+                    item.set_time(row.time.as_str());
+                    item.set_url(row.url.as_str());
+                    item.set_css(row.css);
+                    item.set_bar_offset(offset);
+                    item.set_bar_wait(wait);
+                    item.set_bar_body(body);
+                }
+                // A different request here, or nothing yet: the list has actually changed
+                // shape, so from this point on it is rebuilt.
+                None => {
+                    let item = super::rows::RequestRow::default();
+                    item.set_id(row.id.to_string());
+                    item.set_status(row.status.as_str());
+                    item.set_method(row.method.as_str());
+                    item.set_kind(row.kind.as_str());
+                    item.set_size(row.size.as_str());
+                    item.set_time(row.time.as_str());
+                    item.set_url(row.url.as_str());
+                    item.set_css(row.css);
+                    item.set_bar_offset(offset);
+                    item.set_bar_wait(wait);
+                    item.set_bar_body(body);
+
+                    let index = index as u32;
+                    if index < self.network_model.n_items() {
+                        self.network_model.splice(index, 1, &[item]);
+                    } else {
+                        self.network_model.append(&item);
+                    }
                 }
             }
-            // The detail pane has its own guard, and reaching it is what keeps a fresh
-            // selection showing.
-            self.show_request_detail();
-            return;
         }
-        self.network_rendered.replace(structure);
-
-        while let Some(child) = self.network_list.first_child() {
-            self.network_list.remove(&child);
+        // Anything past the end is gone -- the log evicts its oldest rows once it is full.
+        let wanted = rows.len() as u32;
+        if self.network_model.n_items() > wanted {
+            self.network_model
+                .splice(wanted, self.network_model.n_items() - wanted, &[] as &[super::rows::RequestRow]);
         }
 
-        let mut to_select = None;
-        let mut time_cells = Vec::with_capacity(rows.len());
-        for row_data in rows {
-            let bar = Self::waterfall(row_data.span.0, row_data.span.1, row_data.span.2, (window_start, window_end));
-            let (label, time_cell) = Self::network_row(
-                &row_data.status,
-                &row_data.method,
-                &row_data.kind,
-                &row_data.size,
-                &row_data.time,
-                &row_data.url,
-                Some(bar),
-            );
-            time_cells.push((row_data.id, time_cell));
-            label.add_css_class("monospace");
-            if row_data.failed {
-                label.add_css_class("error");
+        // Put the highlight back on whatever the reader chose, wherever it now sits.
+        let selected = *self.network_selected.borrow();
+        let position = selected.and_then(|id| rows.iter().position(|row| row.id == id));
+        match position {
+            Some(position) if self.network_selection.selected() != position as u32 => {
+                self.network_selection.set_selected(position as u32);
             }
-
-            let row = gtk4::ListBoxRow::new();
-            row.set_child(Some(&label));
-            // The shortened URL in the row cannot show a query string, which is the only
-            // thing telling three `load.php` requests apart. The full one is a hover away.
-            row.set_tooltip_text(Some(&row_data.full_url));
-            // The id rides on the row, so a rebuild cannot leave the detail pane showing a
-            // different request than the one highlighted.
-            unsafe { row.set_data("request-id", row_data.id) };
-            self.network_list.append(&row);
-
-            if selected == Some(row_data.id) {
-                to_select = Some(row);
-            }
+            None if selected.is_none() => self.network_selection.set_selected(gtk4::INVALID_LIST_POSITION),
+            _ => {}
         }
 
-        self.network_time_cells.replace(time_cells);
-
-        // Reselect without re-firing the handler into a loop: setting the same row back is
-        // what keeps the detail pane steady while the list rebuilds under it.
-        if let Some(row) = to_select {
-            if self.network_list.selected_row().as_ref() != Some(&row) {
-                self.network_list.select_row(Some(&row));
-            }
-        }
         self.show_request_detail();
     }
 

@@ -397,15 +397,6 @@ window.private-window menubar.header-menubar > item {
     background: alpha(currentColor, 0.045);
 }
 
-.network-list row label {
-    font-size: 0.78em;
-    padding: 1px 6px 1px 8px;
-}
-
-.network-list row {
-    min-height: 0;
-}
-
 /* Banding is what lets the eye follow one request across five columns. Faint on purpose:
    loud stripes fight the selection highlight, which is the thing that matters more.
 
@@ -414,6 +405,33 @@ window.private-window menubar.header-menubar > item {
    still switched the text to the selection foreground -- white letters on a near-white
    stripe. Every other row selected visibly; the even ones looked like the click had missed,
    so they got clicked again. */
-.network-list row:nth-child(even):not(:selected) {
+/* The three devtools tables -- requests, log, timings -- share one look. Banding is what
+   lets the eye follow a row across several columns; faint on purpose, since loud stripes
+   fight the selection highlight.
+
+   The selected row is excluded, and that is not a nicety: `row:nth-child(even)` is more
+   specific than the theme's `row:selected`, so a banded row kept its stripe while the theme
+   still switched the text to the selection foreground -- white letters on a near-white
+   stripe. Every other row selected visibly; the even ones looked like the click had missed,
+   so they got clicked again. */
+.data-table listview > row:nth-child(even):not(:selected) {
     background: alpha(currentColor, 0.045);
+}
+
+.data-table > header {
+    font-size: 0.78em;
+}
+
+.data-table listview > row > cell {
+    padding: 1px 6px 1px 8px;
+    font-size: 0.78em;
+}
+
+/* A record worth noticing in a wall of them. */
+.data-table .warn {
+    color: @warning_color;
+}
+
+.data-table .error {
+    color: @error_color;
 }
