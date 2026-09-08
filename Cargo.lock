@@ -675,6 +675,7 @@ dependencies = [
  "dirs",
  "gosub_engine",
  "gosub_render_pipeline",
+ "gosub_shared",
  "lazy_static",
  "log",
  "tokio",
@@ -2726,9 +2727,9 @@ dependencies = [
 
 [[package]]
 name = "gosub-sonar"
-version = "0.5.1"
+version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2b43da2b6294fc271bb55d23de4cc5e4805cbb200f53b2133a7066c0b554b3f6"
+checksum = "49605ffd1e20a39b7b3b6901a5b57c82b1789b7345bbe61ae7368f1080bd0c55"
 dependencies = [
  "anyhow",
  "bytes",
@@ -2739,6 +2740,7 @@ dependencies = [
  "futures-core",
  "futures-util",
  "http",
+ "hyper-util",
  "log",
  "parking_lot",
  "psl",
@@ -2852,7 +2854,6 @@ name = "gosub_html5"
 version = "0.1.1"
 dependencies = [
  "cow-utils",
- "gosub-sonar",
  "gosub_css3",
  "gosub_interface",
  "gosub_shared",
@@ -2897,7 +2898,6 @@ dependencies = [
  "bytes",
  "cow-utils",
  "csscolorparser",
- "gosub-sonar",
  "gosub_fontmanager",
  "gosub_interface",
  "gosub_lattice",

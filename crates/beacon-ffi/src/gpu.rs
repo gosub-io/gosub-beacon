@@ -217,8 +217,15 @@ impl ViewSurface {
     pub unsafe fn new(context: &FfiWgpuContext, handle: *mut std::ffi::c_void, width: u32, height: u32) -> anyhow::Result<Self> {
         let ptr = std::ptr::NonNull::new(handle).ok_or_else(|| anyhow::anyhow!("null view handle"))?;
 
-        // Only the window handle carries information here: AppKit's display handle is an
-        // empty struct, and wgpu itself passes None for it on these platforms.
+        // Both handles are required, even though AppKit's display handle is an empty
+        // struct carrying nothing. wgpu-hal matches on the *pair* -- `(AppKit(_),
+        // AppKit(handle))` -- so passing None for the display drops through to
+        // "not a Metal-compatible handle" and the view never attaches.
+        #[cfg(target_os = "macos")]
+        let raw_display = raw_window_handle::RawDisplayHandle::AppKit(raw_window_handle::AppKitDisplayHandle::new());
+        #[cfg(target_os = "windows")]
+        let raw_display = raw_window_handle::RawDisplayHandle::Windows(raw_window_handle::WindowsDisplayHandle::new());
+
         #[cfg(target_os = "macos")]
         let raw_window = raw_window_handle::RawWindowHandle::AppKit(raw_window_handle::AppKitWindowHandle::new(ptr));
         #[cfg(target_os = "windows")]
@@ -232,7 +239,7 @@ impl ViewSurface {
 
         let surface = unsafe {
             context.instance().create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
-                raw_display_handle: None,
+                raw_display_handle: Some(raw_display),
                 raw_window_handle: raw_window,
             })?
         };

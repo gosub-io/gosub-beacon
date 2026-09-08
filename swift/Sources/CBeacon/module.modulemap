@@ -1,0 +1,7 @@
+// Points straight at the C ABI's own header. Relative to this file, so there is one
+// declaration of the boundary and Swift reads the same one C does.
+module CBeacon {
+    header "../../../crates/beacon-ffi/include/beacon.h"
+    link "beacon"
+    export *
+}

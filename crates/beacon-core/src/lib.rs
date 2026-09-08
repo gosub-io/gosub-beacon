@@ -9,6 +9,7 @@ pub mod address_parser;
 pub mod beacon;
 pub mod cli;
 pub mod command;
+pub mod devtools;
 pub mod download;
 pub mod engine;
 pub mod event;

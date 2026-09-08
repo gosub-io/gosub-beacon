@@ -192,6 +192,15 @@ impl Beacon {
         match evt {
             EngineEvent::Redraw { .. } => vec![BeaconEvent::Redraw],
 
+            // Folded into the developer panel's request log and otherwise dropped: a
+            // frontend has nothing to redraw for a subresource fetch, and a `BeaconEvent`
+            // per request would mean a repaint per request on a page with two hundred of
+            // them. The panel reads the log when it feels like it.
+            EngineEvent::Resource { tab_id, event } => {
+                crate::devtools::record_resource(self.tab_for_engine(tab_id), &event);
+                Vec::new()
+            }
+
             EngineEvent::Navigation { tab_id, event } => match self.tab_for_engine(tab_id) {
                 Some(our_id) => self.on_navigation(our_id, event),
                 None => Vec::new(),

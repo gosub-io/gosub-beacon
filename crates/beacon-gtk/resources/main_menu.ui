@@ -89,7 +89,7 @@
 
             <section>
                 <item>
-                    <attribute name="label">Toggle logging window</attribute>
+                    <attribute name="label">Developer tools</attribute>
                     <attribute name="action">app.toggle-log</attribute>
                 </item>
             </section>

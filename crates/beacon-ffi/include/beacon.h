@@ -63,9 +63,10 @@ typedef enum {
     BEACON_NAV_STATE_CHANGED = 8,  /* back/forward availability changed                  */
     BEACON_HOVER_URL = 9,          /* `text` is the link under the pointer, or NULL      */
     BEACON_CURSOR_CHANGED = 10,    /* `number`: 0 default, 1 pointer, 2 text             */
-    BEACON_DOWNLOAD_OFFERED = 11,  /* `text` is a suggested filename; ask the user        */
+    BEACON_DOWNLOAD_OFFERED = 11,  /* `text` suggested filename, `number` the offer id   */
     BEACON_TAB_CRASHED = 12,       /* `text` is the reason; the tab is still in the strip */
-    BEACON_LOG = 13                /* `text` is worth showing a developer                */
+    BEACON_LOG = 13,               /* `text` is worth showing a developer                */
+    BEACON_DOWNLOAD_CHANGED = 14   /* `number` is the download id; re-read its progress  */
 } BeaconEventKind;
 
 typedef struct {
@@ -98,6 +99,12 @@ void beacon_free(BeaconBrowser *browser);
 /* Free a string this library returned. NULL is fine. */
 void beacon_string_free(char *s);
 
+/* Whether this browser is a private session, as asked for in BeaconConfig. Cookies, local
+ * storage and session storage are in memory only and no visited history is recorded;
+ * bookmarks and settings are still the shared persistent ones, as in every mainstream
+ * browser. Ask rather than remember which handle is which. */
+bool beacon_is_private(BeaconBrowser *browser);
+
 /* ── tabs ──────────────────────────────────────────────────────────────────── */
 
 /* Open a tab and start loading. Returns 0 if the URL could not be parsed. Accepts what a
@@ -105,7 +112,12 @@ void beacon_string_free(char *s);
 BeaconTabId beacon_open_tab(BeaconBrowser *browser, const char *url);
 /* Refuses to close the last tab, as the GTK shell does. */
 void beacon_close_tab(BeaconBrowser *browser, BeaconTabId tab);
+/* Also suspends drawing in the tab being left and resumes it in this one, so background
+ * tabs are not still painting at 30fps. */
 void beacon_activate_tab(BeaconBrowser *browser, BeaconTabId tab);
+/* Bring back the most recently closed tab, at the position it was closed from. 0 when
+ * there is nothing to reopen. */
+BeaconTabId beacon_reopen_closed_tab(BeaconBrowser *browser);
 
 size_t beacon_tab_count(BeaconBrowser *browser);
 /* In strip order; 0 if `index` is out of range. */
@@ -120,6 +132,22 @@ bool beacon_tab_is_loading(BeaconBrowser *browser, BeaconTabId tab);
 bool beacon_tab_can_go_back(BeaconBrowser *browser, BeaconTabId tab);
 bool beacon_tab_can_go_forward(BeaconBrowser *browser, BeaconTabId tab);
 
+/* Load progress 0..1, or -1 when nothing is loading or the server never sent a length —
+ * show an indeterminate indicator for -1 rather than a full bar. */
+double beacon_tab_progress(BeaconBrowser *browser, BeaconTabId tab);
+
+/* The favicon exactly as the site served it, usually PNG or ICO; you decode it. NULL and
+ * *out_len = 0 when the tab has none. Borrowed until the NEXT call to this function, like
+ * event strings — copy it into an NSImage and forget the pointer. */
+const uint8_t *beacon_tab_favicon(BeaconBrowser *browser, BeaconTabId tab, size_t *out_len);
+
+bool beacon_tab_is_pinned(BeaconBrowser *browser, BeaconTabId tab);
+/* Pinned tabs sit at the left of the strip and resist closing. That rule lives in the
+ * browser, not in your shell. */
+void beacon_set_tab_pinned(BeaconBrowser *browser, BeaconTabId tab, bool pinned);
+/* What a drag in the tab bar means. `index` is a strip position. */
+void beacon_move_tab(BeaconBrowser *browser, BeaconTabId tab, size_t index);
+
 /* ── commands ──────────────────────────────────────────────────────────────── */
 
 void beacon_navigate(BeaconBrowser *browser, BeaconTabId tab, const char *url);
@@ -131,12 +159,152 @@ void beacon_stop(BeaconBrowser *browser);
 
 /* ── input ─────────────────────────────────────────────────────────────────── */
 
-/* Page area in CSS pixels. Send this whenever your view resizes; nothing renders until
- * the engine knows how big the page is. */
-void beacon_set_viewport(BeaconBrowser *browser, BeaconTabId tab, uint32_t width, uint32_t height);
+/* Page area in CSS pixels, plus device pixels per CSS pixel (NSView.backingScaleFactor,
+ * or 1.0 if you have no idea). Send this whenever your view resizes or moves between
+ * displays; nothing renders until the engine knows how big the page is.
+ *
+ * Get `scale` wrong and text looks blurry: the page is rasterized at 1x and stretched onto
+ * a 2x surface. It is not the font rendering. */
+void beacon_set_viewport(BeaconBrowser *browser, BeaconTabId tab, uint32_t width, uint32_t height, float scale);
 void beacon_mouse_move(BeaconBrowser *browser, BeaconTabId tab, float x, float y);
 void beacon_mouse_down(BeaconBrowser *browser, BeaconTabId tab, float x, float y, BeaconButton button);
+void beacon_mouse_up(BeaconBrowser *browser, BeaconTabId tab, float x, float y, BeaconButton button);
 void beacon_scroll(BeaconBrowser *browser, BeaconTabId tab, float delta_x, float delta_y);
+
+/* Page zoom, 1.0 = 100%, clamped to 0.25..5.0. Keep sending the view's UNZOOMED size to
+ * beacon_set_viewport; zoom is applied on this side, so the two never drift apart. */
+void beacon_set_zoom(BeaconBrowser *browser, BeaconTabId tab, float zoom);
+float beacon_zoom(BeaconBrowser *browser, BeaconTabId tab);
+
+/* Modifier bits for the key functions. BEACON_MOD_META is Command on macOS. */
+#define BEACON_MOD_SHIFT 1u
+#define BEACON_MOD_CONTROL 2u
+#define BEACON_MOD_ALT 4u
+#define BEACON_MOD_META 8u
+
+/* `key` and `code` are the web's own names: KeyboardEvent.key ("a", "Enter", "ArrowLeft")
+ * and KeyboardEvent.code, the physical key ("KeyA"). Your shell does that mapping because
+ * only your shell knows the keyboard layout — on AZERTY the "a" key is "KeyQ", and nothing
+ * on this side can work that out. `code` may be NULL.
+ *
+ * Send beacon_text_input for what was actually typed. On macOS that is what
+ * NSTextInputClient hands you, and it is the only route by which dead keys, CJK input
+ * methods and emoji reach the page intact — do not synthesise it from key names. */
+void beacon_key_down(BeaconBrowser *browser, BeaconTabId tab, const char *key, const char *code, uint32_t modifiers);
+void beacon_key_up(BeaconBrowser *browser, BeaconTabId tab, const char *key, const char *code, uint32_t modifiers);
+void beacon_text_input(BeaconBrowser *browser, BeaconTabId tab, const char *text);
+
+/* ── bookmarks ─────────────────────────────────────────────────────────────── */
+
+bool beacon_tab_is_bookmarked(BeaconBrowser *browser, BeaconTabId tab);
+/* Returns the state it ended in. Internal gosub:// pages are never bookmarkable and
+ * always return false. */
+bool beacon_toggle_bookmark(BeaconBrowser *browser, BeaconTabId tab);
+
+size_t beacon_bookmark_count(BeaconBrowser *browser);
+/* Free with beacon_string_free; NULL when `index` is out of range. */
+char *beacon_bookmark_url(BeaconBrowser *browser, size_t index);
+char *beacon_bookmark_title(BeaconBrowser *browser, size_t index);
+
+/* ── history ───────────────────────────────────────────────────────────────── */
+
+/* Search visited pages, newest and most-visited first, and return the number of matches
+ * (capped at `limit`). Read the rows with the accessors below; they stay valid until the
+ * next search, which is what lets an address bar re-query on every keystroke.
+ *
+ * An empty query matches nothing rather than everything — a suggestion list for "" is a
+ * history browser, not an autocomplete. */
+size_t beacon_history_search(BeaconBrowser *browser, const char *query, size_t limit);
+/* Free with beacon_string_free; NULL when out of range. */
+char *beacon_history_url(BeaconBrowser *browser, size_t index);
+char *beacon_history_title(BeaconBrowser *browser, size_t index);
+uint64_t beacon_history_visit_count(BeaconBrowser *browser, size_t index);
+
+/* ── developer panel ───────────────────────────────────────────────────────────
+ *
+ * Both of these follow the history pattern: take a snapshot, then read it by index. A panel
+ * refreshing several times a second must not be walking a live table, and handing arrays of
+ * structs across a C boundary is how lifetimes get interesting.
+ *
+ * The buffer behind them lives in beacon-core, shared with every other frontend, so a GTK
+ * pane and an AppKit table show the same records rather than each keeping their own.
+ */
+
+/* Levels as the Rust `log` crate orders them: 1 is the loudest. */
+#define BEACON_LOG_ERROR 1u
+#define BEACON_LOG_WARN 2u
+#define BEACON_LOG_INFO 3u
+#define BEACON_LOG_DEBUG 4u
+#define BEACON_LOG_TRACE 5u
+
+/* Copy the newest `max` records and return how many are readable.
+ *
+ * What gets captured depends on BEACON_LOG / RUST_LOG, which default to warnings only. An
+ * empty console usually means the level, not a broken panel. */
+size_t beacon_log_snapshot(BeaconBrowser *browser, size_t max);
+/* Free with beacon_string_free; NULL when out of range. */
+char *beacon_log_message(BeaconBrowser *browser, size_t index);
+/* The emitting crate or module — what you filter a busy log by. */
+char *beacon_log_target(BeaconBrowser *browser, size_t index);
+uint32_t beacon_log_level(BeaconBrowser *browser, size_t index);
+/* Milliseconds since the Unix epoch. Stored rather than formatted, because how a timestamp
+ * should look is your shell's business and its locale's. */
+uint64_t beacon_log_timestamp(BeaconBrowser *browser, size_t index);
+/* Process-wide: there is one logger, so every window's console clears together. */
+void beacon_log_clear(BeaconBrowser *browser);
+
+/* One row of the engine's timing table, in microseconds. */
+typedef struct {
+    uint64_t count;
+    uint64_t total_us;
+    uint64_t min_us;
+    uint64_t max_us;
+    uint64_t avg_us;
+    uint64_t p50_us;
+    uint64_t p75_us;
+    uint64_t p95_us;
+    uint64_t p99_us;
+} BeaconTiming;
+
+/* Snapshot the engine's timing table, slowest namespace first, and return its size. Zero
+ * when the engine was built without its `timing` feature — that compiles the whole
+ * subsystem out, so it is nothing to show rather than an error. */
+size_t beacon_timing_snapshot(BeaconBrowser *browser);
+/* e.g. "html5.parse", "net.fetch.css". Free with beacon_string_free. */
+char *beacon_timing_namespace(BeaconBrowser *browser, size_t index);
+/* False when out of range, leaving *out untouched. */
+bool beacon_timing_at(BeaconBrowser *browser, size_t index, BeaconTiming *out);
+/* Start measuring again from nothing — time one navigation, not every one since launch. */
+void beacon_timing_reset(BeaconBrowser *browser);
+
+/* ── downloads ─────────────────────────────────────────────────────────────── */
+
+typedef enum {
+    BEACON_DOWNLOAD_RUNNING = 0,
+    BEACON_DOWNLOAD_FINISHED = 1,
+    BEACON_DOWNLOAD_FAILED = 2
+} BeaconDownloadState;
+
+/* A BEACON_DOWNLOAD_OFFERED event carries a suggested filename in `text` and an offer id
+ * in `number`. Answer it with accept or reject — the id is what keeps the answer attached
+ * to the right offer when a save panel is up and a second download arrives.
+ *
+ * You choose the path, because where a file belongs is a platform question: on macOS run
+ * an NSSavePanel. beacon_download_accept returns a download id to track it with, or 0. */
+char *beacon_download_offer_url(BeaconBrowser *browser, uint64_t offer);
+uint64_t beacon_download_accept(BeaconBrowser *browser, uint64_t offer, const char *path);
+void beacon_download_reject(BeaconBrowser *browser, uint64_t offer);
+
+size_t beacon_download_count(BeaconBrowser *browser);
+uint64_t beacon_download_at(BeaconBrowser *browser, size_t index);
+char *beacon_download_filename(BeaconBrowser *browser, uint64_t id);
+char *beacon_download_path(BeaconBrowser *browser, uint64_t id);
+/* 0..1, or -1 when the server sent no length — show bytes received instead of a bar. */
+double beacon_download_progress(BeaconBrowser *browser, uint64_t id);
+uint64_t beacon_download_received(BeaconBrowser *browser, uint64_t id);
+BeaconDownloadState beacon_download_state(BeaconBrowser *browser, uint64_t id);
+/* Hand a finished download to the desktop's default application. */
+void beacon_download_open(BeaconBrowser *browser, uint64_t id);
 
 /* ── events ────────────────────────────────────────────────────────────────── */
 

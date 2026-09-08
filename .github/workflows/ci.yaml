@@ -105,21 +105,17 @@ jobs:
         working-directory: gosub-beacon
         run: cargo test --verbose -p beacon-core --no-fail-fast
 
-  # The C ABI on Darwin, which is the thing a Swift chrome will actually link against.
-  # Separate from the `macos` job on purpose: beacon-ffi rasterizes through Skia, so this
-  # compiles C++ Skia and is much slower than the egui build, which pulls neither Skia nor
-  # GTK. Keeping them apart means the fast check stays fast.
+  # The C ABI on Darwin -- the thing a Swift chrome actually links against -- and the only
+  # job that *runs* the browser on macOS rather than merely compiling it. The C consumer
+  # loads a page, walks session history, scrolls and composites, then exits non-zero if any
+  # of that failed. It is headless and needs no network: its pages are generated into /tmp
+  # and loaded over file://.
   #
-  # It also *runs* the C smoke test. That is the first time anything in this project
-  # executes on macOS rather than merely compiling: the test is headless, needs no network
-  # (its pages are generated into /tmp and loaded over file://) and exits non-zero if the
-  # browser fails to load, navigate, scroll or composite.
-  #
-  # continue-on-error while that is unproven -- same as the `macos` job started out. Drop it
-  # once this is reliably green.
+  # Its own job rather than a step in `macos` because the two build different renderers:
+  # beacon-ffi uses Vello here, the egui frontend has its own graph, and a shared cache key
+  # would thrash both.
   macos-ffi:
     runs-on: macos-14
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
         with:

@@ -19,7 +19,7 @@ use gtk4::prelude::*;
 use gtk4::subclass::prelude::*;
 use gtk4::{
     gdk, glib, Button, CompositeTemplate, Entry, GLArea, GestureClick, Image, Popover, PopoverMenu, PopoverMenuFlags, ScrolledWindow,
-    Settings, Stack, TemplateChild, TextView, ToggleButton, Widget,
+    SearchEntry, Settings, Stack, TemplateChild, TextView, ToggleButton, Widget,
 };
 use log::info;
 use once_cell::sync::Lazy;
@@ -88,9 +88,76 @@ pub struct BrowserWindow {
     #[template_child]
     pub content_stack: TemplateChild<Stack>,
     #[template_child]
+    pub content_paned: TemplateChild<gtk4::Paned>,
+    #[template_child]
+    pub devtools_pane: TemplateChild<gtk4::Box>,
+    #[template_child]
+    pub devtools_stack: TemplateChild<Stack>,
+    #[template_child]
+    pub devtools_action: TemplateChild<Button>,
+    #[template_child]
+    pub devtools_summary: TemplateChild<gtk4::Label>,
+    #[template_child]
+    pub devtools_filter: TemplateChild<SearchEntry>,
+    #[template_child]
     pub log_scroller: TemplateChild<ScrolledWindow>,
     #[template_child]
-    pub log: TemplateChild<TextView>,
+    pub log_list: TemplateChild<gtk4::ColumnView>,
+    #[template_child]
+    pub timings_scroller: TemplateChild<ScrolledWindow>,
+    #[template_child]
+    pub timings_list: TemplateChild<gtk4::ColumnView>,
+    #[template_child]
+    pub network_scroller: TemplateChild<ScrolledWindow>,
+    #[template_child]
+    pub network_list: TemplateChild<gtk4::ColumnView>,
+    #[template_child]
+    pub network_detail_stack: TemplateChild<Stack>,
+    #[template_child]
+    pub detail_raw: TemplateChild<gtk4::ToggleButton>,
+    #[template_child]
+    pub request_stack: TemplateChild<Stack>,
+    #[template_child]
+    pub response_stack: TemplateChild<Stack>,
+    #[template_child]
+    pub request_list: TemplateChild<gtk4::ListBox>,
+    #[template_child]
+    pub response_list: TemplateChild<gtk4::ListBox>,
+    #[template_child]
+    pub timing_list: TemplateChild<gtk4::ListBox>,
+    #[template_child]
+    pub sub_list: TemplateChild<gtk4::ListBox>,
+    #[template_child]
+    pub network_request_view: TemplateChild<TextView>,
+    #[template_child]
+    pub network_response_view: TemplateChild<TextView>,
+    #[template_child]
+    pub network_body_view: TemplateChild<TextView>,
+
+    /// The request currently shown in the detail pane, so a refresh can reselect it.
+    pub network_selected: RefCell<Option<uuid::Uuid>>,
+    /// The timings table's rows, updated in place like the others'.
+    pub timings_model: gtk4::gio::ListStore,
+    /// The rows the network table is showing, in order. Held rather than rebuilt: a refresh
+    /// writes new values into the objects already here, and the view updates the labels it
+    /// has bound to them. Rows are only added or removed when the request list really
+    /// changes, which is what keeps selection, scroll position and clicks intact.
+    /// The debug log's rows, updated in place like the network table's.
+    pub log_model: gtk4::gio::ListStore,
+    pub network_model: gtk4::gio::ListStore,
+    /// The selection the view drives, kept so a refresh can put the highlight back on the
+    /// row the user chose.
+    pub network_selection: gtk4::SingleSelection,
+    /// The same guard for each detail pane, keyed by pane name. Without it a pane is rebuilt
+    /// four times a second and jumps back to the top on every rebuild, so anything below the
+    /// fold cannot be read at all.
+    pub detail_rendered: RefCell<std::collections::HashMap<&'static str, String>>,
+
+    /// The repeating refresh, live only while the pane is open. A closed pane costs nothing.
+    pub devtools_tick: RefCell<Option<glib::SourceId>>,
+    /// How tall the pane was when it was last closed, so reopening it comes back the size
+    /// the user left it rather than snapping to a default they already rejected.
+    pub devtools_height: Cell<i32>,
     #[template_child]
     pub statusbar: TemplateChild<gtk4::Label>,
     #[template_child]
@@ -143,6 +210,24 @@ pub struct BrowserWindow {
     pub private: Cell<bool>,
 }
 
+/// Write a row property, but only when the value actually changed.
+///
+/// glib does not compare: writing a property the value it already holds still emits `notify`,
+/// and every `notify` re-runs the bindings hanging off that property. For a tooltip binding
+/// that is fatal — GTK reads a `tooltip-text` write as a change and restarts its hover timer,
+/// so with this pane refreshing four times a second no tooltip in the devtools ever lived long
+/// enough to be shown. Verified against a standalone GTK4 program: identical hover, the
+/// tooltip appears with a static text and never appears with the text rewritten on a 250ms
+/// tick. `rows::tests` pins the glib half of that.
+macro_rules! set_changed {
+    ($row:expr, $get:ident, $set:ident, $value:expr) => {{
+        let value = $value;
+        if $row.$get() != value {
+            $row.$set(value);
+        }
+    }};
+}
+
 impl Default for BrowserWindow {
     fn default() -> Self {
         let (tx, rx) = async_channel::unbounded::<Message>();
@@ -160,8 +245,37 @@ impl Default for BrowserWindow {
             tab_row: TemplateChild::default(),
             nav_toolbar: TemplateChild::default(),
             content_stack: TemplateChild::default(),
+            content_paned: TemplateChild::default(),
+            devtools_pane: TemplateChild::default(),
+            devtools_stack: TemplateChild::default(),
+            devtools_action: TemplateChild::default(),
+            devtools_summary: TemplateChild::default(),
+            devtools_filter: TemplateChild::default(),
             log_scroller: TemplateChild::default(),
-            log: TemplateChild::default(),
+            timings_scroller: TemplateChild::default(),
+            timings_list: TemplateChild::default(),
+            network_scroller: TemplateChild::default(),
+            network_list: TemplateChild::default(),
+            network_detail_stack: TemplateChild::default(),
+            detail_raw: TemplateChild::default(),
+            request_stack: TemplateChild::default(),
+            response_stack: TemplateChild::default(),
+            request_list: TemplateChild::default(),
+            response_list: TemplateChild::default(),
+            timing_list: TemplateChild::default(),
+            sub_list: TemplateChild::default(),
+            network_request_view: TemplateChild::default(),
+            network_response_view: TemplateChild::default(),
+            network_body_view: TemplateChild::default(),
+            network_selected: RefCell::new(None),
+            log_model: gtk4::gio::ListStore::new::<super::rows::LogRow>(),
+            network_model: gtk4::gio::ListStore::new::<super::rows::RequestRow>(),
+            network_selection: gtk4::SingleSelection::builder().autoselect(false).can_unselect(true).build(),
+            timings_model: gtk4::gio::ListStore::new::<super::rows::TimingRow>(),
+            detail_rendered: RefCell::new(std::collections::HashMap::new()),
+            devtools_tick: RefCell::new(None),
+            devtools_height: Cell::new(260),
+            log_list: TemplateChild::default(),
             statusbar: TemplateChild::default(),
             btn_downloads: TemplateChild::default(),
             btn_bookmark: TemplateChild::default(),
@@ -244,6 +358,7 @@ impl ObjectImpl for BrowserWindow {
         self.setup_tab_strip_sizing();
         self.setup_downloads_popover();
         self.setup_bookmark_button();
+        self.setup_devtools();
         self.setup_url_completion();
         self.sync_dark_mode_button();
         self.log("Browser created...");
@@ -403,17 +518,1199 @@ impl BrowserWindow {
     }
 }
 
+/// One row of the request list, worked out before any widget exists so the list can be
+/// compared against what is already on screen and left alone when nothing has changed.
+struct NetworkRow {
+    id: uuid::Uuid,
+    status: String,
+    method: String,
+    kind: String,
+    size: String,
+    time: String,
+    url: String,
+    /// The CSS classes this row's cells carry.
+    css: &'static str,
+    /// `(started, headers arrived, ended)` in epoch milliseconds, for the waterfall bar.
+    span: (u64, Option<u64>, u64),
+}
+
+impl NetworkRow {
+    /// The bar as fractions of the page's whole load: where it starts, how much of it was
+    /// waiting for the server, and how much was the body arriving.
+    fn bar(&self, window_start: u64, span: f64) -> (f64, f64, f64) {
+        let (start, headers, end) = self.span;
+        let wait_end = headers.unwrap_or(end).clamp(start, end);
+        (
+            start.saturating_sub(window_start) as f64 / span,
+            wait_end.saturating_sub(start) as f64 / span,
+            end.saturating_sub(wait_end) as f64 / span,
+        )
+    }
+}
+
 impl BrowserWindow {
+    /// The window's own running commentary. It goes into the same buffer the engine's
+    /// records do, so the console is one list rather than two views that disagree about
+    /// what happened and in what order.
     pub fn log(&self, message: &str) {
-        let s = format!("[{}] {}\n", chrono::Local::now().format("%X"), message);
-        info!(target: "ftk", "Logmessage: {}", s.as_str());
+        beacon_core::devtools::record(log::Level::Info, "beacon", message);
+    }
 
-        let buf = self.log.buffer();
-        let mut iter = buf.end_iter();
-        buf.insert(&mut iter, s.as_str());
+    // ── developer pane ────────────────────────────────────────────────────
 
-        let mark = buf.create_mark(None, &iter, false);
-        self.log.scroll_to_mark(&mark, 0.0, true, 0.0, 1.0);
+    /// Show or hide the pane, starting and stopping its refresh with it.
+    pub(crate) fn toggle_devtools(&self) {
+        let showing = !self.devtools_pane.get_visible();
+
+        // Remember the height on the way out. Read before hiding: once the child is gone the
+        // paned position no longer means anything.
+        if !showing {
+            let height = self.content_paned.height() - self.content_paned.position();
+            if height > 0 {
+                self.devtools_height.set(height);
+            }
+        }
+
+        self.devtools_pane.set_visible(showing);
+
+        // Bodies are only copied while someone can look at them. This is the switch that
+        // keeps the network panel free for every page that is not being inspected.
+        beacon_core::devtools::set_capture_bodies(showing);
+
+        if let Some(source) = self.devtools_tick.borrow_mut().take() {
+            source.remove();
+        }
+        if !showing {
+            return;
+        }
+
+        // The paned position is measured from the top, so the pane's height is whatever is
+        // left below it. Deferred: at this moment the paned may not have been allocated yet
+        // -- on the very first toggle its height is still 0, and a position computed from
+        // that puts the divider at the top of the window.
+        let paned = self.content_paned.get();
+        let wanted = self.devtools_height.get();
+        glib::idle_add_local_once(move || {
+            let available = paned.height();
+            if available > 0 {
+                paned.set_position((available - wanted).max(0));
+            }
+        });
+
+        self.refresh_devtools();
+        let window = self.obj().clone();
+        // Four times a second: fast enough to watch a page load, slow enough that the pane
+        // is not the reason the page loads slowly.
+        let source = glib::timeout_add_local(std::time::Duration::from_millis(250), move || {
+            window.imp().refresh_devtools();
+            glib::ControlFlow::Continue
+        });
+        *self.devtools_tick.borrow_mut() = Some(source);
+    }
+
+    /// Wire the pane's own controls. Called once, at construction.
+    pub(crate) fn setup_devtools(&self) {
+        let window = self.obj().clone();
+        self.devtools_action.connect_clicked(move |_| {
+            let imp = window.imp();
+            match imp.devtools_page().as_str() {
+                "timings" => beacon_core::devtools::reset_timings(),
+                "network" => {
+                    beacon_core::devtools::clear_requests();
+                    imp.network_selected.replace(None);
+                }
+                _ => beacon_core::devtools::clear_logs(),
+            }
+            imp.refresh_devtools();
+        });
+
+        // With the page area shrinkable there is nothing stopping a drag from closing it
+        // entirely, and a browser whose page is zero pixels tall looks broken rather than
+        // resized. Clamping here rather than through `shrink-start-child` keeps the floor a
+        // number we chose. Re-setting the same position is a no-op, so this cannot recurse.
+        self.content_paned.connect_position_notify(|paned| {
+            const MIN_PAGE: i32 = 120;
+            if paned.position() < MIN_PAGE && paned.height() > MIN_PAGE {
+                paned.set_position(MIN_PAGE);
+            }
+        });
+
+        // Raw or formatted, for both the request and the response at once: a developer
+        // reading one wire dump wants the other in the same shape.
+        let window = self.obj().clone();
+        self.detail_raw.connect_toggled(move |button| {
+            let imp = window.imp();
+            let page = if button.is_active() { "raw" } else { "formatted" };
+            imp.request_stack.set_visible_child_name(page);
+            imp.response_stack.set_visible_child_name(page);
+        });
+
+        self.build_network_columns();
+        self.build_log_columns();
+        self.build_timings_columns();
+
+        // Selecting a request shows it in full. The row object carries the id, so a refresh
+        // that reorders or trims the list cannot leave the detail pane on the wrong request.
+        let window = self.obj().clone();
+        self.network_selection.connect_selected_item_notify(move |selection| {
+            let imp = window.imp();
+            let id = selection
+                .selected_item()
+                .and_downcast::<super::rows::RequestRow>()
+                .and_then(|row| row.request_id());
+            imp.network_selected.replace(id);
+            imp.show_request_detail();
+        });
+
+        let window = self.obj().clone();
+        self.devtools_filter.connect_search_changed(move |_| {
+            window.imp().refresh_devtools();
+        });
+
+        // The action button means different things on the two pages, so it has to follow
+        // whichever is showing.
+        let window = self.obj().clone();
+        self.devtools_stack.connect_visible_child_notify(move |_| {
+            let imp = window.imp();
+            let (label, tooltip) = match imp.devtools_page().as_str() {
+                "timings" => (
+                    "Reset",
+                    "Start timing again from nothing, so the next navigation is measured on its own",
+                ),
+                "network" => ("Clear", "Forget the requests recorded so far"),
+                _ => ("Clear", "Discard the captured log records"),
+            };
+            imp.devtools_action.set_label(label);
+            imp.devtools_action.set_tooltip_text(Some(tooltip));
+            // Nothing to clear or filter on a page with nothing on it.
+            let has_content = imp.devtools_page() != "console";
+            imp.devtools_action.set_visible(has_content);
+            imp.devtools_filter.set_visible(has_content);
+            imp.refresh_devtools();
+        });
+    }
+
+    fn devtools_page(&self) -> String {
+        self.devtools_stack
+            .visible_child_name()
+            .map(|name| name.to_string())
+            .unwrap_or_else(|| "log".to_string())
+    }
+
+    fn refresh_devtools(&self) {
+        if !self.devtools_pane.get_visible() {
+            return;
+        }
+        let needle = self.devtools_filter.text().to_lowercase();
+        match self.devtools_page().as_str() {
+            "timings" => self.refresh_timings(&needle),
+            "network" => self.refresh_network(&needle),
+            // The page's own console, which has nothing to say until scripts run. Its
+            // summary line would otherwise keep whatever the last page put there.
+            "console" => self.devtools_summary.set_text(""),
+            _ => self.refresh_log(&needle),
+        }
+    }
+
+    fn refresh_log(&self, needle: &str) {
+        let lines = beacon_core::devtools::log_snapshot(2000);
+        let total = lines.len();
+
+        let rows: Vec<_> = lines
+            .iter()
+            .filter(|line| needle.is_empty() || line.message.to_lowercase().contains(needle) || line.target.to_lowercase().contains(needle))
+            .collect();
+        self.devtools_summary.set_text(&format!("{} of {total} records", rows.len()));
+
+        // Following the tail is the reason to watch a log; reading one is the reason to stop
+        // following. Decided before the rows change, so a record arriving mid-read does not
+        // yank the view away.
+        let adjustment = self.log_scroller.vadjustment();
+        let at_bottom = adjustment.value() + adjustment.page_size() >= adjustment.upper() - 8.0;
+
+        for (index, line) in rows.iter().enumerate() {
+            let level = line.level.to_string();
+            // Warnings and errors carry their own class, which is the whole reason a row
+            // knows about CSS at all.
+            let css = match line.level {
+                log::Level::Error => "monospace error",
+                log::Level::Warn => "monospace warn",
+                _ => "monospace",
+            };
+            match self.log_model.item(index as u32).and_downcast::<super::rows::LogRow>() {
+                Some(item) => {
+                    set_changed!(item, time, set_time, format_clock(line.timestamp_ms));
+                    set_changed!(item, level, set_level, level.as_str());
+                    set_changed!(item, target, set_target, line.target.as_str());
+                    set_changed!(item, message, set_message, line.message.as_str());
+                    item.set_css(css);
+                }
+                None => {
+                    let item = super::rows::LogRow::default();
+                    item.set_time(format_clock(line.timestamp_ms));
+                    item.set_level(level.as_str());
+                    item.set_target(line.target.as_str());
+                    item.set_message(line.message.as_str());
+                    item.set_css(css);
+                    self.log_model.append(&item);
+                }
+            }
+        }
+        // The buffer is a ring: once it is full the oldest records fall off the front, and
+        // the rows shift under whatever is on screen.
+        let wanted = rows.len() as u32;
+        if self.log_model.n_items() > wanted {
+            self.log_model
+                .splice(wanted, self.log_model.n_items() - wanted, &[] as &[super::rows::LogRow]);
+        }
+
+        if at_bottom && wanted > 0 {
+            self.log_list.scroll_to(wanted - 1, None, gtk4::ListScrollFlags::empty(), None);
+        }
+    }
+
+    fn refresh_timings(&self, needle: &str) {
+        use beacon_core::devtools::format_duration;
+
+        let all = beacon_core::devtools::timings();
+        let total: u64 = all.iter().map(|row| row.total_us).sum();
+        self.devtools_summary
+            .set_text(&format!("{} namespaces · {} total", all.len(), format_duration(total)));
+
+        let rows: Vec<_> = all
+            .iter()
+            .filter(|row| needle.is_empty() || row.namespace.to_lowercase().contains(needle))
+            .collect();
+
+        for (index, row) in rows.iter().enumerate() {
+            let item = match self.timings_model.item(index as u32).and_downcast::<super::rows::TimingRow>() {
+                Some(item) => item,
+                None => {
+                    let item = super::rows::TimingRow::default();
+                    self.timings_model.append(&item);
+                    item
+                }
+            };
+            set_changed!(item, namespace, set_namespace, row.namespace.as_str());
+            // A namespace the engine knows explains itself; one it does not is at least
+            // readable in full on hover.
+            set_changed!(
+                item,
+                description,
+                set_description,
+                match row.timing {
+                    Some(timing) => timing.describes().to_string(),
+                    None => row.namespace.clone(),
+                }
+            );
+            set_changed!(item, explained, set_explained, row.timing.is_some());
+            set_changed!(item, count, set_count, row.count.to_string());
+            set_changed!(item, total, set_total, format_duration(row.total_us));
+            set_changed!(item, avg, set_avg, format_duration(row.avg_us));
+            set_changed!(item, p50, set_p50, format_duration(row.p50_us));
+            set_changed!(item, p95, set_p95, format_duration(row.p95_us));
+            set_changed!(item, peak, set_peak, format_duration(row.max_us));
+            set_changed!(item, css, set_css, "monospace");
+        }
+        let wanted = rows.len() as u32;
+        if self.timings_model.n_items() > wanted {
+            self.timings_model
+                .splice(wanted, self.timings_model.n_items() - wanted, &[] as &[super::rows::TimingRow]);
+        }
+    }
+
+    /// The timings table's columns. The namespace is the only one whose width is anyone's
+    /// guess; the rest hold a duration.
+    fn build_timings_columns(&self) {
+        self.timings_list
+            .set_model(Some(&gtk4::NoSelection::new(Some(self.timings_model.clone()))));
+        for (title, property, width, xalign) in [
+            ("Namespace", "namespace", None, 0.0),
+            ("Count", "count", Some(64), 1.0),
+            ("Total", "total", Some(88), 1.0),
+            ("Avg", "avg", Some(88), 1.0),
+            ("p50", "p50", Some(88), 1.0),
+            ("p95", "p95", Some(88), 1.0),
+            ("Max", "peak", Some(88), 1.0),
+        ] {
+            let column = match property {
+                "namespace" => Self::namespace_column(title),
+                _ => Self::text_column(title, property, width, xalign),
+            };
+            self.timings_list.append_column(&column);
+        }
+    }
+
+    // ── network ───────────────────────────────────────────────────────────
+
+    /// The request list's columns, in pixels.
+    ///
+    /// Real columns rather than a single label padded with spaces. Padding only lines up
+    /// while every row fits: once the pane is narrower than the text, the label clips and
+    /// whole columns disappear -- which is how Status, Method and Type went missing from a
+    /// narrowed pane while the header above them lost the same three words.
+    /// The table's columns: title, the row property each one shows, its starting width
+    /// (`None` for the column that takes the remaining space), and its alignment. Widths are
+    /// a starting point only -- the header's dividers resize them from here.
+    const NETWORK_COLUMNS: [(&'static str, &'static str, Option<i32>, f32); 6] = [
+        ("Status", "status", Some(56), 0.0),
+        ("Method", "method", Some(56), 0.0),
+        ("Type", "kind", Some(96), 0.0),
+        ("Size", "size", Some(72), 1.0),
+        ("Time", "time", Some(88), 1.0),
+        ("URL", "url", Some(200), 0.0),
+    ];
+
+    /// One cell: fixed width, its own alignment, no ellipsizing so it never eats a neighbour.
+    fn cell(text: &str, width: i32, xalign: f32) -> gtk4::Label {
+        let label = gtk4::Label::new(Some(text));
+        label.set_xalign(xalign);
+        label.set_width_chars(0);
+        label.set_size_request(width, -1);
+        label
+    }
+
+    /// Width of the waterfall column, in pixels.
+    /// Narrow enough that a row's fixed columns still fit the pane at its default width.
+    const WATERFALL_WIDTH: i32 = 200;
+
+    /// One request's bar, drawn against the page's whole load.
+    ///
+    /// `window` is the span every bar is measured in: the earliest start and the latest
+    /// finish across the list. Without a shared span each bar would be drawn to its own
+    /// scale, and the picture -- what overlapped what, what the page waited on -- is the
+    /// only reason to draw it at all.
+    ///
+    /// Two tones: pale up to the response headers, solid after. A row that is mostly pale
+    /// was waiting on the server; one that is mostly solid was reading a large body.
+    /// Draw one request's bar. The fractions are of the page's whole load, worked out where
+    /// that span is known; this only has to paint them.
+    fn draw_waterfall(widget: &gtk4::DrawingArea, cr: &gtk4::cairo::Context, width: i32, height: i32, offset: f64, wait: f64, body: f64) {
+        let w = width as f64;
+        let h = height as f64;
+        let ink = widget.color();
+        let bar_h = (h - 6.0).clamp(3.0, 8.0);
+        let y = (h - bar_h) / 2.0;
+
+        // A hairline track, so a bar's position reads against the whole load rather
+        // than floating in space.
+        cr.set_source_rgba(ink.red() as f64, ink.green() as f64, ink.blue() as f64, 0.10);
+        cr.rectangle(0.0, h / 2.0 - 0.5, w, 1.0);
+        let _ = cr.fill();
+
+        let x = offset * w;
+        // A request too fast to have any width still gets a mark: a bar that vanishes
+        // reads as a request that never happened.
+        let wait_w = (wait * w).max(if wait > 0.0 { 1.0 } else { 0.0 });
+        let body_w = (body * w).max(1.0);
+
+        if wait_w > 0.0 {
+            cr.set_source_rgba(ink.red() as f64, ink.green() as f64, ink.blue() as f64, 0.30);
+            cr.rectangle(x, y, wait_w, bar_h);
+            let _ = cr.fill();
+        }
+        cr.set_source_rgba(0.20, 0.45, 0.85, 0.85);
+        cr.rectangle(x + wait_w, y, body_w, bar_h);
+        let _ = cr.fill();
+    }
+
+    /// Build the table's columns, once, at construction.
+    ///
+    /// Each column binds a property of the row object to the widget it makes, so a value
+    /// that changes while a request runs reaches the label already on screen. Widths are the
+    /// view's to manage from here on: every column is resizable by dragging the divider in
+    /// the header, and the URL column takes whatever is left.
+    fn build_network_columns(&self) {
+        self.network_selection.set_model(Some(&self.network_model));
+        self.network_list.set_model(Some(&self.network_selection));
+
+        for (title, property, width, xalign) in Self::NETWORK_COLUMNS {
+            self.network_list.append_column(&Self::text_column(title, property, width, xalign));
+        }
+        self.network_list.append_column(&self.waterfall_column());
+    }
+
+    /// The debug log's columns. Level and target are narrow and fixed; the message takes
+    /// what is left, because it is the only part whose length is anyone's guess.
+    fn build_log_columns(&self) {
+        self.log_list.set_model(Some(&gtk4::NoSelection::new(Some(self.log_model.clone()))));
+        for (title, property, width, xalign) in [
+            ("Time", "time", Some(96), 0.0),
+            ("Level", "level", Some(64), 0.0),
+            ("Source", "target", Some(180), 0.0),
+            ("Message", "message", None, 0.0),
+        ] {
+            self.log_list.append_column(&Self::text_column(title, property, width, xalign));
+        }
+    }
+
+    /// The timings table's first column: the namespace, plus an info icon for the sentence
+    /// saying what it measures. A bare tooltip is invisible until you happen to rest the
+    /// pointer on the right cell, so the icon is what tells the reader there is more here.
+    ///
+    /// The tooltip sits on the cell rather than the icon, so it answers a hover anywhere in
+    /// the column — the icon advertises it, it is not a target you have to hit.
+    fn namespace_column(title: &str) -> gtk4::ColumnViewColumn {
+        let factory = gtk4::SignalListItemFactory::new();
+        factory.connect_setup(move |_, item| {
+            let cell = gtk4::Box::new(gtk4::Orientation::Horizontal, 4);
+            let label = gtk4::Label::new(None);
+            label.set_xalign(0.0);
+            label.set_ellipsize(gtk4::pango::EllipsizeMode::End);
+            let info = gtk4::Image::from_icon_name("help-about-symbolic");
+            info.set_pixel_size(12);
+            info.add_css_class("info-icon");
+            // The icon belongs to the name beside it, so it follows the text rather than
+            // sitting at the far edge of a column that is mostly empty space. The filler
+            // takes that space instead, and the label still ellipsizes when there is none.
+            let filler = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
+            filler.set_hexpand(true);
+            cell.append(&label);
+            cell.append(&info);
+            cell.append(&filler);
+            Self::as_list_item(item).set_child(Some(&cell));
+        });
+        factory.connect_bind(move |_, item| {
+            let item = Self::as_list_item(item);
+            let (Some(row), Some(cell)) = (item.item(), item.child().and_downcast::<gtk4::Box>()) else {
+                return;
+            };
+            let (Some(label), Some(info)) = (
+                cell.first_child().and_downcast::<gtk4::Label>(),
+                cell.first_child()
+                    .and_then(|label| label.next_sibling())
+                    .and_downcast::<gtk4::Image>(),
+            ) else {
+                return;
+            };
+            let bindings = vec![
+                row.bind_property("namespace", &label, "label").sync_create().build(),
+                row.bind_property("description", &cell, "tooltip-text").sync_create().build(),
+                // A namespace the engine cannot explain gets no icon: an icon promising an
+                // explanation that turns out to be the row's own text is worse than none.
+                row.bind_property("explained", &info, "visible").sync_create().build(),
+                row.bind_property("css", &label, "css-classes")
+                    .transform_to(|_, classes: String| {
+                        let classes: glib::StrV = classes.split_whitespace().collect::<Vec<_>>().into();
+                        Some(classes.to_value())
+                    })
+                    .sync_create()
+                    .build(),
+            ];
+            unsafe { item.set_data("bindings", bindings) };
+        });
+        factory.connect_unbind(move |_, item| {
+            let item = Self::as_list_item(item);
+            if let Some(bindings) = unsafe { item.steal_data::<Vec<glib::Binding>>("bindings") } {
+                for binding in bindings {
+                    binding.unbind();
+                }
+            }
+        });
+
+        let column = gtk4::ColumnViewColumn::builder()
+            .title(title)
+            .factory(&factory)
+            .resizable(true)
+            .build();
+        column.set_expand(true);
+        column
+    }
+
+    /// One column of a devtools table.
+    ///
+    /// Every table here is a list of rows with a `css` property and one property per column,
+    /// so they all want the same column: a label bound to a property, ellipsized, classed by
+    /// the row. Resizable, because the widths that suit one page suit another badly, and the
+    /// reader is better placed to decide than a constant in this file.
+    fn text_column(title: &str, property: &'static str, width: Option<i32>, xalign: f32) -> gtk4::ColumnViewColumn {
+        let factory = gtk4::SignalListItemFactory::new();
+        factory.connect_setup(move |_, item| {
+            let label = gtk4::Label::new(None);
+            label.set_xalign(xalign);
+            label.set_ellipsize(gtk4::pango::EllipsizeMode::End);
+            Self::as_list_item(item).set_child(Some(&label));
+        });
+        factory.connect_bind(move |_, item| {
+            let item = Self::as_list_item(item);
+            let (Some(row), Some(label)) = (item.item(), item.child().and_downcast::<gtk4::Label>()) else {
+                return;
+            };
+            // Bindings rather than one-off setters: the row object outlives this widget and
+            // keeps changing, and the binding is what carries those changes across without
+            // anything being rebuilt.
+            let mut bindings = vec![row.bind_property(property, &label, "label").sync_create().build()];
+            // Text wider than its column is still readable on hover. A column of numbers has
+            // nothing to add, so only the ones that can overflow get a tooltip.
+            if matches!(property, "url" | "message" | "target") {
+                bindings.push(row.bind_property(property, &label, "tooltip-text").sync_create().build());
+            }
+            bindings.push(
+                row.bind_property("css", &label, "css-classes")
+                    .transform_to(|_, classes: String| {
+                        let classes: glib::StrV = classes.split_whitespace().collect::<Vec<_>>().into();
+                        Some(classes.to_value())
+                    })
+                    .sync_create()
+                    .build(),
+            );
+            unsafe { item.set_data("bindings", bindings) };
+        });
+        // Bindings are per-row, and list items are recycled: one left in place would go on
+        // writing a departed row's values into a widget now showing something else.
+        factory.connect_unbind(move |_, item| {
+            let item = Self::as_list_item(item);
+            if let Some(bindings) = unsafe { item.steal_data::<Vec<glib::Binding>>("bindings") } {
+                for binding in bindings {
+                    binding.unbind();
+                }
+            }
+        });
+
+        let column = gtk4::ColumnViewColumn::builder()
+            .title(title)
+            .factory(&factory)
+            .resizable(true)
+            .build();
+        match width {
+            Some(width) => column.set_fixed_width(width),
+            None => column.set_expand(true),
+        }
+        column
+    }
+
+    /// The waterfall column: one bar per request, drawn against the page's whole load.
+    fn waterfall_column(&self) -> gtk4::ColumnViewColumn {
+        let factory = gtk4::SignalListItemFactory::new();
+        factory.connect_setup(|_, item| {
+            let area = gtk4::DrawingArea::new();
+            area.set_content_width(Self::WATERFALL_WIDTH);
+            Self::as_list_item(item).set_child(Some(&area));
+        });
+        factory.connect_bind(|_, item| {
+            let item = Self::as_list_item(item);
+            let (Some(row), Some(area)) = (
+                item.item().and_downcast::<super::rows::RequestRow>(),
+                item.child().and_downcast::<gtk4::DrawingArea>(),
+            ) else {
+                return;
+            };
+            let drawn = row.clone();
+            area.set_draw_func(move |widget, cr, width, height| {
+                Self::draw_waterfall(widget, cr, width, height, drawn.bar_offset(), drawn.bar_wait(), drawn.bar_body());
+            });
+            // The bar moves while a request runs, and a property change does not redraw a
+            // canvas the way it repaints a label.
+            let handler = row.connect_notify_local(None, {
+                let area = area.clone();
+                move |_, _| area.queue_draw()
+            });
+            unsafe { item.set_data("notify", (row, handler)) };
+        });
+        factory.connect_unbind(|_, item| {
+            let item = Self::as_list_item(item);
+            if let Some(data) = unsafe { item.steal_data::<(super::rows::RequestRow, glib::SignalHandlerId)>("notify") } {
+                let (row, handler) = data;
+                row.disconnect(handler);
+            }
+        });
+
+        // The bar takes whatever is left rather than a width of its own: at a narrow pane it
+        // is the column that can afford to be a stub, and the columns that carry words keep
+        // their space. Widening the pane, or dragging any divider, gives it room again.
+        gtk4::ColumnViewColumn::builder()
+            .title("Waterfall")
+            .factory(&factory)
+            .resizable(true)
+            .expand(true)
+            .build()
+    }
+
+    /// The list item a factory callback is talking about.
+    fn as_list_item(item: &glib::Object) -> gtk4::ListItem {
+        #[allow(clippy::expect_used)] // PANIC-SAFE: a list factory is only ever passed ListItems
+        item.clone().downcast::<gtk4::ListItem>().expect("list item")
+    }
+
+    /// The line above the request list. Mentions held bodies only when there are some, so
+    /// the common case stays short.
+    fn network_summary(&self, count: usize, transferred: u64) -> String {
+        use beacon_core::devtools::format_bytes;
+        let mut summary = format!("{count} requests · {} transferred", format_bytes(transferred));
+        let held = beacon_core::devtools::captured_body_bytes();
+        if held > 0 {
+            summary.push_str(&format!(" · {} of bodies held", format_bytes(held as u64)));
+        }
+
+        // What the page is still waiting on, and for how long. The first question anyone
+        // asks of an unresponsive page, answered without having to read down the list.
+        let now = now_ms();
+        let stuck: Vec<(u64, beacon_core::devtools::Phase)> = beacon_core::devtools::requests(self.active_tab_id())
+            .iter()
+            .filter(|r| {
+                r.elapsed_us.is_none()
+                    && matches!(
+                        r.state,
+                        beacon_core::devtools::RequestState::Running | beacon_core::devtools::RequestState::Queued
+                    )
+            })
+            .map(|r| (now.saturating_sub(r.started_ms), r.phase()))
+            .collect();
+        if let Some((longest, phase)) = stuck.iter().max_by_key(|(age, _)| *age) {
+            summary.push_str(&format!(
+                " · {} in flight, longest {} {}",
+                stuck.len(),
+                beacon_core::devtools::format_duration(longest * 1000),
+                phase.label(),
+            ));
+        }
+        summary
+    }
+
+    fn refresh_network(&self, needle: &str) {
+        use beacon_core::devtools::{format_bytes, format_duration};
+
+        // Only this window's active tab: a request list mixing several tabs together is a
+        // log, not a network panel.
+        let requests = beacon_core::devtools::requests(self.active_tab_id());
+        let total: u64 = requests.iter().map(|r| r.received_bytes).sum();
+        self.devtools_summary.set_text(&self.network_summary(requests.len(), total));
+
+        // The span every bar is drawn against: from the first request the page made to the
+        // last byte of the last one. Computed once, so the bars share a scale and can be
+        // read against each other.
+        let window_start = requests.iter().map(|r| r.started_ms).min().unwrap_or(0);
+        let window_end = requests
+            .iter()
+            .map(|r| r.started_ms + r.elapsed_us.unwrap_or(0) / 1000)
+            .max()
+            .unwrap_or(window_start + 1)
+            .max(window_start + 1);
+
+        // What each row will say, worked out before a single widget is touched. The list is
+        // rebuilt wholesale when it changes -- a request list is short, and diffing widgets
+        // would be a great deal of bookkeeping -- but rebuilding it when it has *not*
+        // changed destroys and recreates every row four times a second, which is slow and
+        // eats clicks, since the row under the pointer is gone before the button comes up.
+        let mut rows = Vec::with_capacity(requests.len());
+        for request in &requests {
+            if !needle.is_empty() && !request.url.to_lowercase().contains(needle) && !request.kind.contains(needle) {
+                continue;
+            }
+
+            // A failed request has no status code, and "err" says nothing a developer can
+            // act on. The kind the engine derived does: "TLS" and "no connection" send you
+            // to different places.
+            let status = match (request.status, request.state) {
+                (Some(code), _) => code.to_string(),
+                (None, beacon_core::devtools::RequestState::Failed) => request.failure_label().unwrap_or("err").to_string(),
+                _ => "—".to_string(),
+            };
+            let size = if request.received_bytes > 0 {
+                format_bytes(request.received_bytes)
+            } else {
+                request.content_length.map(format_bytes).unwrap_or_else(|| "—".to_string())
+            };
+            // A request still in flight shows how long it has been in flight, not the word
+            // "loading". A page that is not responding is a page with a request sitting at
+            // twelve seconds, and that is only visible if the number is on screen.
+            let time = match request.elapsed_us {
+                Some(us) => format_duration(us),
+                None if matches!(
+                    request.state,
+                    beacon_core::devtools::RequestState::Running | beacon_core::devtools::RequestState::Queued
+                ) =>
+                {
+                    // Which phase it has been sitting in, not just how long: twelve seconds
+                    // waiting for a reply and twelve seconds part way through a body are
+                    // different problems with different fixes.
+                    format!(
+                        "{} {}…",
+                        request.phase().label(),
+                        format_duration(now_ms().saturating_sub(request.started_ms) * 1000)
+                    )
+                }
+                None => request.state.label().to_string(),
+            };
+
+            // A request that never reached the wire has no method to report -- a file://
+            // load, or one answered from cache before a hop was built.
+            let method = request.method.as_deref().unwrap_or("—").to_string();
+            rows.push(NetworkRow {
+                id: request.id,
+                status,
+                method,
+                kind: truncate(&request.kind, 18),
+                size,
+                time,
+                url: request.url.clone(),
+                css: if request.error.is_some() { "monospace error" } else { "monospace" },
+                span: (
+                    request.started_ms,
+                    request.headers_ms,
+                    request.started_ms + request.elapsed_us.unwrap_or(0) / 1000,
+                ),
+            });
+        }
+
+        // The model is updated, not replaced: a row already on screen keeps its widgets and
+        // its place, and only the values that changed are written into it. That is what lets
+        // a clock tick without the row underneath the pointer being destroyed, and what keeps
+        // the selection and the scroll position where the reader left them.
+        let span = window_end.saturating_sub(window_start).max(1) as f64;
+        for (index, row) in rows.iter().enumerate() {
+            let (offset, wait, body) = row.bar(window_start, span);
+            let existing = self
+                .network_model
+                .item(index as u32)
+                .and_downcast::<super::rows::RequestRow>()
+                .filter(|item| item.id() == row.id.to_string());
+
+            match existing {
+                // Same request in the same place: write over what changed, and *only* what
+                // changed — an identical write is not free, it is a `notify` like any other.
+                Some(item) => {
+                    set_changed!(item, status, set_status, row.status.as_str());
+                    set_changed!(item, method, set_method, row.method.as_str());
+                    set_changed!(item, kind, set_kind, row.kind.as_str());
+                    set_changed!(item, size, set_size, row.size.as_str());
+                    set_changed!(item, time, set_time, row.time.as_str());
+                    set_changed!(item, url, set_url, row.url.as_str());
+                    set_changed!(item, css, set_css, row.css);
+                    set_changed!(item, bar_offset, set_bar_offset, offset);
+                    set_changed!(item, bar_wait, set_bar_wait, wait);
+                    set_changed!(item, bar_body, set_bar_body, body);
+                }
+                // A different request here, or nothing yet: the list has actually changed
+                // shape, so from this point on it is rebuilt.
+                None => {
+                    let item = super::rows::RequestRow::default();
+                    item.set_id(row.id.to_string());
+                    item.set_status(row.status.as_str());
+                    item.set_method(row.method.as_str());
+                    item.set_kind(row.kind.as_str());
+                    item.set_size(row.size.as_str());
+                    item.set_time(row.time.as_str());
+                    item.set_url(row.url.as_str());
+                    item.set_css(row.css);
+                    item.set_bar_offset(offset);
+                    item.set_bar_wait(wait);
+                    item.set_bar_body(body);
+
+                    let index = index as u32;
+                    if index < self.network_model.n_items() {
+                        self.network_model.splice(index, 1, &[item]);
+                    } else {
+                        self.network_model.append(&item);
+                    }
+                }
+            }
+        }
+        // Anything past the end is gone -- the log evicts its oldest rows once it is full.
+        let wanted = rows.len() as u32;
+        if self.network_model.n_items() > wanted {
+            self.network_model
+                .splice(wanted, self.network_model.n_items() - wanted, &[] as &[super::rows::RequestRow]);
+        }
+
+        // Put the highlight back on whatever the reader chose, wherever it now sits.
+        let selected = *self.network_selected.borrow();
+        let position = selected.and_then(|id| rows.iter().position(|row| row.id == id));
+        match position {
+            Some(position) if self.network_selection.selected() != position as u32 => {
+                self.network_selection.set_selected(position as u32);
+            }
+            None if selected.is_none() => self.network_selection.set_selected(gtk4::INVALID_LIST_POSITION),
+            _ => {}
+        }
+
+        self.show_request_detail();
+    }
+
+    /// Fill the detail tabs for the selected request.
+    ///
+    /// Split the way a developer thinks about a request rather than the way the events
+    /// arrive: what was asked for, what came back, what the bytes were, and what the page
+    /// went on to fetch because of it.
+    fn show_request_detail(&self) {
+        use beacon_core::devtools::{format_bytes, format_duration};
+
+        let selected = *self.network_selected.borrow();
+        let requests = beacon_core::devtools::requests(self.active_tab_id());
+        let request = selected.and_then(|id| requests.iter().find(|r| r.id == id));
+
+        let Some(request) = request else {
+            let empty = if selected.is_some() {
+                "That request is no longer recorded."
+            } else {
+                "Select a request."
+            };
+            let rows = [DetailRow::Note(empty.to_string())];
+            self.fill_pairs("request", &self.request_list, &rows);
+            self.fill_pairs("response", &self.response_list, &rows);
+            self.fill_pairs("subresources", &self.sub_list, &rows);
+            self.fill_pairs("timing", &self.timing_list, &rows);
+            self.set_raw("request-raw", &self.network_request_view, empty);
+            self.set_raw("response-raw", &self.network_response_view, empty);
+            self.set_raw("body", &self.network_body_view, empty);
+            return;
+        };
+
+        // ── Request ───────────────────────────────────────────────────────
+        let mut rows = vec![
+            DetailRow::Section("Request".into()),
+            DetailRow::Pair("URL".into(), request.url.clone()),
+            DetailRow::Pair("Method".into(), request.method.clone().unwrap_or_else(|| "—".into())),
+            DetailRow::Pair("Kind".into(), request.kind.clone()),
+            DetailRow::Pair("Initiated by".into(), request.initiator.clone()),
+            DetailRow::Pair("State".into(), request.state.label().into()),
+        ];
+        if !request.redirects.is_empty() {
+            rows.push(DetailRow::Section("Redirects".into()));
+            for (status, to) in &request.redirects {
+                rows.push(DetailRow::Pair(status.to_string(), to.clone()));
+            }
+        }
+        if request.request_headers.is_empty() {
+            rows.push(DetailRow::Note("No request line recorded: this never reached the network.".into()));
+        } else {
+            rows.push(DetailRow::Section("Request headers".into()));
+            for (name, value) in &request.request_headers {
+                rows.push(DetailRow::Pair(name.clone(), value.clone()));
+            }
+            // Everything the stack sends is now listed, so the note is down to the one
+            // header that cannot be: `host` is added by the connection, and a developer
+            // used to seeing it in another inspector would otherwise wonder where it went.
+            //
+            // Still derived rather than written out, because twice a hard-coded version
+            // went on claiming a header was unavailable after the network stack had started
+            // reporting it -- the pane showing the header and denying it in the same breath.
+            let mut absent: Vec<&str> = vec!["host"];
+            if !request
+                .request_headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case("accept-encoding"))
+            {
+                absent.push("accept-encoding");
+            }
+            rows.push(DetailRow::Note(format!(
+                "Added below this layer and not visible here: {}.",
+                absent.join(", ")
+            )));
+        }
+        self.fill_pairs("request", &self.request_list, &rows);
+
+        let mut raw = format!("{} {} HTTP/1.1\n", request.method.as_deref().unwrap_or("GET"), request.url);
+        for (name, value) in &request.request_headers {
+            raw.push_str(&format!("{name}: {value}\n"));
+        }
+        if request.request_headers.is_empty() {
+            raw.push_str("\n(no request line recorded: this never reached the network)\n");
+        }
+        self.set_raw("request-raw", &self.network_request_view, &raw);
+
+        // ── Response ──────────────────────────────────────────────────────
+        let status = request
+            .status
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| request.state.label().to_string());
+        let mut rows = vec![DetailRow::Section("Response".into()), DetailRow::Pair("Status".into(), status)];
+        if let Some(content_type) = &request.content_type {
+            rows.push(DetailRow::Pair("Content-Type".into(), content_type.clone()));
+        }
+        rows.push(DetailRow::Pair("Received".into(), format_bytes(request.received_bytes)));
+        if let Some(length) = request.content_length {
+            rows.push(DetailRow::Pair("Declared".into(), format_bytes(length)));
+        }
+        if let Some(us) = request.elapsed_us {
+            rows.push(DetailRow::Pair("Took".into(), format_duration(us)));
+        }
+        if let Some(error) = &request.error {
+            rows.push(DetailRow::Section("Failure".into()));
+            if let Some(label) = request.failure_label() {
+                rows.push(DetailRow::Pair("Cause".into(), label.into()));
+            }
+            rows.push(DetailRow::Pair("Error".into(), error.clone()));
+            if let Some(hint) = request.failure_hint() {
+                rows.push(DetailRow::Note(hint.into()));
+            }
+        }
+        if request.headers.is_empty() {
+            rows.push(DetailRow::Note("No response headers recorded.".into()));
+        } else {
+            rows.push(DetailRow::Section("Response headers".into()));
+            for (name, value) in &request.headers {
+                rows.push(DetailRow::Pair(name.clone(), value.clone()));
+            }
+        }
+        self.fill_pairs("response", &self.response_list, &rows);
+
+        let mut raw = match request.status {
+            Some(code) => format!("HTTP/1.1 {code}\n"),
+            None => format!("(no response: {})\n", request.state.label()),
+        };
+        for (name, value) in &request.headers {
+            raw.push_str(&format!("{name}: {value}\n"));
+        }
+        self.set_raw("response-raw", &self.network_response_view, &raw);
+
+        // ── Body ──────────────────────────────────────────────────────────
+        let text = match &request.body {
+            Some(bytes) => beacon_core::devtools::format_body(bytes, request.body_truncated),
+            None if request.body_evicted => "Captured, then dropped.\n\nThe panel keeps a fixed total of body bytes and this was among the\noldest when that ran out. Reload to capture it again.\n".to_string(),
+            None if !self.devtools_pane.get_visible() => "No body captured.\n".to_string(),
+            None => {
+                let mut text = String::from("No body captured for this request.\n\n");
+                text.push_str("Capture starts when this pane opens, so anything that finished\n");
+                text.push_str("earlier has none -- reload the page to record it.\n\n");
+                text.push_str("Video, audio and downloads are never captured, and neither is\n");
+                text.push_str("a response that declares itself larger than the per-request cap.\n");
+                text
+            }
+        };
+        self.set_raw("body", &self.network_body_view, &text);
+
+        // ── Timing ────────────────────────────────────────────────────────
+        //
+        // Laid out end to end against the request's own total rather than the page's, so
+        // this answers "where did *this* request's time go" -- which is a different question
+        // from the waterfall column's "when did it happen relative to everything else".
+        let total_us = request.elapsed_us.unwrap_or(0);
+        let wait_us = match (request.headers_ms, request.elapsed_us) {
+            (Some(headers), Some(_)) => headers.saturating_sub(request.started_ms) * 1000,
+            _ => 0,
+        };
+        let receive_us = total_us.saturating_sub(wait_us);
+
+        let mut rows = Vec::new();
+        // A request still running has no phase breakdown to show yet, but it does have the
+        // one fact worth having: which phase it has been sitting in, and for how long. That
+        // is the answer to "why is this page not responding", so it goes first.
+        let phase = request.phase();
+        if phase != beacon_core::devtools::Phase::Done {
+            // No breakdown yet -- the totals it divides up only exist once the request
+            // ends. What does exist is the one fact worth having: which phase it has been
+            // sitting in, and for how long.
+            rows.push(DetailRow::Section("Still running".into()));
+            rows.push(DetailRow::Pair("Phase".into(), phase.label().into()));
+            rows.push(DetailRow::Pair(
+                "Running for".into(),
+                format_duration(now_ms().saturating_sub(request.started_ms) * 1000),
+            ));
+            rows.push(DetailRow::Note(phase.hint().into()));
+            if let Some(us) = request.dns_us {
+                rows.push(DetailRow::Pair("DNS took".into(), format_duration(us)));
+            }
+            if let Some(us) = request.connect_us {
+                rows.push(DetailRow::Pair("Connect took".into(), format_duration(us)));
+            }
+        } else if total_us == 0 && request.dns_us.is_none() {
+            rows.push(DetailRow::Note(format!(
+                "No timing recorded: this request is {}.",
+                request.state.label()
+            )));
+        } else {
+            let span = total_us.max(1) as f64;
+
+            // Built as a list first, then laid out. A closure that both captured the running
+            // offset and had to be reset around the DNS/connect pair could not borrow-check,
+            // and the reset is the interesting part: `Connect` encloses `DNS` rather than
+            // following it, so both are drawn from the same origin.
+            let mut phases: Vec<(&str, u64, f64)> = Vec::new();
+            match (request.dns_us, request.connect_us) {
+                (None, None) => rows.push(DetailRow::Note(
+                    "Connection reused: nothing was resolved or dialled for this request.".into(),
+                )),
+                (dns, connect) => {
+                    if let Some(us) = dns {
+                        phases.push(("DNS", us, 0.0));
+                    }
+                    if let Some(us) = connect {
+                        phases.push(("Connect", us, 0.0));
+                    }
+                }
+            }
+
+            // The transfer runs end to end after the connection is up.
+            let mut at = 0.0;
+            for (name, us) in [("Waiting", wait_us), ("Receiving", receive_us)] {
+                phases.push((name, us, at));
+                at += us as f64 / span;
+            }
+
+            for (name, us, offset) in phases {
+                rows.push(DetailRow::Phase {
+                    name: name.to_string(),
+                    offset,
+                    fraction: us as f64 / span,
+                    label: format_duration(us),
+                });
+            }
+            rows.push(DetailRow::Pair("Total".into(), format_duration(total_us)));
+            rows.push(DetailRow::Note(
+                "Waiting is the time to the response headers; receiving is the body after \
+                 them. Connect encloses DNS rather than following it. Blocked, TLS setup and \
+                 send time are not reported by the network stack."
+                    .into(),
+            ));
+        }
+        self.fill_pairs("timing", &self.timing_list, &rows);
+
+        // ── Subresources ──────────────────────────────────────────────────
+        let mut rows = Vec::new();
+        if request.kind == "document" {
+            let children: Vec<_> = requests
+                .iter()
+                .filter(|r| r.id != request.id && r.initiator != "navigation")
+                .collect();
+            if children.is_empty() {
+                rows.push(DetailRow::Note("This document pulled in no subresources.".into()));
+            } else {
+                rows.push(DetailRow::Section(format!("{} loaded for this document", children.len())));
+                rows.push(DetailRow::Columns(("Type".into(), "Size".into(), "URL".into())));
+                for child in children {
+                    let size = if child.error.is_some() {
+                        child.state.label().to_string()
+                    } else {
+                        format_bytes(child.received_bytes)
+                    };
+                    rows.push(DetailRow::Columns((child.kind.clone(), size, short_url(&child.url))));
+                }
+                rows.push(DetailRow::Note(
+                    "Grouped by exclusion, not by parentage: the engine records no initiating \
+                     request id, so this is everything the page fetched that a navigation did not."
+                        .into(),
+                ));
+            }
+        } else {
+            rows.push(DetailRow::Note("Only a document has subresources.".into()));
+        }
+        self.fill_pairs("subresources", &self.sub_list, &rows);
+    }
+
+    /// Fill a striped list with rows, but only when something changed.
+    ///
+    /// The guard is what makes these panes readable: they refresh four times a second, and
+    /// rebuilding a list resets its scroll, so anything past the first screenful could never
+    /// be reached.
+    fn fill_pairs(&self, key: &'static str, list: &gtk4::ListBox, rows: &[DetailRow]) {
+        let signature: String = rows.iter().map(DetailRow::signature).collect();
+        if self.detail_rendered.borrow().get(key) == Some(&signature) {
+            return;
+        }
+        self.detail_rendered.borrow_mut().insert(key, signature);
+
+        while let Some(child) = list.first_child() {
+            list.remove(&child);
+        }
+        for entry in rows {
+            let row = gtk4::ListBoxRow::new();
+            row.set_activatable(false);
+            match entry {
+                // A heading, not data: it gets its own look and is skipped by the banding,
+                // so a long header list reads as sections rather than one undifferentiated
+                // run of rows.
+                DetailRow::Section(title) => {
+                    let label = gtk4::Label::new(Some(title));
+                    label.set_xalign(0.0);
+                    label.add_css_class("detail-section");
+                    row.set_child(Some(&label));
+                    row.add_css_class("section-row");
+                }
+                DetailRow::Pair(name, value) => {
+                    // Two real columns, so every value starts at the same x whether its name
+                    // is "URL" or "content-security-policy".
+                    let line = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+                    let key_label = Self::cell(name, 150, 0.0);
+                    key_label.add_css_class("detail-key");
+                    line.append(&key_label);
+                    let value_label = gtk4::Label::new(Some(value));
+                    value_label.set_xalign(0.0);
+                    value_label.set_hexpand(true);
+                    value_label.set_selectable(true);
+                    // Wrapped, not ellipsized. A URL's query string and a long
+                    // content-security-policy are exactly the parts worth reading, and they
+                    // live at the end -- cutting them off leaves three `load.php` rows that
+                    // cannot be told apart. The pane scrolls; a taller row is the cheaper
+                    // price.
+                    value_label.set_wrap(true);
+                    value_label.set_wrap_mode(gtk4::pango::WrapMode::WordChar);
+                    line.append(&value_label);
+                    line.add_css_class("monospace");
+                    row.set_child(Some(&line));
+                }
+                DetailRow::Columns(cells) => {
+                    let line = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+                    line.append(&Self::cell(&cells.0, 120, 0.0));
+                    line.append(&Self::cell(&cells.1, 76, 1.0));
+                    let tail = gtk4::Label::new(Some(&cells.2));
+                    tail.set_xalign(0.0);
+                    tail.set_hexpand(true);
+                    tail.set_ellipsize(gtk4::pango::EllipsizeMode::End);
+                    tail.set_tooltip_text(Some(&cells.2));
+                    line.append(&tail);
+                    line.add_css_class("monospace");
+                    row.set_child(Some(&line));
+                }
+                DetailRow::Phase {
+                    name,
+                    offset,
+                    fraction,
+                    label,
+                } => {
+                    let line = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+                    let name_label = Self::cell(name, 120, 0.0);
+                    name_label.add_css_class("detail-key");
+                    line.append(&name_label);
+
+                    // The bar takes the room between the name and the number, so every
+                    // phase is drawn against the same width and can be compared by eye.
+                    let (offset, fraction) = (*offset, *fraction);
+                    let bar = gtk4::DrawingArea::new();
+                    bar.set_hexpand(true);
+                    bar.set_content_height(12);
+                    bar.set_draw_func(move |widget, cr, width, height| {
+                        let w = width as f64;
+                        let h = height as f64;
+                        let ink = widget.color();
+                        cr.set_source_rgba(ink.red() as f64, ink.green() as f64, ink.blue() as f64, 0.10);
+                        cr.rectangle(0.0, h / 2.0 - 0.5, w, 1.0);
+                        let _ = cr.fill();
+
+                        // A phase too short to have width still shows a tick: zero is a
+                        // measurement, and a blank row looks like missing data.
+                        let bar_w = (fraction * w).max(1.5);
+                        cr.set_source_rgba(0.20, 0.45, 0.85, 0.85);
+                        cr.rectangle(offset * w, 2.0, bar_w, h - 4.0);
+                        let _ = cr.fill();
+                    });
+                    line.append(&bar);
+
+                    let value = Self::cell(label, 76, 1.0);
+                    value.add_css_class("monospace");
+                    line.append(&value);
+                    row.set_child(Some(&line));
+                }
+                DetailRow::Note(text) => {
+                    let label = gtk4::Label::new(Some(text));
+                    label.set_xalign(0.0);
+                    label.set_wrap(true);
+                    label.add_css_class("dim-label");
+                    row.set_child(Some(&label));
+                    row.add_css_class("section-row");
+                }
+            }
+            list.append(&row);
+        }
+    }
+
+    /// Same guard for the plain-text panes.
+    fn set_raw(&self, key: &'static str, view: &TextView, text: &str) {
+        if self.detail_rendered.borrow().get(key).map(String::as_str) == Some(text) {
+            return;
+        }
+        self.detail_rendered.borrow_mut().insert(key, text.to_string());
+        view.buffer().set_text(text);
     }
 
     pub(crate) fn close_tab(&self, tab_id: TabId) {
@@ -2271,10 +3568,18 @@ impl BrowserWindow {
             let motion = gtk4::EventControllerMotion::new();
             let motion_handle = handle.clone();
             let motion_zoom = zoom.clone();
+            // GTK reports motion when the widget under the pointer changes, not only when
+            // the pointer does -- so a page that keeps painting produces a stream of events
+            // at a position that has not moved. Each one costs a hit test, and none of them
+            // can change what is hovered.
+            let last_position = std::cell::Cell::new((f64::NAN, f64::NAN));
             motion.connect_motion(move |_c, x, y| {
                 let handle = motion_handle.clone();
                 let z = motion_zoom.get();
                 let (x, y) = (x / z, y / z);
+                if last_position.replace((x, y)) == (x, y) {
+                    return;
+                }
                 runtime().spawn(async move {
                     let _ = handle.send(EngineTabCommand::MouseMove { x: x as f32, y: y as f32 }).await;
                 });
@@ -2645,4 +3950,106 @@ fn human_bytes(bytes: u64) -> String {
     } else {
         format!("{value:.1} {}", UNITS[unit])
     }
+}
+
+/// A wall-clock time from a Unix millisecond stamp. The core stores the number and leaves
+/// the formatting to whoever is showing it.
+fn format_clock(timestamp_ms: u64) -> String {
+    use chrono::TimeZone;
+    match chrono::Local.timestamp_millis_opt(timestamp_ms as i64) {
+        chrono::LocalResult::Single(time) => time.format("%H:%M:%S%.3f").to_string(),
+        _ => "--:--:--".to_string(),
+    }
+}
+
+/// A URL short enough for a list row: host plus the tail of the path, which is the part
+/// that tells one request from another.
+fn short_url(url: &str) -> String {
+    match url::Url::parse(url) {
+        Ok(parsed) => {
+            let host = parsed.host_str().unwrap_or("");
+            let path = parsed.path();
+            let tail = path.rsplit('/').next().unwrap_or(path);
+            // The query comes along: on a site that serves everything through one endpoint
+            // it is the only thing that distinguishes one request from the next, and a list
+            // of identical `load.php` rows is no use to anyone.
+            let query = parsed.query().map(|q| format!("?{q}")).unwrap_or_default();
+            if tail.is_empty() {
+                format!("{host}{path}{query}")
+            } else {
+                format!("{host}/…/{tail}{query}")
+            }
+        }
+        Err(_) => url.to_string(),
+    }
+    // No length cap here. The cell this lands in ellipsizes at the end, so it shortens
+    // itself to whatever room there is -- and it cuts the query first, which is the part
+    // worth losing, leaving the host and file name visible. Trimming here as well used to
+    // eat the start of the URL before the label had a chance.
+}
+
+/// Clip to `width` characters, marking that something was dropped. Counts characters, not
+/// bytes -- slicing a UTF-8 string by byte index panics mid-codepoint.
+fn truncate(value: &str, width: usize) -> String {
+    if value.chars().count() <= width {
+        return value.to_string();
+    }
+    let mut out: String = value.chars().take(width.saturating_sub(1)).collect();
+    out.push('…');
+    out
+}
+
+/// A line in one of the request-detail panes.
+///
+/// Typed rather than pre-formatted strings so the pane can lay each kind out properly: a
+/// heading is not a value, and a value column that starts wherever the previous name happened
+/// to end is what made these read as a wall of text.
+pub(crate) enum DetailRow {
+    /// A heading above the rows that follow.
+    Section(String),
+    /// A name and its value, in two aligned columns.
+    Pair(String, String),
+    /// Three columns: kind, size, URL. Used by the subresource list.
+    Columns((String, String, String)),
+    /// One phase of a request's life: a name, a bar drawn to `fraction` of the row's width
+    /// starting at `offset`, and the duration written out.
+    Phase {
+        /// What this phase is called
+        name: String,
+        /// Where the bar starts, 0.0-1.0 of the total
+        offset: f64,
+        /// How much of the total it spans
+        fraction: f64,
+        /// The duration, already formatted
+        label: String,
+    },
+    /// Explanatory prose, wrapped.
+    Note(String),
+}
+
+impl DetailRow {
+    /// What this row would render as, for the "has anything changed" check that stops these
+    /// panes rebuilding -- and losing their scroll position -- four times a second.
+    fn signature(&self) -> String {
+        match self {
+            DetailRow::Section(t) => format!("S\u{1}{t}\u{2}"),
+            DetailRow::Pair(k, v) => format!("P\u{1}{k}\u{1}{v}\u{2}"),
+            DetailRow::Columns((a, b, c)) => format!("C\u{1}{a}\u{1}{b}\u{1}{c}\u{2}"),
+            DetailRow::Phase {
+                name,
+                offset,
+                fraction,
+                label,
+            } => format!("T\u{1}{name}\u{1}{offset:.4}\u{1}{fraction:.4}\u{1}{label}\u{2}"),
+            DetailRow::Note(t) => format!("N\u{1}{t}\u{2}"),
+        }
+    }
+}
+
+/// Milliseconds since the Unix epoch, for measuring how long a request has been in flight.
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
