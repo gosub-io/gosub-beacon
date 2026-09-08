@@ -407,7 +407,13 @@ window.private-window menubar.header-menubar > item {
 }
 
 /* Banding is what lets the eye follow one request across five columns. Faint on purpose:
-   loud stripes fight the selection highlight, which is the thing that matters more. */
-.network-list row:nth-child(even) {
+   loud stripes fight the selection highlight, which is the thing that matters more.
+
+   The selected row is excluded, and that is not a nicety: `row:nth-child(even)` is more
+   specific than the theme's `row:selected`, so a banded row kept its stripe while the theme
+   still switched the text to the selection foreground -- white letters on a near-white
+   stripe. Every other row selected visibly; the even ones looked like the click had missed,
+   so they got clicked again. */
+.network-list row:nth-child(even):not(:selected) {
     background: alpha(currentColor, 0.045);
 }
