@@ -2898,7 +2898,6 @@ dependencies = [
  "bytes",
  "cow-utils",
  "csscolorparser",
- "gosub-sonar",
  "gosub_fontmanager",
  "gosub_interface",
  "gosub_lattice",
