@@ -3462,10 +3462,18 @@ impl BrowserWindow {
             let motion = gtk4::EventControllerMotion::new();
             let motion_handle = handle.clone();
             let motion_zoom = zoom.clone();
+            // GTK reports motion when the widget under the pointer changes, not only when
+            // the pointer does -- so a page that keeps painting produces a stream of events
+            // at a position that has not moved. Each one costs a hit test, and none of them
+            // can change what is hovered.
+            let last_position = std::cell::Cell::new((f64::NAN, f64::NAN));
             motion.connect_motion(move |_c, x, y| {
                 let handle = motion_handle.clone();
                 let z = motion_zoom.get();
                 let (x, y) = (x / z, y / z);
+                if last_position.replace((x, y)) == (x, y) {
+                    return;
+                }
                 runtime().spawn(async move {
                     let _ = handle.send(EngineTabCommand::MouseMove { x: x as f32, y: y as f32 }).await;
                 });
