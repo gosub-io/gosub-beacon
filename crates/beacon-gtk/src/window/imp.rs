@@ -143,6 +143,17 @@ pub struct BrowserWindow {
     /// What the timings view last rendered. Comparing against it avoids replacing identical
     /// text four times a second, which is what was throwing the scroll position away.
     pub timings_rendered: RefCell<String>,
+    /// What the console last rendered, for the same reason: the buffer holds up to 2000
+    /// lines and replacing it wholesale drops any selection the reader had made.
+    pub console_rendered: RefCell<String>,
+    /// What the request list last rendered. The list is rebuilt from scratch when it
+    /// changes, so without this every row is destroyed and recreated four times a second --
+    /// which is slow, and eats clicks: the row being clicked is gone before the button is
+    /// released. A page that has finished loading now renders once and stays put.
+    pub network_rendered: RefCell<String>,
+    /// The time cell of each row on screen, in row order, so a running request's clock can
+    /// be written in place rather than by rebuilding the row it sits in.
+    pub network_time_cells: RefCell<Vec<(uuid::Uuid, gtk4::Label)>>,
     /// The same guard for each detail pane, keyed by pane name. Without it a pane is rebuilt
     /// four times a second and jumps back to the top on every rebuild, so anything below the
     /// fold cannot be read at all.
@@ -247,6 +258,9 @@ impl Default for BrowserWindow {
             network_response_view: TemplateChild::default(),
             network_body_view: TemplateChild::default(),
             network_selected: RefCell::new(None),
+            console_rendered: RefCell::new(String::new()),
+            network_rendered: RefCell::new(String::new()),
+            network_time_cells: RefCell::new(Vec::new()),
             timings_rendered: RefCell::new(String::new()),
             detail_rendered: RefCell::new(std::collections::HashMap::new()),
             devtools_tick: RefCell::new(None),
@@ -494,6 +508,22 @@ impl BrowserWindow {
     }
 }
 
+/// One row of the request list, worked out before any widget exists so the list can be
+/// compared against what is already on screen and left alone when nothing has changed.
+struct NetworkRow {
+    id: uuid::Uuid,
+    status: String,
+    method: String,
+    kind: String,
+    size: String,
+    time: String,
+    url: String,
+    full_url: String,
+    failed: bool,
+    /// `(started, headers arrived, ended)` in epoch milliseconds, for the waterfall bar.
+    span: (u64, Option<u64>, u64),
+}
+
 impl BrowserWindow {
     /// The window's own running commentary. It goes into the same buffer the engine's
     /// records do, so the console is one list rather than two views that disagree about
@@ -669,6 +699,11 @@ impl BrowserWindow {
 
         self.devtools_summary.set_text(&format!("{shown} of {total} records"));
 
+        if *self.console_rendered.borrow() == text {
+            return;
+        }
+        self.console_rendered.replace(text.clone());
+
         // Whether the view was already at the end, decided before replacing the text: a
         // console being watched should follow, one being read should stay put.
         let adjustment = self.log_scroller.vadjustment();
@@ -748,11 +783,11 @@ impl BrowserWindow {
     /// whole columns disappear -- which is how Status, Method and Type went missing from a
     /// narrowed pane while the header above them lost the same three words.
     const NETWORK_COLUMNS: [(i32, f32); 5] = [
-        (46.0 as i32, 0.0),  // Status
-        (46.0 as i32, 0.0),  // Method
-        (128.0 as i32, 0.0), // Type
-        (76.0 as i32, 1.0),  // Size, right-aligned like the numbers it holds
-        (76.0 as i32, 1.0),  // Time
+        (46.0 as i32, 0.0), // Status
+        (46.0 as i32, 0.0), // Method
+        (96.0 as i32, 0.0), // Type
+        (76.0 as i32, 1.0), // Size, right-aligned like the numbers it holds
+        (76.0 as i32, 1.0), // Time
     ];
 
     /// One cell: fixed width, its own alignment, no ellipsizing so it never eats a neighbour.
@@ -765,6 +800,7 @@ impl BrowserWindow {
     }
 
     /// Width of the waterfall column, in pixels.
+    /// Narrow enough that a row's fixed columns still fit the pane at its default width.
     const WATERFALL_WIDTH: i32 = 200;
 
     /// One request's bar, drawn against the page's whole load.
@@ -821,11 +857,29 @@ impl BrowserWindow {
 
     /// A row of the request list. The URL takes what is left and ellipsizes, so a long one
     /// shortens itself instead of pushing the columns off the edge.
-    fn network_row(status: &str, method: &str, kind: &str, size: &str, time: &str, url: &str, bar: Option<gtk4::DrawingArea>) -> gtk4::Box {
+    fn network_row(
+        status: &str,
+        method: &str,
+        kind: &str,
+        size: &str,
+        time: &str,
+        url: &str,
+        bar: Option<gtk4::DrawingArea>,
+    ) -> (gtk4::Box, gtk4::Label) {
         let row = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
-        for (text, (width, xalign)) in [status, method, kind, size, time].iter().zip(Self::NETWORK_COLUMNS) {
-            row.append(&Self::cell(text, width, xalign));
+        // The time cell is handed back so a running request's clock can be updated without
+        // rebuilding the row around it. Rebuilding is what loses a click, and a page with
+        // anything still loading would otherwise rebuild four times a second, forever.
+        let mut time_cell = None;
+        for (index, (text, (width, xalign))) in [status, method, kind, size, time].iter().zip(Self::NETWORK_COLUMNS).enumerate() {
+            let cell = Self::cell(text, width, xalign);
+            if index == 4 {
+                time_cell = Some(cell.clone());
+            }
+            row.append(&cell);
         }
+        #[allow(clippy::expect_used)] // PANIC-SAFE: the loop above always visits index 4
+        let time_cell = time_cell.expect("time column");
         let tail = gtk4::Label::new(Some(url));
         tail.set_xalign(0.0);
         tail.set_hexpand(true);
@@ -836,7 +890,7 @@ impl BrowserWindow {
             // Only the header passes no bar, and it wants the column named.
             None => row.append(&Self::cell("Waterfall", Self::WATERFALL_WIDTH, 0.0)),
         }
-        row
+        (row, time_cell)
     }
 
     /// The line above the request list. Mentions held bodies only when there are some, so
@@ -879,7 +933,7 @@ impl BrowserWindow {
 
         if self.network_header.first_child().is_none() {
             self.network_header
-                .append(&Self::network_row("Status", "Method", "Type", "Size", "Time", "URL", None));
+                .append(&Self::network_row("Status", "Method", "Type", "Size", "Time", "URL", None).0);
         }
 
         // Only this window's active tab: a request list mixing several tabs together is a
@@ -901,14 +955,12 @@ impl BrowserWindow {
             .unwrap_or(window_start + 1)
             .max(window_start + 1);
 
-        // Rebuilt wholesale. A request list is short and changes shape as rows arrive, and
-        // the alternative -- diffing it against the widgets already there -- is a great deal
-        // of bookkeeping to save a few dozen labels.
-        while let Some(child) = self.network_list.first_child() {
-            self.network_list.remove(&child);
-        }
-
-        let mut to_select = None;
+        // What each row will say, worked out before a single widget is touched. The list is
+        // rebuilt wholesale when it changes -- a request list is short, and diffing widgets
+        // would be a great deal of bookkeeping -- but rebuilding it when it has *not*
+        // changed destroys and recreates every row four times a second, which is slow and
+        // eats clicks, since the row under the pointer is gone before the button comes up.
+        let mut rows = Vec::with_capacity(requests.len());
         for request in &requests {
             if !needle.is_empty() && !request.url.to_lowercase().contains(needle) && !request.kind.contains(needle) {
                 continue;
@@ -951,24 +1003,83 @@ impl BrowserWindow {
 
             // A request that never reached the wire has no method to report -- a file://
             // load, or one answered from cache before a hop was built.
-            let method = request.method.as_deref().unwrap_or("—");
-            let bar = Self::waterfall(
-                request.started_ms,
-                request.headers_ms,
-                request.started_ms + request.elapsed_us.unwrap_or(0) / 1000,
-                (window_start, window_end),
-            );
-            let label = Self::network_row(
-                &status,
+            let method = request.method.as_deref().unwrap_or("—").to_string();
+            rows.push(NetworkRow {
+                id: request.id,
+                status,
                 method,
-                &truncate(&request.kind, 18),
-                &size,
-                &time,
-                &short_url(&request.url),
+                kind: truncate(&request.kind, 18),
+                size,
+                time,
+                url: short_url(&request.url),
+                full_url: request.url.clone(),
+                failed: request.error.is_some(),
+                span: (
+                    request.started_ms,
+                    request.headers_ms,
+                    request.started_ms + request.elapsed_us.unwrap_or(0) / 1000,
+                ),
+            });
+        }
+
+        // Everything a row draws *except* its clock, the waterfall's geometry included, so a
+        // bar that moves still redraws. The clock is left out on purpose: a request in
+        // flight reports a new elapsed time on every tick, and if that forced a rebuild then
+        // any page still loading would destroy and recreate its rows four times a second --
+        // losing the scroll position, and any click that lands in between.
+        let structure: String = rows
+            .iter()
+            .map(|r| {
+                format!(
+                    "{}{}{}{}{}{}{}{:?}{:?}",
+                    r.id,
+                    r.status,
+                    r.method,
+                    r.kind,
+                    r.size,
+                    r.url,
+                    r.failed,
+                    r.span,
+                    (window_start, window_end)
+                )
+            })
+            .collect();
+
+        if *self.network_rendered.borrow() == structure {
+            // Same rows, so only the running clocks can have moved. Write them straight into
+            // the cells the rows already have.
+            for (row, cell) in rows.iter().zip(self.network_time_cells.borrow().iter()) {
+                if row.id == cell.0 && cell.1.text() != row.time.as_str() {
+                    cell.1.set_text(&row.time);
+                }
+            }
+            // The detail pane has its own guard, and reaching it is what keeps a fresh
+            // selection showing.
+            self.show_request_detail();
+            return;
+        }
+        self.network_rendered.replace(structure);
+
+        while let Some(child) = self.network_list.first_child() {
+            self.network_list.remove(&child);
+        }
+
+        let mut to_select = None;
+        let mut time_cells = Vec::with_capacity(rows.len());
+        for row_data in rows {
+            let bar = Self::waterfall(row_data.span.0, row_data.span.1, row_data.span.2, (window_start, window_end));
+            let (label, time_cell) = Self::network_row(
+                &row_data.status,
+                &row_data.method,
+                &row_data.kind,
+                &row_data.size,
+                &row_data.time,
+                &row_data.url,
                 Some(bar),
             );
+            time_cells.push((row_data.id, time_cell));
             label.add_css_class("monospace");
-            if request.error.is_some() {
+            if row_data.failed {
                 label.add_css_class("error");
             }
 
@@ -976,16 +1087,18 @@ impl BrowserWindow {
             row.set_child(Some(&label));
             // The shortened URL in the row cannot show a query string, which is the only
             // thing telling three `load.php` requests apart. The full one is a hover away.
-            row.set_tooltip_text(Some(&request.url));
+            row.set_tooltip_text(Some(&row_data.full_url));
             // The id rides on the row, so a rebuild cannot leave the detail pane showing a
             // different request than the one highlighted.
-            unsafe { row.set_data("request-id", request.id) };
+            unsafe { row.set_data("request-id", row_data.id) };
             self.network_list.append(&row);
 
-            if selected == Some(request.id) {
+            if selected == Some(row_data.id) {
                 to_select = Some(row);
             }
         }
+
+        self.network_time_cells.replace(time_cells);
 
         // Reselect without re-firing the handler into a loop: setting the same row back is
         // what keeps the detail pane steady while the list rebuilds under it.
