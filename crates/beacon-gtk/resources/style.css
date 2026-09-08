@@ -427,6 +427,15 @@ window.private-window menubar.header-menubar > item {
     font-size: 0.78em;
 }
 
+/* There is a sentence behind this row -- said quietly, until the row is under the pointer. */
+.data-table .info-icon {
+    opacity: 0.3;
+}
+
+.data-table listview > row:hover .info-icon {
+    opacity: 0.85;
+}
+
 /* A record worth noticing in a wall of them. */
 .data-table .warn {
     color: @warning_color;

@@ -834,6 +834,23 @@ mod tests {
         assert_eq!(row.phase(), Phase::Done);
     }
 
+    /// The panel explains what a row measures, which only works while the engine still
+    /// hands back the namespace it was recorded under.
+    #[test]
+    fn a_recorded_timing_comes_back_able_to_explain_itself() {
+        use gosub_shared::timing::Timing;
+
+        reset_timings();
+        gosub_shared::timing::record(Timing::DecodeCss, 1_234, None);
+
+        let row = timings()
+            .into_iter()
+            .find(|row| row.namespace == Timing::DecodeCss.name())
+            .expect("the namespace just recorded is in the table");
+        assert_eq!(row.timing, Some(Timing::DecodeCss));
+        assert!(!row.timing.unwrap().describes().is_empty());
+    }
+
     #[test]
     fn a_failure_the_engine_did_not_classify_gets_no_label() {
         let mut row = in_flight(None, None, None);

@@ -100,13 +100,20 @@ mod imp_timing {
     use gtk4::glib::Properties;
     use gtk4::prelude::*;
     use gtk4::subclass::prelude::*;
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
 
     #[derive(Properties, Default)]
     #[properties(wrapper_type = super::TimingRow)]
     pub struct TimingRow {
         #[property(get, set)]
         pub namespace: RefCell<String>,
+        /// What the namespace measures, in a sentence. Shown on hover.
+        #[property(get, set)]
+        pub description: RefCell<String>,
+        /// Whether `description` is a real explanation rather than the namespace repeated
+        /// back. Only an explained row earns the info icon.
+        #[property(get, set)]
+        pub explained: Cell<bool>,
         #[property(get, set)]
         pub count: RefCell<String>,
         #[property(get, set)]
@@ -117,8 +124,10 @@ mod imp_timing {
         pub p50: RefCell<String>,
         #[property(get, set)]
         pub p95: RefCell<String>,
+        /// The slowest single sample. Named `peak` rather than `max`, whose getter would
+        /// collide with `Ord::max`.
         #[property(get, set)]
-        pub max: RefCell<String>,
+        pub peak: RefCell<String>,
         #[property(get, set)]
         pub css: RefCell<String>,
     }
@@ -170,5 +179,28 @@ impl Default for LogRow {
 impl Default for TimingRow {
     fn default() -> Self {
         glib::Object::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    /// Whether writing a property its own value again still emits `notify` decides whether the
+    /// devtools' 250ms refresh is free or a storm — every `notify` re-runs the bindings hanging
+    /// off it, and a tooltip binding rewriting `tooltip-text` restarts GTK's hover timer.
+    #[test]
+    fn writing_a_property_its_own_value_still_notifies() {
+        let row = TimingRow::default();
+        row.set_description("Turning one stylesheet into rules.");
+
+        let seen = Rc::new(Cell::new(0));
+        let counter = seen.clone();
+        row.connect_description_notify(move |_| counter.set(counter.get() + 1));
+
+        row.set_description("Turning one stylesheet into rules.");
+        assert_eq!(seen.get(), 1, "glib does not compare: an identical write notifies all the same");
     }
 }

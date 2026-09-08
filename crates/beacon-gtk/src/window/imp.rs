@@ -210,6 +210,24 @@ pub struct BrowserWindow {
     pub private: Cell<bool>,
 }
 
+/// Write a row property, but only when the value actually changed.
+///
+/// glib does not compare: writing a property the value it already holds still emits `notify`,
+/// and every `notify` re-runs the bindings hanging off that property. For a tooltip binding
+/// that is fatal — GTK reads a `tooltip-text` write as a change and restarts its hover timer,
+/// so with this pane refreshing four times a second no tooltip in the devtools ever lived long
+/// enough to be shown. Verified against a standalone GTK4 program: identical hover, the
+/// tooltip appears with a static text and never appears with the text rewritten on a 250ms
+/// tick. `rows::tests` pins the glib half of that.
+macro_rules! set_changed {
+    ($row:expr, $get:ident, $set:ident, $value:expr) => {{
+        let value = $value;
+        if $row.$get() != value {
+            $row.$set(value);
+        }
+    }};
+}
+
 impl Default for BrowserWindow {
     fn default() -> Self {
         let (tx, rx) = async_channel::unbounded::<Message>();
@@ -721,10 +739,10 @@ impl BrowserWindow {
             };
             match self.log_model.item(index as u32).and_downcast::<super::rows::LogRow>() {
                 Some(item) => {
-                    item.set_time(format_clock(line.timestamp_ms));
-                    item.set_level(level.as_str());
-                    item.set_target(line.target.as_str());
-                    item.set_message(line.message.as_str());
+                    set_changed!(item, time, set_time, format_clock(line.timestamp_ms));
+                    set_changed!(item, level, set_level, level.as_str());
+                    set_changed!(item, target, set_target, line.target.as_str());
+                    set_changed!(item, message, set_message, line.message.as_str());
                     item.set_css(css);
                 }
                 None => {
@@ -773,14 +791,26 @@ impl BrowserWindow {
                     item
                 }
             };
-            item.set_namespace(row.namespace.as_str());
-            item.set_count(row.count.to_string());
-            item.set_total(format_duration(row.total_us));
-            item.set_avg(format_duration(row.avg_us));
-            item.set_p50(format_duration(row.p50_us));
-            item.set_p95(format_duration(row.p95_us));
-            item.set_max(format_duration(row.max_us));
-            item.set_css("monospace");
+            set_changed!(item, namespace, set_namespace, row.namespace.as_str());
+            // A namespace the engine knows explains itself; one it does not is at least
+            // readable in full on hover.
+            set_changed!(
+                item,
+                description,
+                set_description,
+                match row.timing {
+                    Some(timing) => timing.describes().to_string(),
+                    None => row.namespace.clone(),
+                }
+            );
+            set_changed!(item, explained, set_explained, row.timing.is_some());
+            set_changed!(item, count, set_count, row.count.to_string());
+            set_changed!(item, total, set_total, format_duration(row.total_us));
+            set_changed!(item, avg, set_avg, format_duration(row.avg_us));
+            set_changed!(item, p50, set_p50, format_duration(row.p50_us));
+            set_changed!(item, p95, set_p95, format_duration(row.p95_us));
+            set_changed!(item, peak, set_peak, format_duration(row.max_us));
+            set_changed!(item, css, set_css, "monospace");
         }
         let wanted = rows.len() as u32;
         if self.timings_model.n_items() > wanted {
@@ -801,9 +831,13 @@ impl BrowserWindow {
             ("Avg", "avg", Some(88), 1.0),
             ("p50", "p50", Some(88), 1.0),
             ("p95", "p95", Some(88), 1.0),
-            ("Max", "max", Some(88), 1.0),
+            ("Max", "peak", Some(88), 1.0),
         ] {
-            self.timings_list.append_column(&Self::text_column(title, property, width, xalign));
+            let column = match property {
+                "namespace" => Self::namespace_column(title),
+                _ => Self::text_column(title, property, width, xalign),
+            };
+            self.timings_list.append_column(&column);
         }
     }
 
@@ -910,6 +944,79 @@ impl BrowserWindow {
         }
     }
 
+    /// The timings table's first column: the namespace, plus an info icon for the sentence
+    /// saying what it measures. A bare tooltip is invisible until you happen to rest the
+    /// pointer on the right cell, so the icon is what tells the reader there is more here.
+    ///
+    /// The tooltip sits on the cell rather than the icon, so it answers a hover anywhere in
+    /// the column — the icon advertises it, it is not a target you have to hit.
+    fn namespace_column(title: &str) -> gtk4::ColumnViewColumn {
+        let factory = gtk4::SignalListItemFactory::new();
+        factory.connect_setup(move |_, item| {
+            let cell = gtk4::Box::new(gtk4::Orientation::Horizontal, 4);
+            let label = gtk4::Label::new(None);
+            label.set_xalign(0.0);
+            label.set_ellipsize(gtk4::pango::EllipsizeMode::End);
+            let info = gtk4::Image::from_icon_name("help-about-symbolic");
+            info.set_pixel_size(12);
+            info.add_css_class("info-icon");
+            // The icon belongs to the name beside it, so it follows the text rather than
+            // sitting at the far edge of a column that is mostly empty space. The filler
+            // takes that space instead, and the label still ellipsizes when there is none.
+            let filler = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
+            filler.set_hexpand(true);
+            cell.append(&label);
+            cell.append(&info);
+            cell.append(&filler);
+            Self::as_list_item(item).set_child(Some(&cell));
+        });
+        factory.connect_bind(move |_, item| {
+            let item = Self::as_list_item(item);
+            let (Some(row), Some(cell)) = (item.item(), item.child().and_downcast::<gtk4::Box>()) else {
+                return;
+            };
+            let (Some(label), Some(info)) = (
+                cell.first_child().and_downcast::<gtk4::Label>(),
+                cell.first_child()
+                    .and_then(|label| label.next_sibling())
+                    .and_downcast::<gtk4::Image>(),
+            ) else {
+                return;
+            };
+            let bindings = vec![
+                row.bind_property("namespace", &label, "label").sync_create().build(),
+                row.bind_property("description", &cell, "tooltip-text").sync_create().build(),
+                // A namespace the engine cannot explain gets no icon: an icon promising an
+                // explanation that turns out to be the row's own text is worse than none.
+                row.bind_property("explained", &info, "visible").sync_create().build(),
+                row.bind_property("css", &label, "css-classes")
+                    .transform_to(|_, classes: String| {
+                        let classes: glib::StrV = classes.split_whitespace().collect::<Vec<_>>().into();
+                        Some(classes.to_value())
+                    })
+                    .sync_create()
+                    .build(),
+            ];
+            unsafe { item.set_data("bindings", bindings) };
+        });
+        factory.connect_unbind(move |_, item| {
+            let item = Self::as_list_item(item);
+            if let Some(bindings) = unsafe { item.steal_data::<Vec<glib::Binding>>("bindings") } {
+                for binding in bindings {
+                    binding.unbind();
+                }
+            }
+        });
+
+        let column = gtk4::ColumnViewColumn::builder()
+            .title(title)
+            .factory(&factory)
+            .resizable(true)
+            .build();
+        column.set_expand(true);
+        column
+    }
+
     /// One column of a devtools table.
     ///
     /// Every table here is a list of rows with a `css` property and one property per column,
@@ -935,7 +1042,7 @@ impl BrowserWindow {
             let mut bindings = vec![row.bind_property(property, &label, "label").sync_create().build()];
             // Text wider than its column is still readable on hover. A column of numbers has
             // nothing to add, so only the ones that can overflow get a tooltip.
-            if matches!(property, "url" | "message" | "namespace" | "target") {
+            if matches!(property, "url" | "message" | "target") {
                 bindings.push(row.bind_property(property, &label, "tooltip-text").sync_create().build());
             }
             bindings.push(
@@ -1160,20 +1267,19 @@ impl BrowserWindow {
                 .filter(|item| item.id() == row.id.to_string());
 
             match existing {
-                // Same request in the same place: write over what changed. Setting a property
-                // to the value it already has is a no-op in glib, so this is cheap even when
-                // nothing moved.
+                // Same request in the same place: write over what changed, and *only* what
+                // changed — an identical write is not free, it is a `notify` like any other.
                 Some(item) => {
-                    item.set_status(row.status.as_str());
-                    item.set_method(row.method.as_str());
-                    item.set_kind(row.kind.as_str());
-                    item.set_size(row.size.as_str());
-                    item.set_time(row.time.as_str());
-                    item.set_url(row.url.as_str());
-                    item.set_css(row.css);
-                    item.set_bar_offset(offset);
-                    item.set_bar_wait(wait);
-                    item.set_bar_body(body);
+                    set_changed!(item, status, set_status, row.status.as_str());
+                    set_changed!(item, method, set_method, row.method.as_str());
+                    set_changed!(item, kind, set_kind, row.kind.as_str());
+                    set_changed!(item, size, set_size, row.size.as_str());
+                    set_changed!(item, time, set_time, row.time.as_str());
+                    set_changed!(item, url, set_url, row.url.as_str());
+                    set_changed!(item, css, set_css, row.css);
+                    set_changed!(item, bar_offset, set_bar_offset, offset);
+                    set_changed!(item, bar_wait, set_bar_wait, wait);
+                    set_changed!(item, bar_body, set_bar_body, body);
                 }
                 // A different request here, or nothing yet: the list has actually changed
                 // shape, so from this point on it is rebuilt.
