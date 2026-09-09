@@ -132,6 +132,29 @@ fn emit_line(out: &mut String, spans: &[(Class, &str)]) {
     }
 }
 
+/// Fetch `url` and mark up what comes back as a source page.
+///
+/// The two halves of `view-source:` in one place: where the bytes come from (a local file
+/// read, or a one-shot HTTP fetch outside the engine — see [`crate::fetch`]) and what they
+/// are turned into. Every shell wants both, and neither half is toolkit-specific.
+///
+/// `highlighted` off is the `raw:` prefix. `user_agent` should be the engine's configured
+/// one, so a server at least sees the same client it saw for the page itself.
+pub async fn load(url: &url::Url, highlighted: bool, user_agent: String) -> Result<String, String> {
+    let bytes = if url.scheme() == "file" {
+        match url.to_file_path() {
+            Ok(path) => std::fs::read(&path).map_err(|e| e.to_string())?,
+            Err(()) => return Err("not a local file path".into()),
+        }
+    } else {
+        crate::fetch::url_body(url.clone(), user_agent).await?
+    };
+
+    // Lossy on purpose: source view is for looking at, and a page served in a legacy
+    // encoding should show its bytes with replacement characters rather than nothing.
+    Ok(build(url.as_str(), &String::from_utf8_lossy(&bytes), highlighted))
+}
+
 /// The full `view-source:` page for `source`, fetched from `url`.
 /// `highlighted` off gives plain escaped text (the `raw:` address prefix).
 pub fn build(url: &str, source: &str, highlighted: bool) -> String {

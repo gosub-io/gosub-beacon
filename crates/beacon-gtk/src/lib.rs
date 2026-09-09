@@ -6,7 +6,6 @@
 
 mod application;
 mod dialog;
-mod fetch;
 mod platform;
 pub mod render;
 mod theme;

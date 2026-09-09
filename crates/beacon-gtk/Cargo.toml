@@ -25,7 +25,6 @@ colog.workspace = true
 lazy_static.workspace = true
 log.workspace = true
 once_cell.workspace = true
-reqwest.workspace = true
 tokio.workspace = true
 url.workspace = true
 uuid.workspace = true
