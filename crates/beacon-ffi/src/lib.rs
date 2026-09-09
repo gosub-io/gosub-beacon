@@ -24,13 +24,14 @@ use std::collections::HashMap;
 use std::ffi::{c_char, c_void, CStr, CString};
 use std::sync::{Arc, Mutex, OnceLock};
 
+use beacon_core::address_parser::GosubRenderMode;
 use beacon_core::beacon::{Beacon, DRAW_FPS};
 use beacon_core::command::BeaconCommand;
 use beacon_core::devtools;
 use beacon_core::engine::BrowserEngine;
 use beacon_core::event::{BeaconEvent, Cursor};
 use beacon_core::tab::{GosubTab, GosubTabManager, TabId};
-use gosub_engine::events::{DownloadId, EngineEvent, Modifiers, MouseButton, TabCommand};
+use gosub_engine::events::{DownloadId, EngineEvent, HitTestResponse, Modifiers, MouseButton, TabCommand};
 use gosub_render_pipeline::render::backend::ExternalHandle;
 use gosub_render_pipeline::render::{composite_tiles, TileTarget};
 use tokio::runtime::Runtime;
@@ -116,7 +117,7 @@ pub struct BeaconBrowser {
     private: bool,
 
     /// Events translated but not yet collected by the shell.
-    pending: Vec<BeaconEvent>,
+    pending: Vec<Outgoing>,
     /// Strings referenced by the last `poll_events` batch, kept alive until the next call.
     strings: Vec<CString>,
     /// The composited frame handed out by `acquire_frame`, owned until `release_frame`.
@@ -130,6 +131,24 @@ pub struct BeaconBrowser {
     /// A panel refreshing several times a second must not be walking a live table.
     timings: Vec<devtools::NamespaceStats>,
     logs: Vec<devtools::LogLine>,
+    requests: Vec<devtools::NetRequest>,
+    /// The last settings, forward-history and previous-session snapshots. Same pattern
+    /// again: none of these is a live view, and none of them can move under a shell that
+    /// is part way through reading it.
+    settings: Vec<beacon_core::settings::SettingRow>,
+    forward: Vec<(beacon_core::tab::HistoryEntryId, url::Url)>,
+    session: Vec<beacon_core::session::SessionTab>,
+    /// What was last written to the session file, so the same thing is not written again.
+    /// `TabsChanged` also fires for a new title or favicon, and neither of those is a
+    /// session change.
+    session_written: String,
+
+    /// Hit tests the shell has asked for and the engine has not answered yet, and the last
+    /// answer. Asked for by token because a second right-click can land before the first
+    /// answer does, and an answer on the wrong menu is worse than a slow one.
+    hit_tabs: HashMap<u64, TabId>,
+    hit: Option<HitTestResponse>,
+    next_hit_token: u64,
 
     /// What the shell last said about each tab's page area, so zoom can recompute the
     /// viewport without the shell having to resend it -- and so activating a tab can
@@ -150,6 +169,19 @@ pub struct BeaconBrowser {
     /// Views the shell has attached, one per tab.
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     views: HashMap<TabId, gpu::ViewSurface>,
+}
+
+/// Something waiting to be handed to the shell as a `BeaconCEvent`.
+///
+/// Almost all of it is `beacon_core`'s own [`BeaconEvent`], which is the vocabulary every
+/// frontend shares. The exception is the hit-test answer: it is a reply to a question only
+/// this ABI asks (GTK asks the engine directly, having the engine's types to hand), so it
+/// is carried here rather than pushed into the shared enum, where it would be a variant
+/// the other frontends must match on and never emit.
+enum Outgoing {
+    Core(BeaconEvent),
+    /// The engine answered hit test `token`; the answer is in `hit`.
+    HitTest(TabId, u64),
 }
 
 /// The page area as the shell described it, in the shell's own terms: logical (CSS-ish)
@@ -195,6 +227,8 @@ pub enum BeaconEventKind {
     TabCrashed = 12,
     Log = 13,
     DownloadChanged = 14,
+    NavigationFailed = 15,
+    HitTest = 16,
 }
 
 #[repr(C)]
@@ -244,6 +278,12 @@ macro_rules! browser {
     };
 }
 
+// Declared here rather than at the top of the file: they use the `browser!` macro above,
+// and a `macro_rules!` macro is only visible to modules declared after it.
+mod net;
+mod page;
+mod settings;
+
 fn to_str<'a>(ptr: *const c_char) -> Option<&'a str> {
     if ptr.is_null() {
         return None;
@@ -258,6 +298,27 @@ fn to_c_string(value: &str) -> *mut c_char {
         // An interior NUL cannot be represented; an empty string is better than a crash.
         Err(_) => CString::new("").unwrap().into_raw(),
     }
+}
+
+/// Whether an address asks for source rather than a rendered page, and whether that source
+/// should be highlighted. `view-source:` is highlighted, `raw:` is not.
+fn source_mode(mode: &GosubRenderMode) -> Option<bool> {
+    match mode {
+        GosubRenderMode::Source => Some(true),
+        GosubRenderMode::RawSource => Some(false),
+        _ => None,
+    }
+}
+
+/// The address a tab shows for `url` under `mode` -- prefixed for a source view, so the
+/// address bar says what the tab is actually showing.
+fn displayed_url(mode: &GosubRenderMode, url: &url::Url) -> url::Url {
+    let prefix = match source_mode(mode) {
+        Some(true) => "view-source:",
+        Some(false) => "raw:",
+        None => return url.clone(),
+    };
+    url::Url::parse(&format!("{prefix}{url}")).unwrap_or_else(|_| url.clone())
 }
 
 impl BeaconBrowser {
@@ -286,12 +347,19 @@ impl BeaconBrowser {
                 any = true;
             }
             if any {
-                self.pending.push(BeaconEvent::Redraw);
+                self.pending.push(Outgoing::Core(BeaconEvent::Redraw));
             }
         }
 
         loop {
             match self.events.try_recv() {
+                // A hit test is answered to the shell that asked, not to `beacon-core`,
+                // which has no opinion about what is under a pointer.
+                Ok(EngineEvent::HitTestResult { token, hit, .. }) => {
+                    let Some(tab_id) = self.hit_tabs.remove(&token.0) else { continue };
+                    self.hit = Some(hit);
+                    self.pending.push(Outgoing::HitTest(tab_id, token.0));
+                }
                 Ok(event) => {
                     let out = self.beacon.on_engine_event(event);
                     for e in &out {
@@ -307,12 +375,101 @@ impl BeaconBrowser {
                             _ => {}
                         }
                     }
-                    self.pending.extend(out);
+                    self.queue(out);
                 }
                 Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => continue,
                 Err(_) => break,
             }
         }
+    }
+
+    /// Queue events for the shell, acting on the ones this layer owes an answer to.
+    ///
+    /// Two of them are not just passed on. A failed navigation gets the shared error page
+    /// pushed into its tab, because a tab showing nothing at all is indistinguishable from
+    /// a browser that hung; and any change to the tabs rewrites the session file, so a
+    /// shell never has to remember to save one.
+    fn queue(&mut self, events: Vec<BeaconEvent>) {
+        for event in events {
+            match &event {
+                BeaconEvent::NavigationFailed(tab_id, url, error) => {
+                    // Pressing Stop arrives here too, and replacing the page someone just
+                    // stopped loading with an error is the opposite of what they asked for.
+                    if !beacon_core::error_page::is_cancellation(error) {
+                        self.show_error_page(*tab_id, url.as_str(), error);
+                    }
+                }
+                BeaconEvent::TabsChanged => self.save_session(),
+                _ => {}
+            }
+            self.pending.push(Outgoing::Core(event));
+        }
+    }
+
+    /// Push the shared error page into a tab whose navigation failed.
+    ///
+    /// The tab keeps its history, its address and its reload button: what failed is a
+    /// page, not the browser, and the shell should not have to draw a special state for it.
+    fn show_error_page(&mut self, tab_id: TabId, url: &str, error: &str) {
+        {
+            let mut tabs = self.tabs.lock().unwrap();
+            if let Some(mut tab) = tabs.get_tab(tab_id) {
+                tab.set_loading(false);
+                tabs.update_tab(tab_id, &tab);
+            }
+        }
+        let html = beacon_core::error_page::build(url, error);
+        self.send_and_draw(
+            tab_id,
+            TabCommand::LoadHtml {
+                html,
+                base_url: url.to_string(),
+            },
+        );
+    }
+
+    /// Write the open tabs to the session file, so the next start can offer them back.
+    ///
+    /// Done here rather than asked of the shell: a session that only some frontends save is
+    /// worse than none, and this layer already sees every change to the tab list. A private
+    /// browser writes nothing -- that is most of what makes it private.
+    fn save_session(&mut self) {
+        if self.private {
+            return;
+        }
+        let tabs = self.tabs.lock().unwrap();
+        let active = tabs.active();
+        let session: Vec<beacon_core::session::SessionTab> = tabs
+            .order()
+            .iter()
+            .filter_map(|id| {
+                tabs.get_tab(*id).map(|tab| beacon_core::session::SessionTab {
+                    url: tab.url().to_string(),
+                    pinned: tab.is_pinned(),
+                    active: Some(*id) == active,
+                })
+            })
+            .collect();
+        drop(tabs);
+        // An empty list is the moment between closing the last tab and opening the next
+        // one, not a session with nothing in it. Writing it would lose the real one.
+        if session.is_empty() {
+            return;
+        }
+
+        // `TabsChanged` also fires for a new title and a new favicon, neither of which is a
+        // session change -- so a page that updates its title while loading would otherwise
+        // rewrite this file several times for nothing.
+        let fingerprint = session
+            .iter()
+            .map(|tab| format!("{}{}{}", u8::from(tab.active), u8::from(tab.pinned), tab.url))
+            .collect::<Vec<_>>()
+            .join("\n");
+        if fingerprint == self.session_written {
+            return;
+        }
+        self.session_written = fingerprint;
+        beacon_core::session::save(&session);
     }
 
     /// Push the engine viewport derived from what the shell last said about this tab.
@@ -341,33 +498,123 @@ impl BeaconBrowser {
         self.viewports.get(&tab_id).map(|v| v.zoom).unwrap_or(1.0)
     }
 
-    /// Open a tab on `url`, optionally at a given strip position, and return its handle.
+    /// Open a tab on `address`, optionally at a given strip position, and return its handle.
     /// Shared by `beacon_open_tab` and `beacon_reopen_closed_tab` so a reopened tab is in
     /// every respect an ordinary one.
-    fn open_tab_at(&mut self, url: &str, position: Option<usize>) -> u64 {
-        let Ok((_mode, url)) = beacon_core::address_parser::GosubAddressParser::parse(url) else {
+    fn open_tab_at(&mut self, address: &str, position: Option<usize>) -> u64 {
+        let Ok((mode, url)) = beacon_core::address_parser::GosubAddressParser::parse(address) else {
             return 0;
         };
+        // What the tab's address bar will read. For `view-source:` that is the prefixed
+        // form, not the page behind it: the tab is showing the source, and reload has to be
+        // able to work that out from the address alone.
+        let display = displayed_url(&mode, &url);
 
-        let mut tab = GosubTab::new(url.clone(), url.as_str());
-        let Ok(engine_handle) = self.engine.create_tab(runtime(), url.as_str(), Some((1024, 768))) else {
+        let mut tab = GosubTab::new(display.clone(), display.as_str());
+        let Ok(engine_handle) = self.engine.create_tab(runtime(), display.as_str(), Some((1024, 768))) else {
             return 0;
         };
-        let engine_id = engine_handle.tab_id;
         tab.set_tab_handle(engine_handle.clone());
         tab.set_loading(true);
 
         let tab_id = tab.id();
         self.tabs.lock().unwrap().add_tab(tab, position);
-        self.beacon.bind_engine_tab(engine_id, tab_id);
+        self.beacon.bind_engine_tab(engine_handle.tab_id, tab_id);
         self.beacon.mru_mut().insert_unused(tab_id);
 
-        let target = url.to_string();
-        runtime().spawn(async move {
-            let _ = engine_handle.send(TabCommand::Navigate { url: target }).await;
-            let _ = engine_handle.send(TabCommand::ResumeDrawing { fps: DRAW_FPS }).await;
-        });
+        self.load(tab_id, address);
         self.handle_for(tab_id)
+    }
+
+    /// Load `address` into an existing tab, honouring what the address asks for.
+    ///
+    /// One path for every way a load starts -- a typed address, a menu item, a reopened
+    /// tab, a restarted worker -- so `view-source:` typed into the address bar and
+    /// `beacon_view_source` cannot end up meaning different things.
+    fn load(&mut self, tab_id: TabId, address: &str) {
+        let Ok((mode, url)) = beacon_core::address_parser::GosubAddressParser::parse(address) else {
+            return;
+        };
+        match source_mode(&mode) {
+            Some(highlighted) => self.load_source(tab_id, url, highlighted),
+            None => {
+                {
+                    let mut tabs = self.tabs.lock().unwrap();
+                    if let Some(mut tab) = tabs.get_tab(tab_id) {
+                        tab.set_url(url.clone());
+                        tab.set_loading(true);
+                        tabs.update_tab(tab_id, &tab);
+                    }
+                }
+                self.send_and_draw(tab_id, TabCommand::Navigate { url: url.to_string() });
+            }
+        }
+    }
+
+    /// Show the source of `inner` in `tab_id`, highlighted or raw.
+    ///
+    /// The engine cannot do this itself: it has no embedder-facing "fetch me this URL", so
+    /// the bytes are fetched beside it and the marked-up result is pushed in as a page.
+    /// `beacon_core::source_page` owns both halves, and the GTK shell renders the same one.
+    fn load_source(&mut self, tab_id: TabId, inner: url::Url, highlighted: bool) {
+        let prefix = if highlighted { "view-source:" } else { "raw:" };
+        let display = url::Url::parse(&format!("{prefix}{inner}")).unwrap_or_else(|_| inner.clone());
+
+        let handle = {
+            let mut tabs = self.tabs.lock().unwrap();
+            let Some(mut tab) = tabs.get_tab(tab_id) else { return };
+            // The favicon belonged to the rendered page; source is not that page.
+            tab.set_favicon(None);
+            tab.set_title(display.as_str());
+            tab.set_url(display.clone());
+            tab.set_loading(false);
+            tabs.update_tab(tab_id, &tab);
+            tab.tab_handle()
+        };
+        let Some(handle) = handle else { return };
+
+        // Read the user agent here, on this thread: the settings store is not reachable
+        // from the spawned task.
+        let user_agent = self.engine.settings().get_string("net.user_agent");
+        runtime().spawn(async move {
+            let html = match beacon_core::source_page::load(&inner, highlighted, user_agent).await {
+                Ok(html) => html,
+                // A source view that failed is a failed navigation like any other, and gets
+                // the same page rather than an empty tab.
+                Err(e) => beacon_core::error_page::build(display.as_str(), &e),
+            };
+            let _ = handle
+                .send(TabCommand::LoadHtml {
+                    html,
+                    base_url: display.to_string(),
+                })
+                .await;
+            let _ = handle.send(TabCommand::ResumeDrawing { fps: DRAW_FPS }).await;
+        });
+    }
+
+    /// Blit the tab's latest composited frame onto the view it is attached to.
+    ///
+    /// Shared by `beacon_draw_view` and by the resize, which must repaint for itself: the
+    /// two disagreeing about how a frame reaches a view is exactly how one of them ends up
+    /// showing nothing.
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    fn present_latest(&mut self, tab_id: TabId) -> bool {
+        let engine_id = self.tabs.lock().unwrap().get_tab(tab_id).and_then(|t| t.engine_tab_id());
+        let Some(engine_id) = engine_id else { return false };
+        let Some(ExternalHandle::WgpuTextureId { id, .. }) = self.engine.compositor.frame_for(engine_id) else {
+            return false;
+        };
+        let Some((_, page)) = gosub_renderer_vello::WgpuContextProvider::get_texture(&*self.gpu, id) else {
+            return false;
+        };
+        let gpu = self.gpu.clone();
+        match self.views.get_mut(&tab_id) {
+            // What `present` reports, not merely "a view exists": a shell told the page was
+            // drawn when it was not has no way to tell a blank view from a blank page.
+            Some(surface) => surface.present(&gpu, &page),
+            None => false,
+        }
     }
 
     fn send(&self, tab_id: TabId, command: TabCommand) {
@@ -454,6 +701,14 @@ pub unsafe extern "C" fn beacon_new(config: *const BeaconConfig) -> *mut BeaconB
         history: Vec::new(),
         timings: Vec::new(),
         logs: Vec::new(),
+        requests: Vec::new(),
+        settings: Vec::new(),
+        forward: Vec::new(),
+        session: Vec::new(),
+        session_written: String::new(),
+        hit_tabs: HashMap::new(),
+        hit: None,
+        next_hit_token: 1,
         private,
         viewports: HashMap::new(),
         progress: HashMap::new(),
@@ -502,6 +757,22 @@ pub unsafe extern "C" fn beacon_open_tab(browser: *mut BeaconBrowser, url: *cons
     let b = browser!(browser, 0);
     let Some(url) = to_str(url) else { return 0 };
     b.open_tab_at(url, None)
+}
+
+/// Open a tab immediately after `after`, rather than at the end of the strip.
+///
+/// What "New Tab to the Right" and "Duplicate Tab" mean: a tab opened from another one
+/// belongs beside it, not behind every tab opened since. Falls back to the end of the strip
+/// when `after` is not a tab this browser has.
+///
+/// # Safety
+/// `url` must be a NUL-terminated string.
+#[no_mangle]
+pub unsafe extern "C" fn beacon_open_tab_after(browser: *mut BeaconBrowser, url: *const c_char, after: u64) -> u64 {
+    let b = browser!(browser, 0);
+    let Some(url) = to_str(url) else { return 0 };
+    let position = b.tab(after).and_then(|tab_id| b.strip_position(tab_id)).map(|index| index + 1);
+    b.open_tab_at(url, position)
 }
 
 /// Reopen the most recently closed tab, at the position it was closed from. Returns its
@@ -699,18 +970,7 @@ pub unsafe extern "C" fn beacon_navigate(browser: *mut BeaconBrowser, tab: u64, 
     let b = browser!(browser);
     let Some(tab_id) = b.tab(tab) else { return };
     let Some(url) = to_str(url) else { return };
-    let Ok((_mode, url)) = beacon_core::address_parser::GosubAddressParser::parse(url) else {
-        return;
-    };
-    {
-        let mut tabs = b.tabs.lock().unwrap();
-        if let Some(mut t) = tabs.get_tab(tab_id) {
-            t.set_url(url.clone());
-            t.set_loading(true);
-            tabs.update_tab(tab_id, &t);
-        }
-    }
-    b.send_and_draw(tab_id, TabCommand::Navigate { url: url.to_string() });
+    b.load(tab_id, url);
 }
 
 macro_rules! active_command {
@@ -721,7 +981,7 @@ macro_rules! active_command {
         pub unsafe extern "C" fn $name(browser: *mut BeaconBrowser) {
             let b = browser!(browser);
             let events = b.beacon.apply($command);
-            b.pending.extend(events);
+            b.queue(events);
         }
     };
 }
@@ -735,8 +995,21 @@ active_command!(beacon_stop, BeaconCommand::Stop);
 #[no_mangle]
 pub unsafe extern "C" fn beacon_reload(browser: *mut BeaconBrowser, ignore_cache: bool) {
     let b = browser!(browser);
+
+    // A source view was never a navigation the engine made -- it is HTML this layer built
+    // and pushed in -- so there is nothing for the engine to reload. Fetch it again instead,
+    // which is what the address in the bar says should happen.
+    let active = b.beacon.active();
+    let address = active.and_then(|tab_id| b.tabs.lock().unwrap().get_tab(tab_id).map(|t| t.url().to_string()));
+    if let (Some(tab_id), Some(address)) = (active, address) {
+        if matches!(address.split(':').next(), Some("view-source" | "raw")) {
+            b.load(tab_id, &address);
+            return;
+        }
+    }
+
     let events = b.beacon.apply(BeaconCommand::Reload { ignore_cache });
-    b.pending.extend(events);
+    b.queue(events);
 }
 
 // ── input ────────────────────────────────────────────────────────────────────
@@ -1295,6 +1568,23 @@ pub unsafe extern "C" fn beacon_timing_namespace(browser: *mut BeaconBrowser, in
     }
 }
 
+/// What that namespace measures, in a sentence -- for a tooltip beside the row.
+///
+/// The engine names its own timers and describes them; a namespace it does not know (one a
+/// caller timed by hand) has no description, and this returns NULL rather than repeating
+/// the name back. Free with [`beacon_string_free`].
+///
+/// # Safety
+/// `browser` must be a live handle from [`beacon_new`].
+#[no_mangle]
+pub unsafe extern "C" fn beacon_timing_describes(browser: *mut BeaconBrowser, index: usize) -> *mut c_char {
+    let b = browser!(browser, std::ptr::null_mut());
+    match b.timings.get(index).and_then(|stats| stats.timing) {
+        Some(timing) => to_c_string(timing.describes()),
+        None => std::ptr::null_mut(),
+    }
+}
+
 /// The numbers for a snapshot row. False when out of range, leaving `out` untouched.
 ///
 /// # Safety
@@ -1494,7 +1784,7 @@ pub unsafe extern "C" fn beacon_download_state(browser: *mut BeaconBrowser, id: 
 pub unsafe extern "C" fn beacon_download_open(browser: *mut BeaconBrowser, id: u64) {
     let b = browser!(browser);
     let events = b.beacon.apply(BeaconCommand::OpenDownload(id));
-    b.pending.extend(events);
+    b.queue(events);
 }
 
 // ── events ───────────────────────────────────────────────────────────────────
@@ -1516,9 +1806,29 @@ pub unsafe extern "C" fn beacon_poll_events(browser: *mut BeaconBrowser, out: *m
     b.strings.clear();
 
     let taking = b.pending.len().min(max);
-    let batch: Vec<BeaconEvent> = b.pending.drain(..taking).collect();
+    let batch: Vec<Outgoing> = b.pending.drain(..taking).collect();
 
-    for (i, event) in batch.into_iter().enumerate() {
+    for (i, outgoing) in batch.into_iter().enumerate() {
+        let event = match outgoing {
+            Outgoing::Core(event) => event,
+            // Not a `BeaconEvent`: the answer to a question only this ABI asks. The token
+            // goes back so a shell with two menus in flight knows which one this answers.
+            Outgoing::HitTest(tab_id, token) => {
+                let tab = b.handle_for(tab_id);
+                unsafe {
+                    std::ptr::write(
+                        out.add(i),
+                        BeaconCEvent {
+                            kind: BeaconEventKind::HitTest,
+                            tab,
+                            text: std::ptr::null(),
+                            number: token as f64,
+                        },
+                    );
+                }
+                continue;
+            }
+        };
         let (kind, tab_id, text, number) = match event {
             BeaconEvent::Redraw => (BeaconEventKind::Redraw, None, None, 0.0),
             BeaconEvent::TabsChanged => (BeaconEventKind::TabsChanged, None, None, 0.0),
@@ -1529,7 +1839,11 @@ pub unsafe extern "C" fn beacon_poll_events(browser: *mut BeaconBrowser, out: *m
             BeaconEvent::LoadProgress(t, fraction) => (BeaconEventKind::Progress, Some(t), None, fraction.unwrap_or(-1.0)),
             BeaconEvent::FaviconChanged(t) => (BeaconEventKind::FaviconChanged, Some(t), None, 0.0),
             BeaconEvent::NavStateChanged(t) => (BeaconEventKind::NavStateChanged, Some(t), None, 0.0),
-            BeaconEvent::NavigationFailed(t, url, error) => (BeaconEventKind::Log, Some(t), Some(format!("{url}: {error}")), 0.0),
+            // The tab already has the error page in it (see `queue`); this says what
+            // happened, for a shell that wants to put it in a status line or its own log.
+            BeaconEvent::NavigationFailed(t, url, error) => {
+                (BeaconEventKind::NavigationFailed, Some(t), Some(format!("{url}: {error}")), 0.0)
+            }
             BeaconEvent::TabCrashed(t, error) => (BeaconEventKind::TabCrashed, Some(t), Some(error), 0.0),
             BeaconEvent::HoverUrl(t, url) => (BeaconEventKind::HoverUrl, Some(t), url, 0.0),
             BeaconEvent::CursorChanged(t, cursor) => (
@@ -1790,9 +2104,14 @@ pub unsafe extern "C" fn beacon_resize_view(browser: *mut BeaconBrowser, tab: u6
         let b = browser!(browser);
         let Some(tab_id) = b.tab(tab) else { return };
         let gpu = b.gpu.clone();
-        if let Some(surface) = b.views.get_mut(&tab_id) {
-            surface.resize(&gpu, width, height);
-        }
+        let Some(surface) = b.views.get_mut(&tab_id) else { return };
+        surface.resize(&gpu, width, height);
+        // Reconfiguring throws away what the surface was showing, and the engine's frame at
+        // the new size is a layout away. Put the last one back up rather than leave the view
+        // blank in the meantime: a stretched page for two frames reads as a resize, an empty
+        // one reads as a crash -- and if the page is settled enough that the engine sends no
+        // new frame at all, "in the meantime" never ends.
+        b.present_latest(tab_id);
     }
 }
 
@@ -1814,21 +2133,6 @@ pub unsafe extern "C" fn beacon_draw_view(browser: *mut BeaconBrowser, tab: u64)
     {
         let b = browser!(browser, false);
         let Some(tab_id) = b.tab(tab) else { return false };
-        let engine_id = b.tabs.lock().unwrap().get_tab(tab_id).and_then(|t| t.engine_tab_id());
-        let Some(engine_id) = engine_id else { return false };
-        let Some(ExternalHandle::WgpuTextureId { id, .. }) = b.engine.compositor.frame_for(engine_id) else {
-            return false;
-        };
-        let Some((_, page)) = gosub_renderer_vello::WgpuContextProvider::get_texture(&*b.gpu, id) else {
-            return false;
-        };
-        let gpu = b.gpu.clone();
-        match b.views.get(&tab_id) {
-            Some(surface) => {
-                surface.present(&gpu, &page);
-                true
-            }
-            None => false,
-        }
+        b.present_latest(tab_id)
     }
 }

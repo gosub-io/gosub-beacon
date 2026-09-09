@@ -583,6 +583,17 @@ pub fn set_capture_bodies(enabled: bool) {
     gosub_engine::set_capture_body_previews(enabled);
 }
 
+/// Show request `Cookie` and `Authorization` values, or leave them redacted.
+///
+/// The engine redacts them by default, because the event carrying them is an API and goes
+/// wherever an embedder sends it. A browser's own developer tools are the case where showing
+/// them is the point -- "is my session cookie going out with this request?" is most of why
+/// anyone opens the request view -- so this is switched on while the panel is open, and off
+/// with it, the way body capture is.
+pub fn set_show_sensitive_headers(enabled: bool) {
+    gosub_engine::set_send_sensitive_headers(enabled);
+}
+
 /// Render a captured body for display: text as text, anything else described rather than
 /// spilled as mojibake.
 pub fn format_body(bytes: &[u8], truncated: bool) -> String {

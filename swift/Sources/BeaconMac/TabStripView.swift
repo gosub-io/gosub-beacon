@@ -300,7 +300,9 @@ final class TabStripView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         NSColor.windowBackgroundColor.setFill()
-        dirtyRect.fill()
+        // Clipped to the view: since macOS 14 a view does not clip its own drawing, and a
+        // dirty rect can be larger than the view.
+        dirtyRect.intersection(bounds).fill()
         // A hairline under the strip, separating chrome from page.
         NSColor.separatorColor.setStroke()
         let line = NSBezierPath()

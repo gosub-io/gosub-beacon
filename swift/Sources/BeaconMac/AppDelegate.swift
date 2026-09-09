@@ -13,14 +13,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// when the last of them closes — which is what actually makes it private: the engine
     /// holds its cookies and storage in memory, so tearing it down is what forgets them.
     private var privateBrowser: Browser?
-    private let startURL: String
+    /// The address asked for on the command line, if any. Nothing means "carry on where
+    /// the last session left off".
+    private let startURL: String?
     /// Held so the window survives being closed and can be reopened.
     private var aboutWindow: AboutWindowController?
+    /// Likewise the Settings window, which is one window for the application rather than
+    /// one per browser window — the settings it edits are the engine's, and there is one
+    /// engine.
+    private var settingsWindow: SettingsWindowController?
     /// Kept so its title can follow the panel's state — a menu item that says "Show" while
     /// the thing is already showing is a small lie the user has to work around.
     private weak var developToggleItem: NSMenuItem?
 
-    init(startURL: String) {
+    init(startURL: String?) {
         self.startURL = startURL
     }
 
@@ -34,13 +40,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
         buildMenuBar()
         WindowRegistry.shared.onChange = { [weak self] in self?.pruneSessions() }
-        newWindow(startURL: startURL)
+        openFirstWindow(browser: browser)
         NSApp.activate(ignoringOtherApps: true)
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
+    /// Clicking the Dock icon with no browser window open gives one back, rather than
+    /// bringing forward the Settings window and nothing else.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        if WindowRegistry.shared.frontmost == nil {
+            newWindow(startURL: browser?.homepage)
+        }
+        return true
+    }
+
     // ── windows ───────────────────────────────────────────────────────────
+
+    /// The first window of the run: the address asked for on the command line, or else the
+    /// tabs the last session had open.
+    ///
+    /// Restoring only when nothing was asked for is what the GTK shell does, and it is the
+    /// behaviour that makes `open -a Beacon https://…` mean what it says.
+    private func openFirstWindow(browser: Browser) {
+        if let startURL {
+            newWindow(startURL: startURL)
+            return
+        }
+
+        let session = browser.previousSession()
+        guard !session.isEmpty, let window = newWindow(startURL: nil) else {
+            newWindow(startURL: browser.homepage)
+            return
+        }
+        window.restore(session)
+    }
 
     @discardableResult
     private func newWindow(startURL: String?) -> BrowserWindowController? {
@@ -51,7 +85,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     @objc private func newWindowAction(_ sender: Any?) {
-        newWindow(startURL: "gosub://home")
+        newWindow(startURL: browser?.homepage)
     }
 
     @objc private func newPrivateWindowAction(_ sender: Any?) {
@@ -66,7 +100,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             privateBrowser = session
         }
         guard let privateBrowser else { return }
-        let controller = BrowserWindowController(browser: privateBrowser, startURL: "gosub://home")
+        // A private window never restores a session and never contributes to one, so it
+        // starts where a new tab would.
+        let controller = BrowserWindowController(browser: privateBrowser, startURL: privateBrowser.homepage)
         WindowRegistry.shared.add(controller)
     }
 
@@ -85,7 +121,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     // Menu items target this delegate rather than a window, because a menu bar belongs to
     // the application and may fire when no window is key at all.
 
-    @objc private func newTab(_ sender: Any?) { front?.newTab(sender) }
+    /// A new tab needs a window to put it in. With none — every browser window closed, but
+    /// the Settings or About window keeping the application alive — ⌘T means "a window",
+    /// which is what it means everywhere else on the Mac.
+    @objc private func newTab(_ sender: Any?) {
+        if let front {
+            front.newTab(sender)
+        } else {
+            newWindow(startURL: browser?.homepage)
+        }
+    }
     @objc private func closeTab(_ sender: Any?) { front?.closeTab(sender) }
     @objc private func reopenClosedTab(_ sender: Any?) { front?.reopenClosedTab(sender) }
     @objc private func focusAddressBar(_ sender: Any?) { front?.focusAddressBar(sender) }
@@ -102,10 +147,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     @objc private func toggleBookmarksBar(_ sender: Any?) { front?.toggleBookmarksBar(sender) }
     @objc private func selectNextTab(_ sender: Any?) { front?.selectNextTab(sender) }
     @objc private func selectPreviousTab(_ sender: Any?) { front?.selectPreviousTab(sender) }
-    @objc private func engineSettings(_ sender: Any?) { front?.showEngineSettings(sender) }
+    @objc private func showSettings(_ sender: Any?) {
+        guard let browser else { return }
+        if settingsWindow == nil {
+            settingsWindow = SettingsWindowController(browser: browser)
+        }
+        settingsWindow?.showWindow(nil)
+        settingsWindow?.window?.makeKeyAndOrderFront(nil)
+    }
     @objc private func toggleDeveloperTools(_ sender: Any?) { front?.toggleDeveloperTools(sender) }
     @objc private func showConsole(_ sender: Any?) { front?.showConsole(sender) }
     @objc private func showTimings(_ sender: Any?) { front?.showTimings(sender) }
+    @objc private func showNetwork(_ sender: Any?) { front?.showNetwork(sender) }
     @objc private func resetTimings(_ sender: Any?) { front?.resetTimings(sender) }
     @objc private func viewSource(_ sender: Any?) { front?.viewSource(sender) }
 
@@ -116,6 +169,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// Menu items point at this delegate rather than at a window, so the window's own
     /// validation is never consulted — greying Back and Forward has to happen here.
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        // Items that belong to the application rather than to a window stay live even when
+        // no browser window is key — which is exactly the state someone is in while the
+        // Settings or About window is in front.
+        switch item.action {
+        case #selector(showSettings(_:)), #selector(newWindowAction(_:)), #selector(newPrivateWindowAction(_:)),
+            #selector(newTab(_:)), #selector(showAbout), #selector(showHelpPage(_:)), #selector(showVersionPage(_:)):
+            return browser != nil
+        default:
+            break
+        }
+
         guard let front else { return false }
         switch item.action {
         case #selector(goBack(_:)):
@@ -133,11 +197,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     @objc private func showHelpPage(_ sender: Any?) {
-        front?.openTab("gosub://help", activate: true)
+        openPage("gosub://help")
     }
 
     @objc private func showVersionPage(_ sender: Any?) {
-        front?.openTab("gosub://version", activate: true)
+        openPage("gosub://version")
+    }
+
+    /// Show a page in the front window, or in a new one when there is no window to show it
+    /// in. An item that is enabled and does nothing is worse than one that is greyed out.
+    private func openPage(_ url: String) {
+        if let front {
+            front.openTab(url, activate: true)
+        } else {
+            newWindow(startURL: url)
+        }
     }
 
     // ── the menu bar ──────────────────────────────────────────────────────
@@ -200,7 +274,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         return submenu("Gosub Beacon", [
             about,
             .separator(),
-            item("Engine Settings", #selector(engineSettings(_:))),
+            // "Settings…" with ⌘, is where every Mac application keeps this, and since
+            // macOS 13 it is what the item is called. The GTK shell shows the same store as
+            // a gosub://config page.
+            item("Settings…", #selector(showSettings(_:)), ","),
             .separator(),
             hide, hideOthers, showAll,
             .separator(),
@@ -287,11 +364,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             toggle,
             .separator(),
             item("Console", #selector(showConsole(_:)), "c", [.command, .option]),
+            item("Network", #selector(showNetwork(_:)), "n", [.command, .option]),
             item("Timings", #selector(showTimings(_:)), "t", [.command, .option]),
             item("Reset Timings", #selector(resetTimings(_:))),
             .separator(),
             item("View Source", #selector(viewSource(_:)), "u", [.command, .option]),
-            item("Engine Settings", #selector(engineSettings(_:))),
         ])
     }
 

@@ -576,6 +576,10 @@ impl BrowserWindow {
         // Bodies are only copied while someone can look at them. This is the switch that
         // keeps the network panel free for every page that is not being inspected.
         beacon_core::devtools::set_capture_bodies(showing);
+        // Same window for the header values the engine redacts by default: a request view
+        // that will not show you your own `Cookie` cannot answer the question it is usually
+        // opened to answer.
+        beacon_core::devtools::set_show_sensitive_headers(showing);
 
         if let Some(source) = self.devtools_tick.borrow_mut().take() {
             source.remove();
@@ -1797,18 +1801,8 @@ impl BrowserWindow {
             .map(|e| e.settings().get_string("net.user_agent"))
             .unwrap_or_default();
         runtime().spawn(async move {
-            let result: Result<Vec<u8>, String> = if inner.scheme() == "file" {
-                match inner.to_file_path() {
-                    Ok(path) => std::fs::read(&path).map_err(|e| e.to_string()),
-                    Err(()) => Err("not a local file path".into()),
-                }
-            } else {
-                crate::fetch::url_body(inner.clone(), user_agent).await
-            };
-            match result {
-                Ok(bytes) => {
-                    let source = String::from_utf8_lossy(&bytes);
-                    let html = beacon_core::source_page::build(inner.as_str(), &source, !raw);
+            match beacon_core::source_page::load(&inner, !raw, user_agent).await {
+                Ok(html) => {
                     let _ = handle
                         .send(EngineTabCommand::LoadHtml {
                             html,
@@ -1993,7 +1987,7 @@ impl BrowserWindow {
     /// A navigation failed: clear the loading state and show the error page.
     fn on_navigation_failed(&self, our_id: TabId, url: &url::Url, error: &str) {
         // Cancellations (stop button) are not errors.
-        if error.to_lowercase().contains("cancel") {
+        if beacon_core::error_page::is_cancellation(error) {
             return;
         }
 
@@ -2008,13 +2002,11 @@ impl BrowserWindow {
     }
 
     /// Push the branded error page into a tab whose navigation failed.
+    ///
+    /// The page itself is `beacon_core::error_page`'s, shared with every other frontend;
+    /// what is left here is getting it into this tab.
     fn load_error_page(&self, tab_id: TabId, url: &url::Url, error: &str) {
-        fn esc(s: &str) -> String {
-            s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
-        }
-        let html = include_str!("../../resources/error.html")
-            .replace("{{URL}}", &esc(url.as_str()))
-            .replace("{{ERROR}}", &esc(error));
+        let html = beacon_core::error_page::build(url.as_str(), error);
 
         let manager = self.tab_manager.lock().unwrap();
         let Some(handle) = manager.get_tab(tab_id).and_then(|t| t.tab_handle()) else {

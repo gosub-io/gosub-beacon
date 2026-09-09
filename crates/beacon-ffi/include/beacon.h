@@ -66,7 +66,13 @@ typedef enum {
     BEACON_DOWNLOAD_OFFERED = 11,  /* `text` suggested filename, `number` the offer id   */
     BEACON_TAB_CRASHED = 12,       /* `text` is the reason; the tab is still in the strip */
     BEACON_LOG = 13,               /* `text` is worth showing a developer                */
-    BEACON_DOWNLOAD_CHANGED = 14   /* `number` is the download id; re-read its progress  */
+    BEACON_DOWNLOAD_CHANGED = 14,  /* `number` is the download id; re-read its progress  */
+    /* A navigation failed; `text` is "<url>: <error>". The tab already holds the error
+     * page -- this is for a status line, not for you to draw anything. */
+    BEACON_NAVIGATION_FAILED = 15,
+    /* An answer to beacon_hit_test; `number` is the token you were given. Read it with
+     * beacon_hit_link and friends before the next hit test replaces it. */
+    BEACON_HIT_TEST = 16
 } BeaconEventKind;
 
 typedef struct {
@@ -110,6 +116,9 @@ bool beacon_is_private(BeaconBrowser *browser);
 /* Open a tab and start loading. Returns 0 if the URL could not be parsed. Accepts what a
  * user would type: "example.com", "gosub://home", "/etc/hosts". */
 BeaconTabId beacon_open_tab(BeaconBrowser *browser, const char *url);
+/* Open a tab immediately after `after` rather than at the end of the strip -- what "New Tab
+ * to the Right" and "Duplicate Tab" mean. Falls back to the end when `after` is not a tab. */
+BeaconTabId beacon_open_tab_after(BeaconBrowser *browser, const char *url, BeaconTabId after);
 /* Refuses to close the last tab, as the GTK shell does. */
 void beacon_close_tab(BeaconBrowser *browser, BeaconTabId tab);
 /* Also suspends drawing in the tab being left and resumes it in this one, so background
@@ -274,8 +283,224 @@ size_t beacon_timing_snapshot(BeaconBrowser *browser);
 char *beacon_timing_namespace(BeaconBrowser *browser, size_t index);
 /* False when out of range, leaving *out untouched. */
 bool beacon_timing_at(BeaconBrowser *browser, size_t index, BeaconTiming *out);
+/* What that namespace measures, in a sentence -- for a tooltip beside the row. NULL for a
+ * namespace the engine does not know (one a caller timed by hand), rather than the name
+ * repeated back. Free with beacon_string_free. */
+char *beacon_timing_describes(BeaconBrowser *browser, size_t index);
 /* Start measuring again from nothing — time one navigation, not every one since launch. */
 void beacon_timing_reset(BeaconBrowser *browser);
+
+
+/* ── the network panel ─────────────────────────────────────────────────────────
+ *
+ * Same shape as the snapshots above: copy, then read by index. The rows are folded
+ * together from the engine's resource events in beacon-core, so this pane and the GTK one
+ * show the same requests rather than each learning to read the engine.
+ */
+
+/* A field the engine never reported, as distinct from one that is really zero: a request
+ * served by a pooled connection resolved nothing, which is not resolving in no time. */
+#define BEACON_ABSENT UINT64_MAX
+
+typedef enum {
+    BEACON_REQUEST_QUEUED = 0,
+    BEACON_REQUEST_RUNNING = 1,
+    BEACON_REQUEST_FINISHED = 2,
+    BEACON_REQUEST_FAILED = 3,
+    BEACON_REQUEST_CANCELLED = 4
+} BeaconRequestState;
+
+/* How far an unfinished request got. "Loading" for thirty seconds says nothing; *where* it
+ * has been loading for thirty seconds says everything -- stuck before the connection is a
+ * host problem, stuck after the request went out is a server that answered nothing, stuck
+ * part way through the body is a transfer that died mid-stream. */
+typedef enum {
+    BEACON_PHASE_QUEUED = 0,
+    BEACON_PHASE_OPENING = 1,
+    BEACON_PHASE_CONNECTING = 2,
+    BEACON_PHASE_WAITING = 3,
+    BEACON_PHASE_RECEIVING = 4,
+    BEACON_PHASE_DONE = 5
+} BeaconRequestPhase;
+
+typedef struct {
+    uint64_t started_ms;      /* first seen, ms since the epoch; rows are in this order   */
+    uint64_t received_bytes;
+    uint64_t content_length;  /* what the server said it would send; BEACON_ABSENT if not */
+    uint64_t elapsed_us;      /* BEACON_ABSENT while still in flight                      */
+    uint64_t dns_us;          /* BEACON_ABSENT on a reused connection                     */
+    uint64_t connect_us;      /* encloses dns_us rather than following it                 */
+    uint64_t headers_ms;      /* when the response headers landed, same clock as started  */
+    uint32_t status;          /* 0 until a response line arrives                          */
+    BeaconRequestState state;
+    BeaconRequestPhase phase;
+    size_t request_header_count;
+    size_t response_header_count;
+    size_t redirect_count;
+    bool has_body;
+    bool body_truncated;      /* the response continued past the captured preview         */
+    bool body_evicted;        /* captured, then dropped for budget -- say so, it differs  */
+} BeaconRequest;
+
+/* Copy the requests for `tab` -- or every tab when it is 0 -- and return how many. */
+size_t beacon_net_snapshot(BeaconBrowser *browser, BeaconTabId tab);
+bool beacon_net_at(BeaconBrowser *browser, size_t index, BeaconRequest *out);
+/* Forget every recorded request. Process-wide: there is one recorder. */
+void beacon_net_clear(BeaconBrowser *browser);
+/* Copy response bodies as they arrive. Off by default, and meant to follow your panel's
+ * visibility: a panel nobody has opened has no business holding page bodies in memory. */
+void beacon_net_set_capture_bodies(BeaconBrowser *browser, bool enabled);
+/* Show `cookie`, `authorization` and `proxy-authorization` rather than "[redacted]". Same
+ * window as body capture: a request view that will not show you your own Cookie cannot
+ * answer the question it was opened to answer. */
+void beacon_net_set_show_sensitive_headers(BeaconBrowser *browser, bool enabled);
+/* How many bytes of captured bodies are being held, across every request. */
+size_t beacon_net_captured_body_bytes(BeaconBrowser *browser);
+
+/* All free with beacon_string_free, and all NULL when there is nothing to say -- a request
+ * that never reached the wire has no method, which is not an empty one. */
+char *beacon_net_url(BeaconBrowser *browser, size_t index);
+char *beacon_net_kind(BeaconBrowser *browser, size_t index);        /* document, script... */
+char *beacon_net_initiator(BeaconBrowser *browser, size_t index);   /* navigation, parser  */
+char *beacon_net_method(BeaconBrowser *browser, size_t index);
+char *beacon_net_content_type(BeaconBrowser *browser, size_t index);
+char *beacon_net_error(BeaconBrowser *browser, size_t index);
+char *beacon_net_state_label(BeaconBrowser *browser, size_t index);
+char *beacon_net_phase_label(BeaconBrowser *browser, size_t index);
+/* What to suspect about a request stuck in this phase, in words for a person. */
+char *beacon_net_phase_hint(BeaconBrowser *browser, size_t index);
+/* "TLS", "timeout", "no connection" -- the kind of failure, when the stack classified it.
+ * A status column showing this rather than "err" is the difference between a panel that
+ * sends you somewhere and one that does not. */
+char *beacon_net_failure_label(BeaconBrowser *browser, size_t index);
+char *beacon_net_failure_hint(BeaconBrowser *browser, size_t index);
+/* The captured body, decoded for display. NULL when none was captured: check body_evicted
+ * to tell "dropped to stay in budget" from "never taken". */
+char *beacon_net_body_text(BeaconBrowser *browser, size_t index);
+
+char *beacon_net_request_header_name(BeaconBrowser *browser, size_t index, size_t header);
+char *beacon_net_request_header_value(BeaconBrowser *browser, size_t index, size_t header);
+char *beacon_net_response_header_name(BeaconBrowser *browser, size_t index, size_t header);
+char *beacon_net_response_header_value(BeaconBrowser *browser, size_t index, size_t header);
+uint32_t beacon_net_redirect_status(BeaconBrowser *browser, size_t index, size_t hop);
+char *beacon_net_redirect_url(BeaconBrowser *browser, size_t index, size_t hop);
+
+/* ── what is under the pointer ─────────────────────────────────────────────── */
+
+/* Ask what is at (x, y) in the page, in CSS pixels; returns a token, or 0. The answer
+ * arrives as a BEACON_HIT_TEST event carrying the same token, and is then read with the
+ * accessors below.
+ *
+ * Asynchronous because the engine answers from the layout tree on its own thread. A
+ * context menu is why this exists: the hover URL only covers a pointer sitting still on a
+ * link, and "Open Link in New Tab" has to know there is one under the click. */
+uint64_t beacon_hit_test(BeaconBrowser *browser, BeaconTabId tab, float x, float y);
+/* From the last answer. Free with beacon_string_free; NULL when there was none. */
+char *beacon_hit_link(BeaconBrowser *browser);
+char *beacon_hit_image(BeaconBrowser *browser);
+char *beacon_hit_text(BeaconBrowser *browser);
+/* Always NULL until text selection lands in the engine. */
+char *beacon_hit_selection(BeaconBrowser *browser);
+bool beacon_hit_is_editable(BeaconBrowser *browser);
+
+/* ── the page's source ─────────────────────────────────────────────────────── */
+
+/* Open the source of `tab` in a new tab, highlighted unless `raw`. Returns its handle.
+ *
+ * The same thing as opening "view-source:<url>": those addresses work through
+ * beacon_open_tab and beacon_navigate too, so a typed address and this menu item cannot
+ * come apart. Reload on such a tab fetches the source again.
+ *
+ * The bytes come from a one-shot fetch beside the engine, carrying no cookies and sharing
+ * no cache with it -- the source of a page behind a login is the logged-out HTML. That is
+ * a known stopgap, not a property of this call. */
+BeaconTabId beacon_view_source(BeaconBrowser *browser, BeaconTabId tab, bool raw);
+
+/* ── a tab whose worker died ───────────────────────────────────────────────── */
+
+/* Why the tab crashed, or NULL if it did not. A crashed tab keeps its place, its title and
+ * its address: it is a tab that cannot draw, not a tab that is gone. Free with
+ * beacon_string_free. */
+char *beacon_tab_crash_reason(BeaconBrowser *browser, BeaconTabId tab);
+/* Give it a new engine worker and reload what it was showing, keeping its handle and its
+ * place in the strip. False when the engine would not make one. */
+bool beacon_revive_tab(BeaconBrowser *browser, BeaconTabId tab);
+
+/* ── where forward leads ───────────────────────────────────────────────────── */
+
+/* Snapshot the entries forward of where `tab` is, and return how many.
+ *
+ * Usually one -- the page you just came back from. More than one means the history forked:
+ * you went back and then somewhere else, and both branches are still there. That is what a
+ * press-and-hold on a Forward button offers. */
+size_t beacon_forward_snapshot(BeaconBrowser *browser, BeaconTabId tab);
+char *beacon_forward_url(BeaconBrowser *browser, size_t index);
+/* Go to entry `index` of that snapshot rather than the branch the engine prefers. */
+void beacon_forward_go(BeaconBrowser *browser, size_t index);
+
+/* ── the previous session ──────────────────────────────────────────────────── */
+
+/* The tabs the last session had open, newest state, in strip order. Returns how many.
+ *
+ * The file is written as the browser runs -- and never by a private session -- so there is
+ * nothing to call on the way out. Restore this when your shell starts with no URL of its
+ * own; that is what the GTK shell does. */
+size_t beacon_session_snapshot(BeaconBrowser *browser);
+char *beacon_session_url(BeaconBrowser *browser, size_t index);
+bool beacon_session_pinned(BeaconBrowser *browser, size_t index);
+bool beacon_session_active(BeaconBrowser *browser, size_t index);
+
+/* ── settings ──────────────────────────────────────────────────────────────────
+ *
+ * The engine's settings store, which GTK draws as a gosub://config page and a Mac shell
+ * will want as a Preferences window. The ABI hands over rows -- key, description, type,
+ * value, default, constraint -- and your shell decides what a boolean or a bounded number
+ * looks like on its platform.
+ */
+
+typedef enum {
+    BEACON_SETTING_BOOL = 0,
+    BEACON_SETTING_INT = 1,
+    BEACON_SETTING_UINT = 2,
+    BEACON_SETTING_FLOAT = 3,
+    BEACON_SETTING_STRING = 4,
+    BEACON_SETTING_MAP = 5 /* a comma-separated list, edited as text */
+} BeaconSettingType;
+
+/* Snapshot the settings whose key matches `filter` (NULL or "" for all; a `*` makes it a
+ * wildcard pattern, anything else is a case-insensitive substring), sorted. */
+size_t beacon_settings_snapshot(BeaconBrowser *browser, const char *filter);
+char *beacon_setting_key(BeaconBrowser *browser, size_t index);
+char *beacon_setting_description(BeaconBrowser *browser, size_t index);
+char *beacon_setting_value(BeaconBrowser *browser, size_t index);
+char *beacon_setting_default(BeaconBrowser *browser, size_t index);
+/* The accepted values in one line ("left | right", "-1 | 0-9999"), or NULL. */
+char *beacon_setting_constraint(BeaconBrowser *browser, size_t index);
+BeaconSettingType beacon_setting_type(BeaconBrowser *browser, size_t index);
+/* Whether it differs from the default -- what an editor marks, and what makes a reset
+ * control meaningful. */
+bool beacon_setting_is_modified(BeaconBrowser *browser, size_t index);
+/* Non-zero when the setting is restricted to literal choices: offer a popup, not a field. */
+size_t beacon_setting_choice_count(BeaconBrowser *browser, size_t index);
+char *beacon_setting_choice(BeaconBrowser *browser, size_t index, size_t choice);
+/* Bounds for a numeric setting, or false when it is not range-constrained. */
+bool beacon_setting_range(BeaconBrowser *browser, size_t index, int64_t *lo, int64_t *hi);
+
+/* Write a value, typed by the key's own schema: "true", "8080", "left". False when the key
+ * is unknown, the value is outside its constraint, or the store refused it -- put the
+ * editor back rather than assume it landed. Writing the default removes the override, so
+ * the profile only ever holds real changes.
+ *
+ * Some settings (net.*) are read once when the engine starts, so a write may only take
+ * effect next launch. That is the engine's behaviour, not this call's. */
+bool beacon_setting_set(BeaconBrowser *browser, const char *key, const char *value);
+/* Put a key back to its default, which means forgetting the override entirely. */
+bool beacon_setting_reset(BeaconBrowser *browser, const char *key);
+
+/* The page a new tab opens on (useragent.general.homepage, or gosub://home). Ask rather
+ * than hard-coding it, so the setting means the same thing in every frontend. Free with
+ * beacon_string_free. */
+char *beacon_homepage(BeaconBrowser *browser);
 
 /* ── downloads ─────────────────────────────────────────────────────────────── */
 

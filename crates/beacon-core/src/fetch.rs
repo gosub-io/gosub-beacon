@@ -2,7 +2,7 @@
 //!
 //! Everything else Beacon loads goes through the engine, which owns networking, cookies,
 //! the cache and the user agent. `view-source:` is the exception: it needs the raw bytes
-//! in the shell so [`crate::window::source_page`] can mark them up, and the engine has no
+//! in the shell so [`crate::source_page`] can mark them up, and the engine has no
 //! embedder-facing "fetch me this URL" API — its `net` fetcher is internal, reachable only
 //! through a navigation.
 //!
