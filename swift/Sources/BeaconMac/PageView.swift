@@ -19,8 +19,13 @@ final class PageView: NSView, NSTextInputClient {
     /// Called when the hovered link changes, so the window can show it.
     var onHoverChanged: ((String) -> Void)?
 
-    /// Reported so the window can offer "Open Link in New Tab" and friends.
-    var onContextMenu: ((NSEvent, String) -> Void)?
+    /// A right-click, with the page point it landed on. The window asks the engine what is
+    /// there and builds the menu from the answer — the hovered link alone would only cover
+    /// a pointer that had come to rest on one.
+    var onContextMenu: ((NSEvent, Float, Float) -> Void)?
+    /// A gesture that means "open what is here in another tab": ⌘-click, or a middle click.
+    /// The flag is whether to go there, which ⇧⌘-click asks for and the others do not.
+    var onOpenInNewTab: ((Float, Float, Bool) -> Void)?
     /// A completed two-finger horizontal swipe: -1 back, +1 forward.
     var onSwipeNavigate: ((Int) -> Void)?
     var onZoomGesture: ((CGFloat) -> Void)?
@@ -174,6 +179,13 @@ final class PageView: NSView, NSTextInputClient {
         guard tab != 0 else { return }
         window?.makeFirstResponder(self)
         let (x, y) = pagePoint(event)
+        // ⌘-click opens a link in a background tab and ⇧⌘-click in front of you, as in
+        // Safari and Chrome. The page never sees it: on a Mac this gesture belongs to the
+        // browser, and forwarding it as well would follow the link twice.
+        if event.modifierFlags.contains(.command) {
+            onOpenInNewTab?(x, y, event.modifierFlags.contains(.shift))
+            return
+        }
         browser.mouseDown(tab, x: x, y: y)
     }
 
@@ -185,18 +197,19 @@ final class PageView: NSView, NSTextInputClient {
 
     override func otherMouseDown(with event: NSEvent) {
         guard tab != 0, event.buttonNumber == 2 else { return }
+        // A middle click on a link is the same request as ⌘-click, so it is answered the
+        // same way rather than being sent to the page as a third mouse button.
         let (x, y) = pagePoint(event)
-        browser.mouseDown(tab, x: x, y: y, button: BEACON_BUTTON_MIDDLE)
-        browser.mouseUp(tab, x: x, y: y, button: BEACON_BUTTON_MIDDLE)
+        onOpenInNewTab?(x, y, false)
     }
 
     override func rightMouseDown(with event: NSEvent) {
         guard tab != 0 else { return }
-        // Move first so the engine's hit test — and therefore the hovered link this menu is
-        // built from — refers to where the click actually landed.
+        // Move first so the engine's own idea of what is under the pointer refers to where
+        // the click actually landed, and not to wherever it was last.
         let (x, y) = pagePoint(event)
         browser.mouseMoved(tab, x: x, y: y)
-        onContextMenu?(event, hoverURL)
+        onContextMenu?(event, x, y)
     }
 
     // ── scrolling, swiping, pinching ──────────────────────────────────────

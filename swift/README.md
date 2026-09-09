@@ -36,26 +36,57 @@ that never scrolls away. Back/forward/reload/stop, an address bar that takes wha
 would type, completes from history, selects on click and restores on Escape. Bookmarks with
 a favourites bar, downloads through an `NSSavePanel`, per-tab zoom, keyboard input to pages,
 two-finger swipe navigation, pinch to zoom, page and tab context menus, a hovered-link
-overlay, multiple windows, private windows, a developer panel, and the About window with the
-shell's artwork.
+overlay, multiple windows, private windows, a developer panel, a Settings window, session
+restore, view source, and the About window with the shell's artwork.
 
-**Developer panel** (`⌥⌘I`, or the Develop menu) docks under the page with two tabs:
+Right-click on the page asks the engine what is actually under the pointer, so the menu
+offers the link, the image and the text that are there rather than whatever the pointer last
+hovered. `⌘`-click and middle-click open a link in a background tab, `⇧⌘`-click in front of
+you. Press and hold Forward when the history has forked and it offers the branches.
+
+**Developer panel** (`⌥⌘I`, or the Develop menu) docks under the page with three tabs:
 
 - **Console** — the engine's own `log` records, not just Beacon's. Level, source crate and
   message, filterable, and it follows new records only while you are already scrolled to the
   bottom. What is captured depends on `BEACON_LOG` / `RUST_LOG`, which **default to warnings
   only** — an empty console usually means the level, not a broken panel. Try
   `BEACON_LOG=info swift run BeaconMac`.
-- **Timings** — the engine's timing table, slowest namespace first, with count, total,
-  average, p50, p95 and max. *Reset* starts again from nothing, which is how you time one
+- **Network** (`⌥⌘N`) — every request this tab made, with status, method, kind, size, how
+  long it took and a waterfall bar split into waiting for the server and receiving the body.
+  A request still in flight shows *which phase* it has been stuck in and for how long, which
+  is the difference between "loading for twelve seconds" and an answer. Selecting one fills
+  the pane beside it: overview and where the time went, the request line and its headers,
+  the response and its headers, and the captured body.
+- **Timings** (`⌥⌘T`) — the engine's timing table, slowest namespace first, with count,
+  total, average, p50, p95 and max. Each namespace explains itself on hover, from the
+  engine's own table. *Reset* starts again from nothing, which is how you time one
   navigation rather than every navigation since launch.
 
-It polls four times a second while open and not at all while closed. Both tabs snapshot
-rather than read a live table: log records arrive on whatever thread the engine is on, and
-the timing table is written continuously.
+It polls four times a second while open and not at all while closed. All three tabs snapshot
+rather than read a live table: log records arrive on whatever thread the engine is on,
+requests are folded together as their events go past, and the timing table is written
+continuously.
 
-The buffer and the timing wrapper live in `beacon_core::devtools`, not here — the GTK shell
-has the same pane over the same data. This file only draws it.
+Opening the panel is also what turns on **body capture and unredacted headers** — a page
+nobody is inspecting should not be paying to have its responses copied into memory, and a
+panel nobody has open has no business holding your `Cookie` header. The flip side is that a
+request which finished before you opened the panel has no body to show, and says so.
+
+The buffer, the request log and the timing wrapper all live in `beacon_core::devtools`, not
+here — the GTK shell has the same pane over the same data. This file only draws it.
+
+**Settings** (`⌘,`) is the engine's own settings store, one row per key with the editor its
+type asks for: a switch for a boolean, a popup for a setting restricted to named values, a
+number field for a bounded number, text for the rest. A changed key is shown in bold and can
+be put back with the arrow beside it — which forgets the override rather than storing a copy
+of the default. Some settings (`net.*`) are read once when the engine starts, so a change may
+only take effect next launch; the window says so. The GTK shell shows the same store as its
+`gosub://config` page.
+
+**Session restore.** Beacon writes the open tabs as it runs, so launching with no address on
+the command line brings back the last session — pinned tabs still pinned, the same tab in
+front. Give it a URL and that is what you get instead. Private windows neither restore nor
+contribute.
 
 **Private windows** (`⇧⌘N`) run a *second engine*, because privacy is a property of the
 engine's zone — memory-only cookies and storage, no visits recorded — and there is no way to
@@ -86,6 +117,9 @@ macOS, not GNOME:
 | `F1` opens About | the application menu | where every Mac user looks first; F1 is a brightness key |
 | `Ctrl+A` in the address bar moves to line start | selects all | the emacs binding is macOS's, but a browser address bar is not a text editor, and this is what the gesture means everywhere else |
 | Log pane | `NSLog` to the console | `Console.app` is where a Mac developer already looks |
+| `gosub://config` settings page | a Settings window at `⌘,` | where every Mac app keeps them; a browser page that is really a preferences panel is a thing people have learned to distrust |
+| `F2` shortcuts window | the menu bar | every shortcut is already written beside the command it runs |
+| Crashed tab renders a page | an overlay over the page area | there is no engine worker left to render one with |
 | — | two-finger swipe to navigate, pinch to zoom | expected on a trackpad, and absent from the GTK shell |
 
 `beacon-core` owns every actual rule, so behaviour that *is* the browser — the last tab
@@ -95,13 +129,21 @@ identical on both.
 ## What it does not do
 
 - **No find-in-page.** The engine has no search API; this is not a shell gap.
-- **No history menu of past pages.** `beacon-core` exposes the forward branches of its
-  history tree but not a flat back list, so a long-press menu on Back has nothing to show.
-  Address-bar completion is a different thing and does work: it searches the *visited pages*
-  store, which the engine fills on every `http`/`https` navigation.
-- **No preferences window.** There is no settings ABI yet; *Engine Settings* in the
-  application menu opens `gosub://config`, which is the engine's own read-only dump.
-- **No session restore.** `beacon-core` has the pieces; the ABI does not expose them.
+- **No Mute Tab.** The GTK tab menu has the item, but it is a `@todo` that logs "Tab should
+  be muted": the engine plays no audio yet. An item that does nothing is worse than no item.
+- **No page console.** The engine runs no scripts yet, so there is nothing for a page's own
+  `console.log` to have written. The Console tab shows the *engine's* log, which is a
+  different and, for now, more useful thing.
+- **No back-history menu.** `beacon-core` exposes the forward branches of its history tree
+  but not a flat back list, so press-and-hold works on Forward and has nothing to show on
+  Back. Address-bar completion is a different thing and does work: it searches the *visited
+  pages* store, which the engine fills on every `http`/`https` navigation.
+- **View source fetches the page again**, outside the engine, carrying no cookies and
+  sharing no cache with it — so the source of a page behind a login is the logged-out HTML.
+  The engine has no embedder-facing "fetch me this URL"; the stopgap lives in
+  `beacon_core::fetch` and the GTK shell has exactly the same limitation.
+- **No downloads window**, only the toolbar button's list: filename, progress, and click to
+  open. The GTK shell's popover shows the same three things.
 - **Marked text is accepted and dropped.** A CJK composition commits correctly through
   `insertText`, but there is no inline candidate display, because the engine has no API for
   one.

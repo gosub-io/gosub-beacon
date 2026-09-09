@@ -43,6 +43,14 @@ final class Browser {
         url.withCString { beacon_open_tab(handle, $0) }
     }
 
+    /// Open a tab immediately after another, which is what "New Tab to the Right" and
+    /// "Duplicate Tab" mean: a tab opened from another belongs beside it, not behind
+    /// everything opened since.
+    @discardableResult
+    func openTab(_ url: String, after: BeaconTabId) -> BeaconTabId {
+        url.withCString { beacon_open_tab_after(handle, $0, after) }
+    }
+
     func closeTab(_ tab: BeaconTabId) { beacon_close_tab(handle, tab) }
     func activateTab(_ tab: BeaconTabId) { beacon_activate_tab(handle, tab) }
 
@@ -202,6 +210,9 @@ final class Browser {
         let level: UInt32
         let target: String
         let message: String
+        /// Milliseconds since the epoch. Stored rather than formatted, because how a
+        /// timestamp should look is this shell's business and its locale's.
+        let timestampMs: UInt64
 
         var levelName: String {
             switch level {
@@ -222,7 +233,8 @@ final class Browser {
             LogLine(
                 level: beacon_log_level(handle, index),
                 target: takeString(beacon_log_target(handle, index)),
-                message: takeString(beacon_log_message(handle, index))
+                message: takeString(beacon_log_message(handle, index)),
+                timestampMs: beacon_log_timestamp(handle, index)
             )
         }
     }
@@ -231,6 +243,9 @@ final class Browser {
 
     struct Timing {
         let namespace: String
+        /// What the namespace measures, from the engine's own table. nil for one it does
+        /// not know — a caller timed it by hand — rather than the name repeated back.
+        let describes: String?
         let count: UInt64
         let totalUs: UInt64
         let minUs: UInt64
@@ -250,6 +265,7 @@ final class Browser {
             guard beacon_timing_at(handle, index, &row) else { return nil }
             return Timing(
                 namespace: takeString(beacon_timing_namespace(handle, index)),
+                describes: optionalString(beacon_timing_describes(handle, index)),
                 count: row.count,
                 totalUs: row.total_us,
                 minUs: row.min_us,
@@ -263,6 +279,252 @@ final class Browser {
     }
 
     func resetTimings() { beacon_timing_reset(handle) }
+
+    // ── the network panel ─────────────────────────────────────────────────
+
+    /// One request, copied out of the ABI's snapshot.
+    ///
+    /// A value rather than an index wrapper because the panel refreshes four times a
+    /// second and the snapshot underneath is replaced each time; a row the table is part
+    /// way through drawing must not be able to change identity. The body is the exception
+    /// — it can be megabytes, and only the selected row ever needs it — so that stays
+    /// behind `bodyText(at:)`, valid until the next snapshot.
+    struct Request {
+        let index: Int
+        let url: String
+        let kind: String
+        let initiator: String
+        let method: String?
+        let contentType: String?
+        let error: String?
+        let stateLabel: String
+        let phaseLabel: String
+        let phaseHint: String
+        let failureLabel: String?
+        let failureHint: String?
+        let requestHeaders: [(String, String)]
+        let responseHeaders: [(String, String)]
+        let redirects: [(UInt32, String)]
+
+        let startedMs: UInt64
+        let receivedBytes: UInt64
+        /// What the server said it would send, which is not always what arrived.
+        let contentLength: UInt64?
+        /// nil while the request is still in flight.
+        let elapsedUs: UInt64?
+        /// nil on a connection that was reused, which resolved and dialled nothing.
+        let dnsUs: UInt64?
+        let connectUs: UInt64?
+        /// When the response headers landed, on the same clock as `startedMs`. The split
+        /// between waiting for the server and reading the body.
+        let headersMs: UInt64?
+        let status: UInt32?
+        let state: BeaconRequestState
+        let phase: BeaconRequestPhase
+        let hasBody: Bool
+        let bodyTruncated: Bool
+        /// A body was captured and then dropped to stay inside the budget — worth saying,
+        /// because it is not the same as never having captured one.
+        let bodyEvicted: Bool
+
+        var isInFlight: Bool { phase != BEACON_PHASE_DONE }
+    }
+
+    /// Copy the requests for `tab`, or every tab when it is 0.
+    func networkSnapshot(tab: BeaconTabId = 0) -> [Request] {
+        let count = beacon_net_snapshot(handle, tab)
+        return (0..<count).compactMap { index in
+            var row = BeaconRequest()
+            guard beacon_net_at(handle, index, &row) else { return nil }
+            return Request(
+                index: index,
+                url: takeString(beacon_net_url(handle, index)),
+                kind: takeString(beacon_net_kind(handle, index)),
+                initiator: takeString(beacon_net_initiator(handle, index)),
+                method: optionalString(beacon_net_method(handle, index)),
+                contentType: optionalString(beacon_net_content_type(handle, index)),
+                error: optionalString(beacon_net_error(handle, index)),
+                stateLabel: takeString(beacon_net_state_label(handle, index)),
+                phaseLabel: takeString(beacon_net_phase_label(handle, index)),
+                phaseHint: takeString(beacon_net_phase_hint(handle, index)),
+                failureLabel: optionalString(beacon_net_failure_label(handle, index)),
+                failureHint: optionalString(beacon_net_failure_hint(handle, index)),
+                requestHeaders: (0..<row.request_header_count).map { i in
+                    (
+                        takeString(beacon_net_request_header_name(handle, index, i)),
+                        takeString(beacon_net_request_header_value(handle, index, i))
+                    )
+                },
+                responseHeaders: (0..<row.response_header_count).map { i in
+                    (
+                        takeString(beacon_net_response_header_name(handle, index, i)),
+                        takeString(beacon_net_response_header_value(handle, index, i))
+                    )
+                },
+                redirects: (0..<row.redirect_count).map { i in
+                    (beacon_net_redirect_status(handle, index, i), takeString(beacon_net_redirect_url(handle, index, i)))
+                },
+                startedMs: row.started_ms,
+                receivedBytes: row.received_bytes,
+                contentLength: present(row.content_length),
+                elapsedUs: present(row.elapsed_us),
+                dnsUs: present(row.dns_us),
+                connectUs: present(row.connect_us),
+                headersMs: present(row.headers_ms),
+                status: row.status == 0 ? nil : row.status,
+                state: row.state,
+                phase: row.phase,
+                hasBody: row.has_body,
+                bodyTruncated: row.body_truncated,
+                bodyEvicted: row.body_evicted
+            )
+        }
+    }
+
+    /// The captured body of the row at `index` of the last snapshot, decoded for display.
+    func bodyText(at index: Int) -> String? {
+        optionalString(beacon_net_body_text(handle, index))
+    }
+
+    func clearRequests() { beacon_net_clear(handle) }
+
+    /// Copy response bodies, and show the header values the engine redacts by default.
+    /// Both follow the panel's visibility: a panel nobody has open has no business holding
+    /// page bodies or copying credentials into memory.
+    func setInspecting(_ inspecting: Bool) {
+        beacon_net_set_capture_bodies(handle, inspecting)
+        beacon_net_set_show_sensitive_headers(handle, inspecting)
+    }
+
+    var capturedBodyBytes: Int { beacon_net_captured_body_bytes(handle) }
+
+    // ── settings ──────────────────────────────────────────────────────────
+
+    struct SettingRow {
+        let key: String
+        let description: String
+        let value: String
+        let defaultValue: String
+        let type: BeaconSettingType
+        let isModified: Bool
+        /// The literal values this setting accepts, when it is restricted to some. A
+        /// non-empty list means a popup rather than a text field.
+        let choices: [String]
+        /// The bounds of a numeric setting, when the schema gives any.
+        let bounds: (Int64, Int64)?
+    }
+
+    /// Settings whose key matches `filter`, sorted. An empty filter is everything.
+    func settings(matching filter: String = "") -> [SettingRow] {
+        let count = filter.withCString { beacon_settings_snapshot(handle, $0) }
+        return (0..<count).map { index in
+            var low: Int64 = 0
+            var high: Int64 = 0
+            let bounded = beacon_setting_range(handle, index, &low, &high)
+            return SettingRow(
+                key: takeString(beacon_setting_key(handle, index)),
+                description: takeString(beacon_setting_description(handle, index)),
+                value: takeString(beacon_setting_value(handle, index)),
+                defaultValue: takeString(beacon_setting_default(handle, index)),
+                type: beacon_setting_type(handle, index),
+                isModified: beacon_setting_is_modified(handle, index),
+                choices: (0..<beacon_setting_choice_count(handle, index)).map { choice in
+                    takeString(beacon_setting_choice(handle, index, choice))
+                },
+                bounds: bounded ? (low, high) : nil
+            )
+        }
+    }
+
+    /// Write a setting, typed by its own schema. False when the store refused it — put the
+    /// editor back rather than assume it landed.
+    @discardableResult
+    func setSetting(_ key: String, to value: String) -> Bool {
+        key.withCString { k in value.withCString { v in beacon_setting_set(handle, k, v) } }
+    }
+
+    @discardableResult
+    func resetSetting(_ key: String) -> Bool {
+        key.withCString { beacon_setting_reset(handle, $0) }
+    }
+
+    /// The page a new tab opens on. Asked for rather than hard-coded, so the setting means
+    /// the same thing here as it does in the GTK shell.
+    var homepage: String { takeString(beacon_homepage(handle)) }
+
+    // ── what is under the pointer ─────────────────────────────────────────
+
+    /// What is at a page point. Answered asynchronously: the token comes back now and a
+    /// `BEACON_HIT_TEST` event carrying it arrives later.
+    func hitTest(_ tab: BeaconTabId, x: Float, y: Float) -> UInt64 {
+        beacon_hit_test(handle, tab, x, y)
+    }
+
+    /// The last hit-test answer.
+    struct Hit {
+        let link: String?
+        let image: String?
+        let text: String?
+        let selection: String?
+        let isEditable: Bool
+
+        var isEmpty: Bool { link == nil && image == nil && text == nil && selection == nil }
+    }
+
+    var lastHit: Hit {
+        Hit(
+            link: optionalString(beacon_hit_link(handle)),
+            image: optionalString(beacon_hit_image(handle)),
+            text: optionalString(beacon_hit_text(handle)),
+            selection: optionalString(beacon_hit_selection(handle)),
+            isEditable: beacon_hit_is_editable(handle)
+        )
+    }
+
+    // ── source, crashes, forward history, session ─────────────────────────
+
+    /// Open the source of `tab` in a new tab. 0 if it could not be opened.
+    @discardableResult
+    func viewSource(of tab: BeaconTabId, raw: Bool = false) -> BeaconTabId {
+        beacon_view_source(handle, tab, raw)
+    }
+
+    /// Why the tab's engine worker died, or nil while it is healthy.
+    func crashReason(_ tab: BeaconTabId) -> String? {
+        optionalString(beacon_tab_crash_reason(handle, tab))
+    }
+
+    /// Give a crashed tab a new worker and reload it, keeping its place and its address.
+    @discardableResult
+    func reviveTab(_ tab: BeaconTabId) -> Bool { beacon_revive_tab(handle, tab) }
+
+    /// Where forward leads. Usually one entry; more than one means the history forked, and
+    /// a press-and-hold on Forward should offer the choice.
+    func forwardEntries(_ tab: BeaconTabId) -> [String] {
+        let count = beacon_forward_snapshot(handle, tab)
+        return (0..<count).map { takeString(beacon_forward_url(handle, $0)) }
+    }
+
+    func goForward(to index: Int) { beacon_forward_go(handle, index) }
+
+    struct SessionTab {
+        let url: String
+        let pinned: Bool
+        let active: Bool
+    }
+
+    /// The tabs the last session had open. Written as the browser runs, so there is
+    /// nothing to save on the way out.
+    func previousSession() -> [SessionTab] {
+        let count = beacon_session_snapshot(handle)
+        return (0..<count).map { index in
+            SessionTab(
+                url: takeString(beacon_session_url(handle, index)),
+                pinned: beacon_session_pinned(handle, index),
+                active: beacon_session_active(handle, index)
+            )
+        }
+    }
 
     // ── downloads ─────────────────────────────────────────────────────────
 
@@ -351,5 +613,20 @@ final class Browser {
         guard let pointer else { return "" }
         defer { beacon_string_free(pointer) }
         return String(cString: pointer)
+    }
+
+    /// The same, keeping the ABI's distinction between "nothing to say" and an empty
+    /// string. A request that never reached the network has no method; showing that as ""
+    /// would put an empty column where "—" belongs.
+    private func optionalString(_ pointer: UnsafeMutablePointer<CChar>?) -> String? {
+        guard let pointer else { return nil }
+        defer { beacon_string_free(pointer) }
+        return String(cString: pointer)
+    }
+
+    /// A `BEACON_ABSENT` field as nil: the engine never reported it, which is not the same
+    /// as its having been zero.
+    private func present(_ value: UInt64) -> UInt64? {
+        value == UInt64.max ? nil : value
     }
 }

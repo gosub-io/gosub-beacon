@@ -11,7 +11,7 @@ import CBeacon
 /// The one thing the window does own is *which* tabs it shows. The browser has no concept
 /// of windows, so tab-to-window membership can only live here.
 final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToolbarDelegate,
-    NSTextFieldDelegate, NSMenuItemValidation
+    NSTextFieldDelegate, NSMenuItemValidation, NSMenuDelegate
 {
     let browser: Browser
     private let pageView: PageView
@@ -53,6 +53,23 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
     private var bookmarksBarVisible = false
 
     private var bookmarksBarHeight: NSLayoutConstraint?
+
+    /// Shown over the page when the tab's engine worker has died. AppKit chrome rather than
+    /// a page pushed into the tab, because a crashed tab has no worker left to draw one.
+    private let crashOverlay = CrashOverlay()
+
+    /// Hit tests this window has asked for and what it means to do with the answer. Keyed
+    /// by the token the ABI handed back, because a second right-click can land before the
+    /// first answer does and a menu built from the wrong one is worse than a slow menu.
+    private var pendingHits: [UInt64: HitIntent] = [:]
+
+    /// What to do with a hit-test answer once it arrives.
+    private enum HitIntent {
+        /// Show the page context menu at this event's location.
+        case contextMenu(NSEvent)
+        /// Open the link there in another tab; the flag is whether to go to it.
+        case openInNewTab(foreground: Bool)
+    }
 
     // ── construction ──────────────────────────────────────────────────────
 
@@ -98,6 +115,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
         window.makeKeyAndOrderFront(nil)
         startPump()
         refreshChrome()
+
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -126,6 +144,12 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
             action: #selector(navSegmentClicked)
         )
         navButtons.segmentStyle = .separated
+        // Press and hold on Forward offers the branches, as it does in Safari. The menu is
+        // filled in when it is about to open (see menuNeedsUpdate): what is ahead changes
+        // with every navigation, and a menu built once would be a menu built wrong.
+        let forwardMenu = NSMenu()
+        forwardMenu.delegate = self
+        navButtons.setMenu(forwardMenu, forSegment: 1)
 
         reloadButton = NSButton(
             image: NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: "Reload") ?? NSImage(),
@@ -253,7 +277,14 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
         devPanel.isHidden = true
         devPanel.onClose = { [weak self] in self?.toggleDeveloperTools(nil) }
 
-        for view in [tabStrip, bookmarksBar, progressLine, pageView, devPanel, hoverLabel] as [NSView] {
+        crashOverlay.isHidden = true
+        crashOverlay.onReload = { [weak self] in
+            guard let self, self.currentTab != 0 else { return }
+            self.browser.reviveTab(self.currentTab)
+            self.refreshChrome()
+        }
+
+        for view in [tabStrip, bookmarksBar, progressLine, pageView, devPanel, crashOverlay, hoverLabel] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             content.addSubview(view)
         }
@@ -290,6 +321,12 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
             devPanel.bottomAnchor.constraint(equalTo: content.bottomAnchor),
             panelHeight,
 
+            // Exactly over the page: the tab is still there, it is the page that is gone.
+            crashOverlay.topAnchor.constraint(equalTo: pageView.topAnchor),
+            crashOverlay.leadingAnchor.constraint(equalTo: pageView.leadingAnchor),
+            crashOverlay.trailingAnchor.constraint(equalTo: pageView.trailingAnchor),
+            crashOverlay.bottomAnchor.constraint(equalTo: pageView.bottomAnchor),
+
             hoverLabel.leadingAnchor.constraint(equalTo: pageView.leadingAnchor, constant: 4),
             hoverLabel.bottomAnchor.constraint(equalTo: pageView.bottomAnchor, constant: -4),
             hoverLabel.widthAnchor.constraint(lessThanOrEqualTo: pageView.widthAnchor, multiplier: 0.7),
@@ -300,8 +337,11 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
             self?.hoverLabel.isHidden = url.isEmpty
         }
 
-        pageView.onContextMenu = { [weak self] event, link in
-            self?.showPageContextMenu(event, link: link)
+        pageView.onContextMenu = { [weak self] event, x, y in
+            self?.askWhatIsThere(x: x, y: y, intent: .contextMenu(event))
+        }
+        pageView.onOpenInNewTab = { [weak self] x, y, foreground in
+            self?.askWhatIsThere(x: x, y: y, intent: .openInNewTab(foreground: foreground))
         }
         pageView.onSwipeNavigate = { [weak self] direction in
             direction < 0 ? self?.goBack() : self?.goForward()
@@ -324,20 +364,48 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
     // ── tab ownership ─────────────────────────────────────────────────────
 
     /// Open a tab and claim it for this window.
+    ///
+    /// `after` puts it beside the tab it came from rather than at the end of the strip,
+    /// which is what opening a link from a page means.
     @discardableResult
-    func openTab(_ url: String, activate: Bool) -> BeaconTabId {
-        let tab = browser.openTab(url)
+    func openTab(_ url: String, activate: Bool, after: BeaconTabId = 0) -> BeaconTabId {
+        let tab = after == 0 ? browser.openTab(url) : browser.openTab(url, after: after)
         guard tab != 0 else {
             NSLog("beacon: could not open \(url)")
             return 0
         }
-        ownedTabs.append(tab)
+        if let index = ownedTabs.firstIndex(of: after) {
+            ownedTabs.insert(tab, at: index + 1)
+        } else {
+            ownedTabs.append(tab)
+        }
         if activate {
             select(tab)
         } else {
             refreshChrome()
         }
         return tab
+    }
+
+    /// Reopen the tabs a previous run had open, in the order it had them.
+    ///
+    /// Pinned tabs stay pinned, and whatever was in front comes back in front. Nothing here
+    /// decides what a session *is* — Beacon writes the file as it runs, so this only puts
+    /// back what it recorded.
+    func restore(_ session: [Browser.SessionTab]) {
+        var front: BeaconTabId = 0
+        for saved in session {
+            let tab = openTab(saved.url, activate: false)
+            guard tab != 0 else { continue }
+            if saved.pinned {
+                browser.setPinned(tab, true)
+            }
+            if saved.active {
+                front = tab
+            }
+        }
+        // Something has to be in front. The saved active tab, or the first that opened.
+        select(front != 0 ? front : (ownedTabs.first ?? 0))
     }
 
     private func select(_ tab: BeaconTabId) {
@@ -421,6 +489,17 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
             case BEACON_TAB_CRASHED:
                 NSLog("beacon: tab crashed: \(event.text ?? "")")
                 needsChromeRefresh = true
+            case BEACON_NAVIGATION_FAILED:
+                // The tab already holds the error page — Beacon put it there — so this is
+                // only worth a line in the log a developer might be reading.
+                NSLog("beacon: navigation failed: \(event.text ?? "")")
+                needsChromeRefresh = true
+            case BEACON_HIT_TEST:
+                // The token is ours, handed back — but it arrives as a double, and a
+                // conversion that traps would turn a garbled event into a crash.
+                if event.number > 0, event.number < Double(UInt64.max) {
+                    answerHitTest(token: UInt64(event.number))
+                }
             case BEACON_LOG:
                 NSLog("beacon: \(event.text ?? "")")
             default:
@@ -464,6 +543,16 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
         tabStrip.tabs = ownedTabs
         tabStrip.activeTab = currentTab
         tabStrip.refresh()
+
+        // A dead tab keeps its place in the strip and its address; what it cannot do is
+        // draw, so the shell says why and offers to start it again.
+        let crash = currentTab == 0 ? nil : browser.crashReason(currentTab)
+        crashOverlay.reason = crash
+        crashOverlay.isHidden = crash == nil
+
+        // The network panel follows the tab in front of it. A request list mixing several
+        // tabs together is a log, not a panel.
+        devPanel.tab = currentTab
 
         updateProgress()
         rebuildBookmarksBar()
@@ -516,7 +605,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
     @objc func stopLoading() { browser.stop() }
 
     @objc func newTab(_ sender: Any?) {
-        openTab("gosub://home", activate: true)
+        openTab(browser.homepage, activate: true)
         focusAddressBar(nil)
     }
 
@@ -598,11 +687,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
 
     @objc func openHomePage(_ sender: Any?) {
         guard currentTab != 0 else { return }
-        browser.navigate(currentTab, to: "gosub://home")
-    }
-
-    @objc func showEngineSettings(_ sender: Any?) {
-        openTab("gosub://config", activate: true)
+        // The homepage is a setting, and the browser is the one that knows it.
+        browser.navigate(currentTab, to: browser.homepage)
     }
 
     // ── developer panel ───────────────────────────────────────────────────
@@ -621,6 +707,11 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
     @objc func showTimings(_ sender: Any?) {
         setDeveloperPanel(open: true)
         devPanel.show(.timings)
+    }
+
+    @objc func showNetwork(_ sender: Any?) {
+        setDeveloperPanel(open: true)
+        devPanel.show(.network)
     }
 
     @objc func resetTimings(_ sender: Any?) {
@@ -722,45 +813,141 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
 
     // ── context menus ─────────────────────────────────────────────────────
 
-    private func showPageContextMenu(_ event: NSEvent, link: String) {
-        let menu = NSMenu()
-        if !link.isEmpty {
-            let openInTab = NSMenuItem(title: "Open Link in New Tab", action: #selector(openLinkInNewTab(_:)), keyEquivalent: "")
-            openInTab.target = self
-            openInTab.representedObject = link
-            menu.addItem(openInTab)
+    /// Ask the engine what is at a page point, and remember why we asked.
+    ///
+    /// The answer comes back as an event rather than a return value: the engine reads its
+    /// layout tree on its own thread, and a shell that blocked for it would stall its own
+    /// run loop on every right-click.
+    private func askWhatIsThere(x: Float, y: Float, intent: HitIntent) {
+        guard currentTab != 0 else { return }
+        let token = browser.hitTest(currentTab, x: x, y: y)
+        guard token != 0 else { return }
+        pendingHits[token] = intent
+    }
 
-            let copyLink = NSMenuItem(title: "Copy Link", action: #selector(copyLink(_:)), keyEquivalent: "")
-            copyLink.target = self
-            copyLink.representedObject = link
-            menu.addItem(copyLink)
+    private func answerHitTest(token: UInt64) {
+        guard let intent = pendingHits.removeValue(forKey: token) else { return }
+        let hit = browser.lastHit
+        switch intent {
+        case .contextMenu(let event):
+            showPageContextMenu(event, hit: hit)
+        case .openInNewTab(let foreground):
+            // Nothing there: a ⌘-click on empty page area does nothing, rather than opening
+            // a tab on whatever the pointer happened to pass over earlier.
+            guard let link = hit.link else { return }
+            openTab(link, activate: foreground, after: currentTab)
+        }
+    }
+
+    private func showPageContextMenu(_ event: NSEvent, hit: Browser.Hit) {
+        let menu = NSMenu()
+
+        if let link = hit.link {
+            add(to: menu, "Open Link in New Tab", #selector(openLinkInNewTab(_:)), link)
+            add(to: menu, "Download Linked File…", #selector(saveLinkAs(_:)), link)
+            add(to: menu, "Copy Link", #selector(copyString(_:)), link)
             menu.addItem(.separator())
         }
-        menu.addItem(withTitle: "Back", action: #selector(goBack), keyEquivalent: "")
-        menu.addItem(withTitle: "Forward", action: #selector(goForward), keyEquivalent: "")
-        menu.addItem(withTitle: "Reload", action: #selector(reloadOrStop), keyEquivalent: "")
+        if let image = hit.image {
+            add(to: menu, "Open Image in New Tab", #selector(openLinkInNewTab(_:)), image)
+            add(to: menu, "Copy Image Address", #selector(copyString(_:)), image)
+            menu.addItem(.separator())
+        }
+        // Until the engine has text selection, Copy copies the text node under the pointer.
+        // Offered rather than left out: it is the answer people want often enough, and a
+        // greyed-out Copy would say less about why.
+        if let text = hit.selection ?? hit.text {
+            add(to: menu, "Copy", #selector(copyString(_:)), text)
+            menu.addItem(.separator())
+        }
+
+        add(to: menu, "Back", #selector(goBack), nil, enabled: canGoBack)
+        add(to: menu, "Forward", #selector(goForward), nil, enabled: canGoForward)
+        add(to: menu, "Reload", #selector(reloadOrStop), nil)
         menu.addItem(.separator())
-        let viewSource = NSMenuItem(title: "View Source", action: #selector(viewSource(_:)), keyEquivalent: "")
-        viewSource.target = self
-        menu.addItem(viewSource)
-        menu.items.forEach { if $0.target == nil && $0.action != nil { $0.target = self } }
+        add(to: menu, "View Source", #selector(viewSource(_:)), nil)
+
         NSMenu.popUpContextMenu(menu, with: event, for: pageView)
+    }
+
+    /// A menu item wired to this window, carrying whatever the action needs.
+    @discardableResult
+    private func add(
+        to menu: NSMenu,
+        _ title: String,
+        _ action: Selector,
+        _ object: Any?,
+        enabled: Bool = true
+    ) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = self
+        item.representedObject = object
+        item.isEnabled = enabled
+        menu.addItem(item)
+        return item
     }
 
     @objc private func openLinkInNewTab(_ sender: NSMenuItem) {
         guard let url = sender.representedObject as? String else { return }
-        openTab(url, activate: false)
+        openTab(url, activate: false, after: currentTab)
     }
 
-    @objc private func copyLink(_ sender: NSMenuItem) {
-        guard let url = sender.representedObject as? String else { return }
+    @objc private func copyString(_ sender: NSMenuItem) {
+        guard let text = sender.representedObject as? String else { return }
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(url, forType: .string)
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    /// Save a link's target rather than following it. The engine has no "fetch to disk"
+    /// command, so this navigates to it: anything it will not render arrives as a download
+    /// offer, which is the panel the user was asking for.
+    @objc private func saveLinkAs(_ sender: NSMenuItem) {
+        guard let url = sender.representedObject as? String, currentTab != 0 else { return }
+        browser.navigate(currentTab, to: url)
     }
 
     @objc func viewSource(_ sender: Any?) {
         guard currentTab != 0 else { return }
-        openTab("view-source:" + browser.url(of: currentTab), activate: true)
+        // Through the browser, which fetches the bytes and marks them up: a tab opened on
+        // "view-source:…" by hand would do exactly the same thing.
+        let tab = browser.viewSource(of: currentTab)
+        guard tab != 0 else { return }
+        ownedTabs.append(tab)
+        select(tab)
+    }
+
+    // ── where forward leads ───────────────────────────────────────────────
+
+    /// Fill the Forward button's press-and-hold menu with what is actually ahead.
+    ///
+    /// Usually one page — the one you just came back from. More than one means the history
+    /// forked: you went back and then somewhere else, and both branches are still there.
+    /// That fork is the only reason this menu exists, so with nothing ahead it stays empty
+    /// and the press falls through to the button's own click.
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        menu.removeAllItems()
+        guard currentTab != 0 else { return }
+        for (index, url) in browser.forwardEntries(currentTab).enumerated() {
+            let item = NSMenuItem(title: Self.shorten(url), action: #selector(goForwardTo(_:)), keyEquivalent: "")
+            item.target = self
+            item.tag = index
+            item.toolTip = url
+            menu.addItem(item)
+        }
+    }
+
+    /// A URL that fits in a menu. The host and the last path segment are what identify a
+    /// page to someone choosing between two of them; the middle rarely is.
+    private static func shorten(_ url: String) -> String {
+        guard url.count > 72, let parsed = URL(string: url), let host = parsed.host else {
+            return url
+        }
+        let last = parsed.lastPathComponent
+        return last.isEmpty ? host : "\(host)/…/\(last)"
+    }
+
+    @objc private func goForwardTo(_ sender: NSMenuItem) {
+        browser.goForward(to: sender.tag)
     }
 
     private func showTabContextMenu(_ tab: BeaconTabId, event: NSEvent) {
@@ -771,10 +958,20 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
         pin.representedObject = tab
         menu.addItem(pin)
 
+        let newRight = NSMenuItem(title: "New Tab to the Right", action: #selector(newTabToTheRight(_:)), keyEquivalent: "")
+        newRight.target = self
+        newRight.representedObject = tab
+        menu.addItem(newRight)
+
         let duplicate = NSMenuItem(title: "Duplicate Tab", action: #selector(duplicateTab(_:)), keyEquivalent: "")
         duplicate.target = self
         duplicate.representedObject = tab
         menu.addItem(duplicate)
+
+        let reload = NSMenuItem(title: "Reload Tab", action: #selector(reloadTabFromMenu(_:)), keyEquivalent: "")
+        reload.target = self
+        reload.representedObject = tab
+        menu.addItem(reload)
 
         menu.addItem(.separator())
 
@@ -783,10 +980,22 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
         closeItem.representedObject = tab
         menu.addItem(closeItem)
 
-        let others = NSMenuItem(title: "Close Other Tabs", action: #selector(closeOtherTabs(_:)), keyEquivalent: "")
-        others.target = self
-        others.representedObject = tab
-        menu.addItem(others)
+        // The three "close a lot of tabs" items sit in a submenu, where a mis-click costs
+        // nothing: they are the only items here that throw work away.
+        let closeMany = NSMenu()
+        for (title, action) in [
+            ("Close Tabs to the Left", #selector(closeTabsLeft(_:))),
+            ("Close Tabs to the Right", #selector(closeTabsRight(_:))),
+            ("Close Other Tabs", #selector(closeOtherTabs(_:))),
+        ] {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            item.target = self
+            item.representedObject = tab
+            closeMany.addItem(item)
+        }
+        let closeManyItem = NSMenuItem(title: "Close Multiple Tabs", action: nil, keyEquivalent: "")
+        closeManyItem.submenu = closeMany
+        menu.addItem(closeManyItem)
 
         NSMenu.popUpContextMenu(menu, with: event, for: tabStrip)
     }
@@ -799,7 +1008,13 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
 
     @objc private func duplicateTab(_ sender: NSMenuItem) {
         guard let tab = sender.representedObject as? BeaconTabId else { return }
-        openTab(browser.url(of: tab), activate: true)
+        openTab(browser.url(of: tab), activate: true, after: tab)
+    }
+
+    @objc private func newTabToTheRight(_ sender: NSMenuItem) {
+        guard let tab = sender.representedObject as? BeaconTabId else { return }
+        openTab(browser.homepage, activate: true, after: tab)
+        focusAddressBar(nil)
     }
 
     @objc private func closeTabFromMenu(_ sender: NSMenuItem) {
@@ -809,11 +1024,44 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
 
     @objc private func closeOtherTabs(_ sender: NSMenuItem) {
         guard let keep = sender.representedObject as? BeaconTabId else { return }
-        for tab in ownedTabs where tab != keep {
+        close(ownedTabs.filter { $0 != keep })
+    }
+
+    @objc private func closeTabsLeft(_ sender: NSMenuItem) {
+        guard let pivot = sender.representedObject as? BeaconTabId,
+            let index = ownedTabs.firstIndex(of: pivot)
+        else { return }
+        close(Array(ownedTabs.prefix(index)))
+    }
+
+    @objc private func closeTabsRight(_ sender: NSMenuItem) {
+        guard let pivot = sender.representedObject as? BeaconTabId,
+            let index = ownedTabs.firstIndex(of: pivot)
+        else { return }
+        close(Array(ownedTabs.suffix(from: index + 1)))
+    }
+
+    @objc private func reloadTabFromMenu(_ sender: NSMenuItem) {
+        guard let tab = sender.representedObject as? BeaconTabId else { return }
+        // Reload acts on the active tab, so make it that first — the browser owns which tab
+        // is active, and this is the shell asking it to change its mind, not working around it.
+        select(tab)
+        browser.reload()
+    }
+
+    /// Close several tabs at once, leaving the window on something sensible.
+    ///
+    /// The browser refuses to close a pinned tab and the very last one, so this asks for
+    /// each and then believes what the browser says about what is left, rather than
+    /// assuming every close landed.
+    private func close(_ tabs: [BeaconTabId]) {
+        for tab in tabs {
             browser.closeTab(tab)
         }
-        ownedTabs = [keep]
-        select(keep)
+        refreshChrome()
+        if !ownedTabs.contains(currentTab), let first = ownedTabs.first {
+            select(first)
+        }
     }
 
     /// Asked by the menu bar, which validates against the application delegate.
