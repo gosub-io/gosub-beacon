@@ -576,6 +576,10 @@ impl BrowserWindow {
         // Bodies are only copied while someone can look at them. This is the switch that
         // keeps the network panel free for every page that is not being inspected.
         beacon_core::devtools::set_capture_bodies(showing);
+        // Same window for the header values the engine redacts by default: a request view
+        // that will not show you your own `Cookie` cannot answer the question it is usually
+        // opened to answer.
+        beacon_core::devtools::set_show_sensitive_headers(showing);
 
         if let Some(source) = self.devtools_tick.borrow_mut().take() {
             source.remove();
