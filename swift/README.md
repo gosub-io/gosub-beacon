@@ -29,6 +29,55 @@ finds it without `DYLD_LIBRARY_PATH`. `Sources/CBeacon/module.modulemap` points 
 `crates/beacon-ffi/include/beacon.h` directly — there is one declaration of the boundary,
 and Swift reads the same one C does.
 
+## Packaging
+
+```bash
+./package.sh          # release build -> build/Gosub Beacon.app and build/GosubBeacon.dmg
+./package.sh --app    # stop after the .app
+```
+
+`swift run` gives you a bare executable that finds `libbeacon.dylib` through an rpath into
+this working copy, so it runs on the machine that built it and nowhere else. `package.sh`
+makes the thing you can hand to someone: the dylib travels inside `Contents/Frameworks`, the
+binary is repointed at `@executable_path/../Frameworks`, the build-tree rpaths are deleted,
+and the bundle is signed ad hoc — not optional, because `install_name_tool` invalidates the
+signature SwiftPM applied and an arm64 binary with a broken one is killed on launch rather
+than warned about.
+
+Two things inside the bundle are easy to get wrong and are worth knowing about. The SwiftPM
+resource bundle (`BeaconMac_BeaconMac.bundle`) has to be copied into `Contents/Resources`,
+or `Bundle.module` does not merely come up empty — it traps, and the About window takes the
+app down with it. And `Info.plist` is what finally gives the menu bar its name and the About
+window its version; without a bundle both fall back to the process name and a hard-coded
+string.
+
+The icon is `packaging/icon.png`, the Beacon lighthouse on a 1024 square; the script turns it
+into an `.icns` (16 through 512, each at 1x and 2x) with `sips` and `iconutil`.
+
+The disk image opens on `packaging/dmg-background.png`, with the app and the Applications
+symlink placed in the clear water band either side of centre, where neither covers the
+submarine below nor the wordmark above. That layout lives in a `.DS_Store` inside the image,
+which Finder normally writes — and every recipe for it drives Finder over AppleScript, which
+cannot work from a headless or ssh session: automating Finder needs a TCC grant, and without
+it the attempt dies with "Not authorized to send Apple events". So the script uses
+**`dmgbuild`** (`pip3 install --user dmgbuild`), which writes the `.DS_Store` itself and
+therefore works anywhere, CI included. Without it installed the image still builds, just
+plain: no background, Finder's own layout.
+
+The background is supplied at 1536x1024 and the window is 768x512 **points**; the script
+derives the 1x representation with `sips` and hands dmgbuild both, so the artwork stays sharp
+on a Retina display rather than being upscaled.
+
+**It is not signed with a Developer ID and not notarized**, which is deliberate for a demo
+build but has a consequence worth expecting: macOS quarantines anything downloaded, so the
+first launch has to be right-click -> Open, or `xattr -dr com.apple.quarantine "Gosub
+Beacon.app"`. Double-clicking gives "cannot be opened because the developer cannot be
+verified", which looks like a broken download and is not one. Notarization needs a paid
+Apple Developer account and can be added without redoing any of the above.
+
+The DMG is Apple Silicon only. A universal build means compiling the Rust side for
+`x86_64-apple-darwin` as well and `lipo`-ing the two together.
+
 ## What it does
 
 Tabs with favicons, close buttons, pinning, drag-to-reorder, an overflow scroller and a `+`
