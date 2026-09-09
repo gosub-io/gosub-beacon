@@ -137,6 +137,22 @@ static int write_page(const char *path, const char *body) {
     return 1;
 }
 
+/* A page whose only content is one big link at a known place, so a hit test has something
+ * unambiguous to land on. */
+static int write_link_page(const char *path, const char *target) {
+    FILE *f = fopen(path, "w");
+    if (!f) {
+        return 0;
+    }
+    fprintf(f,
+            "<!doctype html><html><head><meta charset=\"utf-8\"><title>link</title></head>"
+            "<body style=\"margin:0\"><a href=\"%s\" style=\"display:block;width:600px;height:400px;"
+            "background:#3355aa\">follow me</a></body></html>\n",
+            target);
+    fclose(f);
+    return 1;
+}
+
 /* A page tall enough that scrolling has somewhere to go, striped so each screenful looks
  * different from the last. */
 static int write_tall_page(const char *path) {
@@ -164,11 +180,48 @@ static int wait_for_frame(BeaconBrowser *browser, BeaconTabId tab, int budget_ms
     return 0;
 }
 
+/* Pump until an event of `kind` arrives, or the budget runs out. */
+static int wait_for_event(BeaconBrowser *browser, BeaconEventKind kind, int budget_ms) {
+    BeaconEvent events[64];
+    for (int waited = 0; waited < budget_ms; waited += 50) {
+        size_t n;
+        while ((n = beacon_poll_events(browser, events, 64)) > 0) {
+            for (size_t i = 0; i < n; i++) {
+                if (events[i].kind == kind) {
+                    return 1;
+                }
+            }
+        }
+        sleep_ms(50);
+    }
+    return 0;
+}
+
+/* Pump until the answer to hit test `token` arrives, or the budget runs out. The answer is
+ * asynchronous -- the engine reads its layout tree on its own thread -- so this is the
+ * shape a real shell's run loop has too, minus the run loop. */
+static int wait_for_hit(BeaconBrowser *browser, uint64_t token, int budget_ms) {
+    BeaconEvent events[64];
+    for (int waited = 0; waited < budget_ms; waited += 50) {
+        size_t n;
+        while ((n = beacon_poll_events(browser, events, 64)) > 0) {
+            for (size_t i = 0; i < n; i++) {
+                if (events[i].kind == BEACON_HIT_TEST && (uint64_t)events[i].number == token) {
+                    return 1;
+                }
+            }
+        }
+        sleep_ms(50);
+    }
+    return 0;
+}
+
 int main(void) {
     const char *page_a = "/tmp/beacon-ffi-a.html";
     const char *page_b = "/tmp/beacon-ffi-b.html";
     const char *page_tall = "/tmp/beacon-ffi-tall.html";
-    char url_a[256], url_b[256], url_tall[256];
+    const char *page_link = "/tmp/beacon-ffi-link.html";
+    char url_a[256], url_b[256], url_tall[256], url_link[256];
 
     if (!write_page(page_a, "<h1>Page A</h1><p>first</p>") || !write_page(page_b, "<h1>Page B</h1><p>second</p>") ||
         !write_tall_page(page_tall)) {
@@ -178,6 +231,11 @@ int main(void) {
     snprintf(url_a, sizeof url_a, "file://%s", page_a);
     snprintf(url_b, sizeof url_b, "file://%s", page_b);
     snprintf(url_tall, sizeof url_tall, "file://%s", page_tall);
+    snprintf(url_link, sizeof url_link, "file://%s", page_link);
+    if (!write_link_page(page_link, url_b)) {
+        fprintf(stderr, "could not write test pages to /tmp\n");
+        return 1;
+    }
 
     BeaconConfig config = {.user_data_dir = "/tmp/beacon-ffi-profile", .private_mode = false};
     BeaconBrowser *browser = beacon_new(&config);
@@ -441,6 +499,172 @@ int main(void) {
     CHECK(beacon_download_offer_url(browser, 12345) == NULL, "an unknown offer has no URL");
     CHECK(beacon_download_accept(browser, 12345, "/tmp/nope") == 0, "accepting an unknown offer returns 0");
     beacon_download_reject(browser, 12345); /* must not crash */
+
+    /* A tab opened from another belongs beside it, not behind everything opened since. */
+    BeaconTabId neighbour = beacon_open_tab_after(browser, url_b, tab);
+    CHECK(neighbour != 0, "a tab opens next to another one");
+    size_t at = 0;
+    for (size_t i = 0; i < beacon_tab_count(browser); i++) {
+        if (beacon_tab_at(browser, i) == tab) {
+            at = i;
+        }
+    }
+    CHECK(beacon_tab_at(browser, at + 1) == neighbour, "and lands immediately to its right");
+    beacon_close_tab(browser, neighbour);
+    pump(browser);
+
+    /* ── the network panel ─────────────────────────────────────────────── */
+    printf("\nnetwork panel\n");
+    /* Bodies are only captured while a panel is open, which is what a shell toggles with
+     * its pane. Nothing was captured before this point, so this also checks that the
+     * switch is what decides it rather than the request. */
+    beacon_net_set_capture_bodies(browser, true);
+    beacon_net_set_show_sensitive_headers(browser, true);
+
+    size_t requests = beacon_net_snapshot(browser, 0);
+    CHECK(requests > 0, "the run made requests the panel can show (%zu)", requests);
+
+    /* Asking for one tab must actually match that tab. A panel filtered by a tab id that
+     * never matches looks exactly like a panel with nothing to show, and is the one bug
+     * here that would never announce itself. */
+    size_t mine = beacon_net_snapshot(browser, tab);
+    CHECK(mine > 0 && mine <= requests, "and %zu of them belong to this tab", mine);
+    CHECK(beacon_net_snapshot(browser, 999999) == 0, "a tab that does not exist has no requests");
+    beacon_net_snapshot(browser, 0);
+
+    BeaconRequest row;
+    CHECK(beacon_net_at(browser, 0, &row), "the first row reads back");
+    CHECK(row.started_ms > 0, "it knows when it started");
+    CHECK(row.state <= BEACON_REQUEST_CANCELLED, "its state is in range (%u)", (unsigned)row.state);
+    CHECK(row.phase <= BEACON_PHASE_DONE, "its phase is in range (%u)", (unsigned)row.phase);
+
+    char *req_url = beacon_net_url(browser, 0);
+    CHECK(req_url != NULL && req_url[0] != '\0', "and a URL (%s)", req_url ? req_url : "null");
+    beacon_string_free(req_url);
+    char *kind = beacon_net_kind(browser, 0);
+    CHECK(kind != NULL, "and a kind (%s)", kind ? kind : "null");
+    beacon_string_free(kind);
+    char *phase = beacon_net_phase_label(browser, 0);
+    char *hint = beacon_net_phase_hint(browser, 0);
+    CHECK(phase != NULL && hint != NULL, "a phase reads back with the hint that explains it (%s)", phase ? phase : "null");
+    beacon_string_free(phase);
+    beacon_string_free(hint);
+
+    /* A file:// load never reached the network, so there is no method and no failure to
+     * report. Both must come back NULL rather than an empty string a shell would print. */
+    CHECK(beacon_net_failure_label(browser, 0) == NULL, "a request that did not fail has no failure label");
+    CHECK(beacon_net_url(browser, requests) == NULL, "one past the last row is NULL");
+    CHECK(!beacon_net_at(browser, requests, &row), "and beacon_net_at says so");
+    CHECK(beacon_net_request_header_name(browser, 0, 9999) == NULL, "an out-of-range header is NULL");
+    CHECK(beacon_net_redirect_status(browser, 0, 9999) == 0, "an out-of-range redirect hop is 0");
+
+    beacon_net_clear(browser);
+    CHECK(beacon_net_snapshot(browser, 0) == 0, "clearing empties the panel");
+    CHECK(beacon_net_captured_body_bytes(browser) == 0, "and the held bodies with it");
+
+    /* ── settings ──────────────────────────────────────────────────────── */
+    printf("\nsettings\n");
+    size_t settings = beacon_settings_snapshot(browser, "");
+    CHECK(settings > 0, "the engine has settings to show (%zu)", settings);
+    char *key = beacon_setting_key(browser, 0);
+    char *value = beacon_setting_value(browser, 0);
+    CHECK(key != NULL && value != NULL, "a row has a key and a value (%s)", key ? key : "null");
+    beacon_string_free(key);
+    beacon_string_free(value);
+    CHECK(beacon_setting_key(browser, settings) == NULL, "one past the last setting is NULL");
+
+    size_t narrowed = beacon_settings_snapshot(browser, "useragent");
+    CHECK(narrowed > 0 && narrowed < settings, "a filter narrows the list (%zu of %zu)", narrowed, settings);
+    CHECK(beacon_settings_snapshot(browser, "nothing-matches-this-xyzzy") == 0, "a filter matching nothing gives nothing");
+
+    /* A key whose value is a known enum: the store must take a legal value and refuse an
+     * illegal one, rather than storing nonsense a later read has to cope with. */
+    beacon_settings_snapshot(browser, "useragent.tab.close_button");
+    CHECK(beacon_setting_choice_count(browser, 0) > 0, "a constrained setting offers its choices");
+    CHECK(beacon_setting_set(browser, "useragent.tab.close_button", "left"), "a legal value is accepted");
+    beacon_settings_snapshot(browser, "useragent.tab.close_button");
+    char *changed = beacon_setting_value(browser, 0);
+    CHECK(changed && strcmp(changed, "left") == 0, "and reads back (%s)", changed ? changed : "null");
+    beacon_string_free(changed);
+    CHECK(beacon_setting_is_modified(browser, 0), "the row is marked as changed from its default");
+    CHECK(!beacon_setting_set(browser, "useragent.tab.close_button", "sideways"), "an illegal value is refused");
+    CHECK(beacon_setting_reset(browser, "useragent.tab.close_button"), "and reset puts it back");
+    beacon_settings_snapshot(browser, "useragent.tab.close_button");
+    CHECK(!beacon_setting_is_modified(browser, 0), "which clears the mark");
+    CHECK(!beacon_setting_set(browser, "no.such.setting.at.all", "1"), "an unknown key is refused");
+
+    char *homepage = beacon_homepage(browser);
+    CHECK(homepage != NULL && homepage[0] != '\0', "there is a homepage to open a tab on (%s)", homepage ? homepage : "null");
+    beacon_string_free(homepage);
+
+    /* ── what is under the pointer ─────────────────────────────────────── */
+    printf("\nhit testing\n");
+    BeaconTabId link_tab = beacon_open_tab(browser, url_link);
+    beacon_set_viewport(browser, link_tab, 1024, 768, 1.0f);
+    CHECK(settle(browser, link_tab, 15000), "the link page loads");
+    wait_for_frame(browser, link_tab, 5000);
+
+    uint64_t token = beacon_hit_test(browser, link_tab, 100.0f, 100.0f);
+    CHECK(token != 0, "asking what is at a point returns a token");
+    CHECK(wait_for_hit(browser, token, 5000), "and the answer arrives as an event");
+    char *link = beacon_hit_link(browser);
+    CHECK(link != NULL && strstr(link, "beacon-ffi-b.html") != NULL, "which names the link under it (%s)", link ? link : "null");
+    beacon_string_free(link);
+    CHECK(beacon_hit_image(browser) == NULL, "and no image, because there is none there");
+    CHECK(beacon_hit_test(browser, 0, 10.0f, 10.0f) == 0, "hit testing a tab that does not exist returns 0");
+
+    /* ── the page's source ─────────────────────────────────────────────── */
+    printf("\nview source\n");
+    BeaconTabId source_tab = beacon_view_source(browser, link_tab, false);
+    CHECK(source_tab != 0, "the source opens in its own tab");
+    CHECK(source_tab != link_tab, "not over the page it is the source of");
+    settle(browser, source_tab, 15000);
+    char *source_url = beacon_tab_url(browser, source_tab);
+    CHECK(source_url && strncmp(source_url, "view-source:", 12) == 0, "whose address says what it is showing (%s)",
+          source_url ? source_url : "null");
+    beacon_string_free(source_url);
+    beacon_close_tab(browser, source_tab);
+    beacon_close_tab(browser, link_tab);
+    pump(browser);
+
+    /* ── a navigation that fails ───────────────────────────────────────── */
+    //
+    /* Port 9 on the loopback interface refuses immediately: no DNS, no network, no waiting.
+     * The shell is told, and -- the part worth checking -- the tab is left holding the
+     * error page rather than whatever it had before, which it cannot do for itself. */
+    printf("\nfailed navigation\n");
+    BeaconTabId dead = beacon_open_tab(browser, "http://127.0.0.1:9/refused");
+    beacon_set_viewport(browser, dead, 800, 600, 1.0f);
+    CHECK(wait_for_event(browser, BEACON_NAVIGATION_FAILED, 15000), "a refused connection is reported to the shell");
+    CHECK(wait_for_frame(browser, dead, 10000), "and the tab has a page to show afterwards");
+    CHECK(!beacon_tab_is_loading(browser, dead), "with nothing still loading");
+    beacon_close_tab(browser, dead);
+    pump(browser);
+
+    /* ── crashes and forward history ───────────────────────────────────── */
+    CHECK(beacon_tab_crash_reason(browser, tab) == NULL, "a healthy tab has no crash reason");
+    CHECK(!beacon_revive_tab(browser, 999999), "reviving a tab that does not exist fails rather than crashing");
+
+    /* `tab` was walked back and forward earlier, so it has somewhere forward to go or it
+     * does not -- either way count and rows must agree. */
+    size_t forward = beacon_forward_snapshot(browser, tab);
+    CHECK(beacon_forward_url(browser, forward) == NULL, "one past the last forward entry is NULL");
+    if (forward > 0) {
+        char *ahead = beacon_forward_url(browser, 0);
+        CHECK(ahead != NULL, "a reported forward entry has a URL");
+        beacon_string_free(ahead);
+    } else {
+        CHECK(beacon_forward_url(browser, 0) == NULL, "nothing ahead means no readable rows");
+    }
+
+    /* ── the session ───────────────────────────────────────────────────── */
+    /* Written as the browser ran, without anyone asking it to. */
+    size_t session = beacon_session_snapshot(browser);
+    CHECK(session > 0, "the open tabs were saved for the next start (%zu)", session);
+    char *saved = beacon_session_url(browser, 0);
+    CHECK(saved != NULL && saved[0] != '\0', "a saved tab has a URL (%s)", saved ? saved : "null");
+    beacon_string_free(saved);
+    CHECK(beacon_session_url(browser, session) == NULL, "one past the last saved tab is NULL");
 
     /* Progress and favicon: a settled local page has neither, and must say so cleanly. */
     CHECK(beacon_tab_progress(browser, tab) == -1.0, "a settled tab reports no progress");

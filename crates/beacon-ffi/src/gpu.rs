@@ -282,14 +282,28 @@ impl ViewSurface {
         self.surface.configure(context.device(), &self.config);
     }
 
-    /// Draw a page texture onto the view. A dropped frame is not worth reporting: the next
-    /// redraw is milliseconds away, and a shell cannot do anything useful about one.
-    pub fn present(&self, context: &FfiWgpuContext, page: &wgpu::TextureView) {
-        // A frame that is not Success is not worth reporting: the next redraw is
-        // milliseconds away, and a shell cannot do anything useful about one.
+    /// Draw a page texture onto the view. False when nothing reached the screen.
+    ///
+    /// A surface that answers anything but `Success` is **reconfigured and retried**, not
+    /// skipped. Skipping looks harmless -- the next redraw is milliseconds away -- and is
+    /// not: `Outdated` means "this surface no longer matches its layer, configure me
+    /// again", so a surface that is dropped once stays outdated, every later frame is
+    /// dropped too, and the view keeps whatever it last held. That is what greyed the page
+    /// out whenever the developer panel resized it: one dropped frame, then silence.
+    pub fn present(&mut self, context: &FfiWgpuContext, page: &wgpu::TextureView) -> bool {
         let frame = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
-            _ => return,
+            other => {
+                log::debug!("surface texture unavailable ({other:?}); reconfiguring and retrying");
+                self.surface.configure(context.device(), &self.config);
+                match self.surface.get_current_texture() {
+                    wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
+                    again => {
+                        log::warn!("surface still unavailable after reconfiguring ({again:?}); the view will hold its last frame");
+                        return false;
+                    }
+                }
+            }
         };
         let target = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
 
@@ -334,6 +348,7 @@ impl ViewSurface {
         }
         context.queue().submit(Some(encoder.finish()));
         frame.present();
+        true
     }
 }
 
