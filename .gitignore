@@ -2,3 +2,5 @@
 gosub_cookies.db
 .gosub-beacon-*
 swift/build/
+swift/.build/
+.DS_Store
