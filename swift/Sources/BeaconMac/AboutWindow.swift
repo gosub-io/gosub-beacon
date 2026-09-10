@@ -13,8 +13,19 @@ import AppKit
 final class AboutWindowController: NSWindowController {
     /// The artwork is 1403x861; this keeps that ratio so nothing is cropped or stretched.
     private static let artWidth: CGFloat = 660
-    private static let artHeight: CGFloat = 405
+    // 16:9, the aspect of the artwork in Resources/. Both pages share it, so the window
+    // never changes size when you flip between them.
+    private static let artHeight: CGFloat = 371
     private static let barHeight: CGFloat = 44
+
+    /// White on a photograph needs help where the lighthouse beam crosses behind it.
+    private static let legibilityShadow: NSShadow = {
+        let shadow = NSShadow()
+        shadow.shadowColor = NSColor.black.withAlphaComponent(0.85)
+        shadow.shadowBlurRadius = 3
+        shadow.shadowOffset = NSSize(width: 0, height: -1)
+        return shadow
+    }()
 
     private static let credits: [(String, [String])] = [
         ("Gosub Beacon", ["Gosub Team", "Joshua Thijssen", "SharkTheOne"]),
@@ -78,7 +89,28 @@ final class AboutWindowController: NSWindowController {
         // anyway. AppKit routes Escape to whichever button claims it as its key equivalent.
         closeButton.keyEquivalent = "\u{1b}"
 
-        for view in [artPage!, creditsPage!, toggleButton, closeButton] as [NSView] {
+        let info = NSTextField(
+            labelWithString: "Gosub Beacon \(Bundle.main.shortVersion) · Powered by the Gosub Engine · © 2026 Gosub Project"
+        )
+        info.font = .systemFont(ofSize: 10)
+        info.textColor = .secondaryLabelColor
+
+        let link = NSButton(title: "https://gosub.io", target: self, action: #selector(openWebsite))
+        link.isBordered = false
+        link.attributedTitle = NSAttributedString(
+            string: "https://gosub.io",
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 10, weight: .medium),
+                .foregroundColor: NSColor.linkColor,
+                .underlineStyle: NSUnderlineStyle.single.rawValue,
+            ]
+        )
+
+        let bar = NSStackView(views: [info, link])
+        bar.orientation = .horizontal
+        bar.spacing = 8
+
+        for view in [artPage!, creditsPage!, toggleButton, closeButton, bar] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             content.addSubview(view)
         }
@@ -88,6 +120,11 @@ final class AboutWindowController: NSWindowController {
             toggleButton.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -10),
             closeButton.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -12),
             closeButton.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -10),
+
+            bar.centerXAnchor.constraint(equalTo: content.centerXAnchor),
+            bar.centerYAnchor.constraint(equalTo: closeButton.centerYAnchor),
+            bar.leadingAnchor.constraint(greaterThanOrEqualTo: toggleButton.trailingAnchor, constant: 10),
+            bar.trailingAnchor.constraint(lessThanOrEqualTo: closeButton.leadingAnchor, constant: -10),
         ]
         // Both pages occupy the same rectangle; only alpha tells them apart.
         for page in [artPage!, creditsPage!] {
@@ -95,62 +132,25 @@ final class AboutWindowController: NSWindowController {
                 page.topAnchor.constraint(equalTo: content.topAnchor),
                 page.leadingAnchor.constraint(equalTo: content.leadingAnchor),
                 page.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+                page.widthAnchor.constraint(equalToConstant: Self.artWidth),
                 page.heightAnchor.constraint(equalToConstant: Self.artHeight),
             ]
         }
         NSLayoutConstraint.activate(constraints)
     }
 
-    /// The artwork already carries the logo, the wordmark and the tagline, and leaves the
-    /// bottom-left deliberately empty. Only the version block is laid over it.
+    /// Only the picture. These finals are a finished composition -- wordmark, tagline and
+    /// submarine reach the bottom of the panel -- so the version block cannot sit on them
+    /// without landing on the artwork; it lives in the button bar instead.
     private func buildArtPage() -> NSView {
         let page = NSView()
         let image = artwork(named: "about")
         page.addSubview(image)
-
-        let lines = [
-            "Gosub Beacon \(Bundle.main.shortVersion)",
-            "Powered by the Gosub Engine",
-            "Copyright © 2026 Gosub Project",
-            "All rights reserved.",
-        ]
-        let stack = NSStackView()
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 2
-        for line in lines {
-            let label = NSTextField(labelWithString: line)
-            label.font = .systemFont(ofSize: 11)
-            label.textColor = Self.inkMuted
-            stack.addArrangedSubview(label)
-        }
-
-        let link = NSButton(title: "https://gosub.io", target: self, action: #selector(openWebsite))
-        link.isBordered = false
-        // attributedTitle rather than contentTintColor: that tints template images, and a
-        // borderless button's text goes on being the system's label colour.
-        link.attributedTitle = NSAttributedString(
-            string: "https://gosub.io",
-            attributes: [
-                .font: NSFont.systemFont(ofSize: 11, weight: .medium),
-                .foregroundColor: Self.ink,
-                .underlineStyle: NSUnderlineStyle.single.rawValue,
-            ]
-        )
-        // Without this the button pads itself away from the labels above it.
-        link.setContentHuggingPriority(.defaultHigh, for: .horizontal)
-        stack.addArrangedSubview(link)
-
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        page.addSubview(stack)
         NSLayoutConstraint.activate([
             image.topAnchor.constraint(equalTo: page.topAnchor),
             image.leadingAnchor.constraint(equalTo: page.leadingAnchor),
             image.trailingAnchor.constraint(equalTo: page.trailingAnchor),
             image.bottomAnchor.constraint(equalTo: page.bottomAnchor),
-            // Matching the GTK dialog's margins, so the block lands in the same empty space.
-            stack.leadingAnchor.constraint(equalTo: page.leadingAnchor, constant: 42),
-            stack.bottomAnchor.constraint(equalTo: page.bottomAnchor, constant: -24),
         ])
         return page
     }
@@ -168,13 +168,15 @@ final class AboutWindowController: NSWindowController {
         for (section, names) in Self.credits {
             let heading = NSTextField(labelWithString: section)
             heading.font = .systemFont(ofSize: 11, weight: .semibold)
-            heading.textColor = Self.ink
+            heading.textColor = .white
+            heading.shadow = Self.legibilityShadow
             list.addArrangedSubview(heading)
             list.setCustomSpacing(4, after: heading)
             for name in names {
                 let label = NSTextField(labelWithString: "    " + name)
                 label.font = .systemFont(ofSize: 11)
-                label.textColor = Self.inkMuted
+                label.textColor = NSColor.white.withAlphaComponent(0.88)
+                label.shadow = Self.legibilityShadow
                 list.addArrangedSubview(label)
             }
             if let last = list.arrangedSubviews.last {
@@ -187,7 +189,17 @@ final class AboutWindowController: NSWindowController {
         scroller.hasVerticalScroller = true
         scroller.hasHorizontalScroller = false
         scroller.autohidesScrollers = true
-        scroller.documentView = list
+        // Overlay rather than the legacy track, whatever the system preference says: a solid
+        // grey bar down the middle of a photograph reads as a mistake. Light knob, because
+        // what is behind it is the night sky.
+        scroller.scrollerStyle = .overlay
+        scroller.scrollerKnobStyle = .light
+        // A flipped container, or the stack lays out from the bottom and the scroller opens
+        // on the *end* of the list with the first section clipped off the top.
+        let document = FlippedView()
+        document.translatesAutoresizingMaskIntoConstraints = false
+        document.addSubview(list)
+        scroller.documentView = document
 
         // The document view is sized by its own content; only its width is pinned, or the
         // stack lays out at zero and the column comes out empty.
@@ -201,27 +213,63 @@ final class AboutWindowController: NSWindowController {
             image.trailingAnchor.constraint(equalTo: page.trailingAnchor),
             image.bottomAnchor.constraint(equalTo: page.bottomAnchor),
 
-            // Confined to the artwork's clear left half.
-            scroller.leadingAnchor.constraint(equalTo: page.leadingAnchor, constant: 28),
-            scroller.topAnchor.constraint(equalTo: page.topAnchor, constant: 20),
-            scroller.bottomAnchor.constraint(equalTo: page.bottomAnchor, constant: -20),
-            scroller.widthAnchor.constraint(equalToConstant: Self.artWidth * 0.4),
+            // Spanning the right of the picture: the names sit over the open water clear of
+            // the gradient, and the scrollbar lands at the edge of the artwork rather than
+            // down the middle of it.
+            scroller.leadingAnchor.constraint(equalTo: page.leadingAnchor, constant: Self.artWidth * 0.56),
+            scroller.trailingAnchor.constraint(equalTo: page.trailingAnchor, constant: -20),
+            scroller.topAnchor.constraint(equalTo: page.topAnchor, constant: 22),
+            scroller.bottomAnchor.constraint(equalTo: page.bottomAnchor, constant: -22),
 
-            list.leadingAnchor.constraint(equalTo: scroller.contentView.leadingAnchor),
-            list.topAnchor.constraint(equalTo: scroller.contentView.topAnchor),
-            list.widthAnchor.constraint(equalTo: scroller.widthAnchor, constant: -16),
+            document.leadingAnchor.constraint(equalTo: scroller.contentView.leadingAnchor),
+            document.topAnchor.constraint(equalTo: scroller.contentView.topAnchor),
+            document.widthAnchor.constraint(equalTo: scroller.widthAnchor, constant: -16),
+
+            list.leadingAnchor.constraint(equalTo: document.leadingAnchor),
+            list.trailingAnchor.constraint(equalTo: document.trailingAnchor),
+            list.topAnchor.constraint(equalTo: document.topAnchor),
+            list.bottomAnchor.constraint(equalTo: document.bottomAnchor),
         ])
         return page
     }
 
-    /// Load a bundled PNG. `Bundle.module` is generated by SwiftPM for the resources
-    /// declared in Package.swift; a missing file yields an empty view rather than a crash,
-    /// so a packaging mistake costs the artwork and not the dialog.
+    /// Where the resources SwiftPM bundled actually are at runtime.
+    ///
+    /// Not `Bundle.module`. That accessor is generated with exactly two paths in it: beside
+    /// the main bundle, and the absolute path of the build directory it was compiled in.
+    /// A packaged .app keeps its resources in Contents/Resources, which is neither, so the
+    /// only reason the app works on the machine that built it is the second path still
+    /// existing there. Anywhere else `Bundle.module` finds nothing -- and it does not return
+    /// nil, it traps. Opening About crashed the first DMG that left this machine.
+    ///
+    /// `Bundle.main` covers both shapes: Contents/Resources in a packaged app, and the
+    /// directory the executable sits in when it is run straight out of .build.
+    private static let resources: Bundle = {
+        if let url = Bundle.main.url(forResource: "BeaconMac_BeaconMac", withExtension: "bundle"),
+            let bundle = Bundle(url: url)
+        {
+            return bundle
+        }
+        // Whatever is next to the executable. A missing picture is then a missing picture,
+        // logged below, rather than the dialog taking the app down with it.
+        return Bundle.main
+    }()
+
+    /// Load a bundled PNG. A missing file yields an empty view rather than a crash, so a
+    /// packaging mistake costs the artwork and not the dialog.
     private func artwork(named name: String) -> NSImageView {
         let view = NSImageView()
         view.imageScaling = .scaleProportionallyUpOrDown
         view.translatesAutoresizingMaskIntoConstraints = false
-        if let url = Bundle.module.url(forResource: name, withExtension: "png"),
+        // An image view reports the picture's own size as its intrinsic one, and this window
+        // is not resizable, so AppKit sizes the window to fit the artwork: 1672 points wide
+        // for a 660 point panel, with the art floating in the middle of it. The layout
+        // decides how large the art is drawn, not the file.
+        for axis in [NSLayoutConstraint.Orientation.horizontal, .vertical] {
+            view.setContentCompressionResistancePriority(.defaultLow, for: axis)
+            view.setContentHuggingPriority(.defaultLow, for: axis)
+        }
+        if let url = Self.resources.url(forResource: name, withExtension: "png"),
             let image = NSImage(contentsOf: url)
         {
             view.image = image
@@ -232,6 +280,12 @@ final class AboutWindowController: NSWindowController {
     }
 
     // ── actions ───────────────────────────────────────────────────────────
+
+    @objc private func openWebsite() {
+        if let url = URL(string: "https://gosub.io") {
+            NSWorkspace.shared.open(url)
+        }
+    }
 
     @objc private func togglePage() {
         showingCredits.toggle()
@@ -247,11 +301,13 @@ final class AboutWindowController: NSWindowController {
         window?.close()
     }
 
-    @objc private func openWebsite() {
-        if let url = URL(string: "https://gosub.io") {
-            NSWorkspace.shared.open(url)
-        }
-    }
+}
+
+/// A view that measures from the top, which is what a scrolling column of text wants: the
+/// AppKit default puts the origin at the bottom, so a stack inside a scroll view fills
+/// upwards and opens scrolled to its end.
+private final class FlippedView: NSView {
+    override var isFlipped: Bool { true }
 }
 
 extension Bundle {

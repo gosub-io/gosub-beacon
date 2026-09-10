@@ -7,9 +7,11 @@ use gtk4::{
     ScrolledWindow, Stack, StackTransitionType, Window,
 };
 
-// Keep the artwork's 1403x861 aspect so ContentFit::Cover never crops.
+// Keep the artwork's 1672x941 aspect so ContentFit::Cover never crops.
 const ART_WIDTH: i32 = 660;
-const ART_HEIGHT: i32 = 405;
+// 16:9, the aspect of the artwork in resources/. Both pages share it, so the dialog does
+// not change size when you flip between them.
+const ART_HEIGHT: i32 = 371;
 
 const CREDITS: &[(&str, &[&str])] = &[
     ("Gosub Beacon", &["Gosub Team", "Joshua Thijssen", "SharkTheOne"]),
@@ -57,6 +59,7 @@ impl About {
 
         let bar = ActionBar::new();
         bar.pack_start(&credits_button);
+        bar.set_center_widget(Some(&Self::build_info_bar()));
         bar.pack_end(&close_button);
 
         let content = GtkBox::new(Orientation::Vertical, 0);
@@ -95,36 +98,29 @@ impl About {
         picture
     }
 
-    /// The branded artwork already contains the logo, tagline and an empty
-    /// bottom-left region; only the version block is overlaid as real widgets.
+    /// Only the picture. These finals are a finished composition -- wordmark, tagline and
+    /// submarine reach the bottom of the panel -- so the version block cannot sit on them
+    /// without landing on the artwork; it lives in the action bar instead.
     fn build_art_page() -> Overlay {
-        let picture = Self::scaled_art("/io/gosub/beacon/assets/about.png");
+        let overlay = Overlay::new();
+        overlay.set_child(Some(&Self::scaled_art("/io/gosub/beacon/assets/about.png")));
+        overlay
+    }
 
-        let info = GtkBox::new(Orientation::Vertical, 2);
-        info.set_halign(Align::Start);
-        info.set_valign(Align::End);
-        info.set_margin_start(42);
-        info.set_margin_bottom(28);
-        for line in [
-            concat!("Gosub Beacon ", env!("CARGO_PKG_VERSION")),
-            "Powered by the Gosub Engine",
-            "Copyright © 2026 Gosub Project",
-            "All rights reserved.",
-        ] {
-            let label = Label::new(Some(line));
-            label.set_halign(Align::Start);
-            label.add_css_class("about-info-line");
-            info.append(&label);
-        }
+    /// The version block, for the action bar's centre.
+    fn build_info_bar() -> GtkBox {
+        let info = GtkBox::new(Orientation::Horizontal, 8);
+        let label = Label::new(Some(concat!(
+            "Gosub Beacon ",
+            env!("CARGO_PKG_VERSION"),
+            " · Powered by the Gosub Engine · © 2026 Gosub Project"
+        )));
+        label.add_css_class("about-info-line");
+        info.append(&label);
         let link = LinkButton::with_label("https://gosub.io", "https://gosub.io");
-        link.set_halign(Align::Start);
         link.add_css_class("about-info-link");
         info.append(&link);
-
-        let overlay = Overlay::new();
-        overlay.set_child(Some(&picture));
-        overlay.add_overlay(&info);
-        overlay
+        info
     }
 
     /// Credits artwork keeps the whole left half white; the scrolling credits
@@ -154,12 +150,17 @@ impl About {
             .hscrollbar_policy(gtk4::PolicyType::Never)
             .build();
         scroller.add_css_class("about-credits-scroller");
-        // Confine the column to the artwork's white left half.
-        scroller.set_size_request(ART_WIDTH * 2 / 5, -1);
-        scroller.set_halign(Align::Start);
-        scroller.set_margin_start(28);
-        scroller.set_margin_top(20);
-        scroller.set_margin_bottom(20);
+
+        // Spanning the right of the picture: the names sit over the open water, clear of the
+        // gradient, and the scrollbar lands at the edge of the artwork rather than down the
+        // middle of it.
+        scroller.set_vexpand(true);
+        scroller.set_hexpand(true);
+        scroller.set_halign(Align::Fill);
+        scroller.set_margin_start(ART_WIDTH * 56 / 100);
+        scroller.set_margin_end(20);
+        scroller.set_margin_top(22);
+        scroller.set_margin_bottom(22);
 
         let overlay = Overlay::new();
         overlay.set_child(Some(&picture));
