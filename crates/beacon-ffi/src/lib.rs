@@ -816,6 +816,11 @@ pub unsafe extern "C" fn beacon_close_tab(browser: *mut BeaconBrowser, tab: u64)
     b.beacon.mru_mut().forget(tab_id);
     b.viewports.remove(&tab_id);
     b.progress.remove(&tab_id);
+    // Before the handle goes: `beacon_detach_view` resolves the tab through it, so a shell
+    // that detaches after closing -- which is the order a tab strip closes a tab in -- would
+    // find nothing and leave the surface behind, alive over a view it no longer draws.
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    b.views.remove(&tab_id);
     b.handles.remove(&tab);
 }
 
@@ -2057,9 +2062,33 @@ pub unsafe extern "C" fn beacon_attach_view(browser: *mut BeaconBrowser, tab: u6
     {
         let b = browser!(browser, false);
         let Some(tab_id) = b.tab(tab) else { return false };
+
+        // A shell with one page view shows every tab in it, so switching tabs arrives here as
+        // an attach for a view that already has a surface. Hand that surface to the new tab
+        // rather than building another: a surface belongs to the view it draws into, not to
+        // whatever is being shown in it.
+        //
+        // Building a second one is not merely wasteful -- it recompiles the blit pipeline and
+        // calls `configure`, which drains the device before it returns. That device is shared
+        // with the engine's renderer, and this runs on the thread AppKit dispatches the click
+        // on, so a tab switch can stop the whole interface until the GPU is idle.
+        if let Some(owner) = b.views.iter().find(|(_, s)| s.covers(view)).map(|(id, _)| *id) {
+            let gpu = b.gpu.clone();
+            let mut surface = b.views.remove(&owner).expect("found just above");
+            surface.resize(&gpu, width, height);
+            b.views.insert(tab_id, surface);
+            // The view is still showing whatever the last tab left in it, and a page only
+            // repaints when the engine says it changed -- which a tab that is merely being
+            // looked at again has not. Put this tab's frame up now, or the shell shows the
+            // wrong page until something happens to redraw it.
+            b.present_latest(tab_id);
+            return true;
+        }
+
         match unsafe { gpu::ViewSurface::new(&b.gpu, view, width, height) } {
             Ok(surface) => {
                 b.views.insert(tab_id, surface);
+                b.present_latest(tab_id);
                 true
             }
             Err(e) => {
