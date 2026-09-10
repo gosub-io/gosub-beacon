@@ -75,12 +75,30 @@ The background is supplied at 1536x1024 and the window is 768x512 points. The sc
 the 1x representation with `sips` and folds both into one file with `tiffutil`, so the
 artwork stays sharp on a Retina display instead of being upscaled.
 
-The app is not signed with a Developer ID and not notarized, which is deliberate for a demo
-build. macOS quarantines anything downloaded, so the first launch has to be right-click ->
-Open, or `xattr -dr com.apple.quarantine "Gosub Beacon.app"`. Double-clicking gives "cannot
-be opened because the developer cannot be verified", which looks like a broken download but
-is not one. Notarization needs a paid Apple Developer account and can be added later without
-redoing any of this.
+### Signing
+
+With nothing configured the app is signed ad hoc, which is a demo build: macOS quarantines
+anything downloaded, so the first launch has to be right-click -> Open, or
+`xattr -dr com.apple.quarantine "Gosub Beacon.app"`. Double-clicking gives "cannot be opened
+because the developer cannot be verified", which looks like a broken download but is not one.
+
+`packaging/setup-signing.sh <DeveloperID.p12>` sets up the real thing, once per machine. It
+imports the certificate into a keychain of its own -- not the login keychain, which is locked
+in an ssh session and makes `codesign` wait forever on a dialog nobody can see -- and writes
+`packaging/signing.env`, which `package.sh` reads and git ignores.
+
+Fill in the three `BEACON_NOTARY_*` values in that file with an App Store Connect API key and
+`./package.sh` signs with the hardened runtime, notarizes the app, staples it, builds the
+image, signs that, notarizes it too and staples it. The app is stapled separately from the
+image on purpose: a copy dragged out to /Applications carries its own ticket that way, rather
+than asking Apple over the network the first time it opens.
+
+Signing without notarizing is not a halfway house. Gatekeeper refuses it exactly as it
+refuses an unsigned app, so the script says so and carries on rather than implying otherwise.
+
+The certificate has to be a **Developer ID Application** one. An Apple Development or Mac
+Development certificate imports without complaint and then reports zero valid identities,
+which reads like a keychain problem and is not one.
 
 The DMG is Apple Silicon only. A universal build means compiling the Rust side for
 `x86_64-apple-darwin` as well and `lipo`-ing the two together.
