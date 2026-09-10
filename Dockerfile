@@ -14,14 +14,14 @@ ARG ENGINE_BRANCH=beacon
 # Engine dependencies
 RUN mkdir /gosub \
 	&& cd /gosub \
-	&& git clone --single-branch --branch=$ENGINE_BRANCH $ENGINE_REMOTE
+	&& git clone --single-branch --branch="$ENGINE_BRANCH" "$ENGINE_REMOTE" gosub-engine
 #COPY ../gosub-engine /gosub/gosub-engine
 
 #ARG BEACON_REMOTE=https://github.com/gosub-io/gosub-beacon.git
 #ARG BEACON_BRANCH=main
 #RUN mkdir /gosub \
 #	&& cd /gosub \
-#	&& git clone --single-branch --branch=$BEACON_BRANCH $BEACON_REMOTE
+#	&& git clone --single-branch --branch="$BEACON_BRANCH" "$BEACON_REMOTE" gosub-beacon
 COPY . /gosub/gosub-beacon
 
 WORKDIR /gosub/gosub-beacon
