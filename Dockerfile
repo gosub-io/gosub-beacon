@@ -9,15 +9,19 @@ RUN apt-get update \
                  clang libclang-dev libgl-dev libegl-dev libfontconfig-dev libfreetype-dev \
 	&& rm -rf /var/lib/apt/*
 
+ARG ENGINE_REMOTE=https://github.com/gosub-io/gosub-engine.git
+ARG ENGINE_BRANCH=beacon
 # Engine dependencies
 RUN mkdir /gosub \
 	&& cd /gosub \
-	&& git clone https://github.com/gosub-io/gosub-engine.git
+	&& git clone --single-branch --branch="$ENGINE_BRANCH" "$ENGINE_REMOTE" gosub-engine
 #COPY ../gosub-engine /gosub/gosub-engine
 
+#ARG BEACON_REMOTE=https://github.com/gosub-io/gosub-beacon.git
+#ARG BEACON_BRANCH=main
 #RUN mkdir /gosub \
 #	&& cd /gosub \
-#	&& git clone https://github.com/gosub-io/gosub-beacon.git
+#	&& git clone --single-branch --branch="$BEACON_BRANCH" "$BEACON_REMOTE" gosub-beacon
 COPY . /gosub/gosub-beacon
 
 WORKDIR /gosub/gosub-beacon
