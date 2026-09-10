@@ -102,25 +102,31 @@ and hold Forward to pick a branch when the history has forked.
 
 ### Developer panel
 
-`⌥⌘I`, or the Develop menu. It docks under the page with three tabs.
+`⌥⌘I`, or the Develop menu. It docks under the page with four tabs, and its top edge is a
+grab strip: drag it to make the panel taller or shorter.
 
-**Console.** The engine's own `log` records, not only Beacon's: level, source crate and
-message, filterable. It follows new records while you are scrolled to the bottom, and stays
-put otherwise. What is captured depends on `BEACON_LOG` and `RUST_LOG`, which default to
-warnings only, so an empty console usually means the level rather than a broken panel. Try
-`BEACON_LOG=info swift run BeaconMac`.
+**Log** (`⌥⌘L`). The browser's own records, from the engine's `log` crate: time, level,
+source crate and message, filterable. It follows new records while you are scrolled to the
+bottom, and stays put otherwise. What is captured depends on `BEACON_LOG` and `RUST_LOG`,
+which default to warnings only, so an empty log usually means the level rather than a broken
+panel. Try `BEACON_LOG=info swift run BeaconMac`.
+
+**Console** (`⌥⌘C`). The page's own `console.log`, which is empty and says so: that needs
+JavaScript, and the engine does not run any yet. It is a separate tab from the Log because
+they are different things, and the GTK shell splits them the same way.
 
 **Network** (`⌥⌘N`). Every request this tab made, with status, method, kind, size, elapsed
 time, and a waterfall bar split into waiting for the server and receiving the body. A
 request still in flight shows which phase it is stuck in and for how long, which is more use
-than the word "loading". Selecting one fills the pane beside it: an overview and where the
-time went, the request line and its headers, the response and its headers, and the captured
-body.
+than the word "loading". Selecting one fills the pane beside it, in five tabs: an overview,
+the request line and its headers, the response and its headers, the captured body, and where
+that request's time went (DNS, connect, waiting, receiving).
 
 **Timings** (`⌥⌘T`). The engine's timing table, slowest namespace first, with count, total,
-average, p50, p95 and max. Each namespace explains itself on hover, from the engine's own
-table. Reset starts again from nothing, which is how you time one navigation rather than
-every navigation since launch.
+average, p50, p95 and max. Every column sorts; each namespace explains itself on hover, from
+the engine's own table. Reset starts again from nothing, which is how you time one navigation
+rather than every navigation since launch. The Log and Network tabs deliberately do not sort:
+their order is when things happened, which is itself information.
 
 The panel polls four times a second while open, and not at all while closed. All three tabs
 read snapshots rather than live tables: log records arrive on whatever thread the engine is
