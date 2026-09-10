@@ -97,6 +97,19 @@ docker build --tag gosub-beacon .
 podman build --tag gosub-beacon .
 ```
 
+Use args to use specific branches and/or forks for the engine.
+
+- `ENGINE_REMOTE`
+- `ENGINE_BRANCH`
+
+```shell
+# docker
+docker build --tag gosub-beacon --build-arg='ENGINE_BRANCH=main' .
+
+# podman 
+podman build --tag gosub-beacon --build-arg='ENGINE_BRANCH=main' .
+```
+
 #### Running the image
 
 Run this image using Wayland (X11 should also work)
