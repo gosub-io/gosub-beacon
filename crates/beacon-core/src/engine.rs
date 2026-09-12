@@ -110,9 +110,12 @@ impl<C: BeaconConfig> BrowserEngine<C> {
         // Beacon-branded versions of the engine's built-in gosub://home and gosub://help.
         // Everything else (blank, version, history, config dump, unknown pages) is the
         // engine's own; gosub://config additionally gets a shell-rendered editor.
-        engine
-            .internal_pages()
-            .register_html("home", include_str!("../resources/home.html"));
+        // The page carries the build's own version, so a preview build says which one it is
+        // rather than just that it is one.
+        engine.internal_pages().register_html(
+            "home",
+            include_str!("../resources/home.html").replace("{{VERSION}}", env!("CARGO_PKG_VERSION")),
+        );
         engine
             .internal_pages()
             .register_html("help", include_str!("../resources/help.html"));

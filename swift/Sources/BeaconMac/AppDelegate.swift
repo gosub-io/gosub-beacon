@@ -156,6 +156,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         settingsWindow?.window?.makeKeyAndOrderFront(nil)
     }
     @objc private func toggleDeveloperTools(_ sender: Any?) { front?.toggleDeveloperTools(sender) }
+    @objc private func showLog(_ sender: Any?) { front?.showLog(sender) }
     @objc private func showConsole(_ sender: Any?) { front?.showConsole(sender) }
     @objc private func showTimings(_ sender: Any?) { front?.showTimings(sender) }
     @objc private func showNetwork(_ sender: Any?) { front?.showNetwork(sender) }
@@ -363,6 +364,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         return submenu("Develop", [
             toggle,
             .separator(),
+            item("Log", #selector(showLog(_:)), "l", [.command, .option]),
             item("Console", #selector(showConsole(_:)), "c", [.command, .option]),
             item("Network", #selector(showNetwork(_:)), "n", [.command, .option]),
             item("Timings", #selector(showTimings(_:)), "t", [.command, .option]),

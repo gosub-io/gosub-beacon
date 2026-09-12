@@ -2796,6 +2796,7 @@ dependencies = [
  "allsorts",
  "anyhow",
  "async-trait",
+ "base64 0.23.1",
  "bitflags 2.13.1",
  "bytes",
  "chrono",

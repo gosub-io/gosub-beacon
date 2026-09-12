@@ -75,12 +75,30 @@ The background is supplied at 1536x1024 and the window is 768x512 points. The sc
 the 1x representation with `sips` and folds both into one file with `tiffutil`, so the
 artwork stays sharp on a Retina display instead of being upscaled.
 
-The app is not signed with a Developer ID and not notarized, which is deliberate for a demo
-build. macOS quarantines anything downloaded, so the first launch has to be right-click ->
-Open, or `xattr -dr com.apple.quarantine "Gosub Beacon.app"`. Double-clicking gives "cannot
-be opened because the developer cannot be verified", which looks like a broken download but
-is not one. Notarization needs a paid Apple Developer account and can be added later without
-redoing any of this.
+### Signing
+
+With nothing configured the app is signed ad hoc, which is a demo build: macOS quarantines
+anything downloaded, so the first launch has to be right-click -> Open, or
+`xattr -dr com.apple.quarantine "Gosub Beacon.app"`. Double-clicking gives "cannot be opened
+because the developer cannot be verified", which looks like a broken download but is not one.
+
+`packaging/setup-signing.sh <DeveloperID.p12>` sets up the real thing, once per machine. It
+imports the certificate into a keychain of its own -- not the login keychain, which is locked
+in an ssh session and makes `codesign` wait forever on a dialog nobody can see -- and writes
+`packaging/signing.env`, which `package.sh` reads and git ignores.
+
+Fill in the three `BEACON_NOTARY_*` values in that file with an App Store Connect API key and
+`./package.sh` signs with the hardened runtime, notarizes the app, staples it, builds the
+image, signs that, notarizes it too and staples it. The app is stapled separately from the
+image on purpose: a copy dragged out to /Applications carries its own ticket that way, rather
+than asking Apple over the network the first time it opens.
+
+Signing without notarizing is not a halfway house. Gatekeeper refuses it exactly as it
+refuses an unsigned app, so the script says so and carries on rather than implying otherwise.
+
+The certificate has to be a **Developer ID Application** one. An Apple Development or Mac
+Development certificate imports without complaint and then reports zero valid identities,
+which reads like a keychain problem and is not one.
 
 The DMG is Apple Silicon only. A universal build means compiling the Rust side for
 `x86_64-apple-darwin` as well and `lipo`-ing the two together.
@@ -102,25 +120,31 @@ and hold Forward to pick a branch when the history has forked.
 
 ### Developer panel
 
-`⌥⌘I`, or the Develop menu. It docks under the page with three tabs.
+`⌥⌘I`, or the Develop menu. It docks under the page with four tabs, and its top edge is a
+grab strip: drag it to make the panel taller or shorter.
 
-**Console.** The engine's own `log` records, not only Beacon's: level, source crate and
-message, filterable. It follows new records while you are scrolled to the bottom, and stays
-put otherwise. What is captured depends on `BEACON_LOG` and `RUST_LOG`, which default to
-warnings only, so an empty console usually means the level rather than a broken panel. Try
-`BEACON_LOG=info swift run BeaconMac`.
+**Log** (`⌥⌘L`). The browser's own records, from the engine's `log` crate: time, level,
+source crate and message, filterable. It follows new records while you are scrolled to the
+bottom, and stays put otherwise. What is captured depends on `BEACON_LOG` and `RUST_LOG`,
+which default to warnings only, so an empty log usually means the level rather than a broken
+panel. Try `BEACON_LOG=info swift run BeaconMac`.
+
+**Console** (`⌥⌘C`). The page's own `console.log`, which is empty and says so: that needs
+JavaScript, and the engine does not run any yet. It is a separate tab from the Log because
+they are different things, and the GTK shell splits them the same way.
 
 **Network** (`⌥⌘N`). Every request this tab made, with status, method, kind, size, elapsed
 time, and a waterfall bar split into waiting for the server and receiving the body. A
 request still in flight shows which phase it is stuck in and for how long, which is more use
-than the word "loading". Selecting one fills the pane beside it: an overview and where the
-time went, the request line and its headers, the response and its headers, and the captured
-body.
+than the word "loading". Selecting one fills the pane beside it, in five tabs: an overview,
+the request line and its headers, the response and its headers, the captured body, and where
+that request's time went (DNS, connect, waiting, receiving).
 
 **Timings** (`⌥⌘T`). The engine's timing table, slowest namespace first, with count, total,
-average, p50, p95 and max. Each namespace explains itself on hover, from the engine's own
-table. Reset starts again from nothing, which is how you time one navigation rather than
-every navigation since launch.
+average, p50, p95 and max. Every column sorts; each namespace explains itself on hover, from
+the engine's own table. Reset starts again from nothing, which is how you time one navigation
+rather than every navigation since launch. The Log and Network tabs deliberately do not sort:
+their order is when things happened, which is itself information.
 
 The panel polls four times a second while open, and not at all while closed. All three tabs
 read snapshots rather than live tables: log records arrive on whatever thread the engine is
@@ -165,6 +189,15 @@ relying on colour.
 The About artwork lives in `Sources/BeaconMac/Resources/` as a copy of the GTK shell's
 `crates/beacon-gtk/resources/`, because SwiftPM will not take resources from outside its own
 target directory. Change the art and both need updating.
+
+`about.png` is the day scene and `about-credits.png` the night one, behind the credits list.
+Neither carries text the window needs to own: the version, copyright and gosub.io link sit in
+the action bar, where the version comes from the build and the URL is a real link. The
+artwork runs edge to edge behind them.
+
+The credits are white text with a shadow, over the night scene, inset to 56% of the artwork's
+width so they fall on open water -- clear of the lighthouse, the moon and the gradient into
+the branding -- with the scroller on the right edge.
 
 ## Where it deliberately differs from the GTK shell
 

@@ -16,6 +16,9 @@ import CBeacon
 /// held while someone can look at them.
 final class DeveloperPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
     enum Mode: Int {
+        /// The browser's own records, from the engine's `log` crate.
+        case log
+        /// The page's `console.log`, which needs JavaScript the engine does not run yet.
         case console
         case network
         case timings
@@ -26,7 +29,13 @@ final class DeveloperPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
     private let filterField = NSSearchField()
     private let actionButton = NSButton()
     private let summaryLabel = NSTextField(labelWithString: "")
-    private let table = NSTableView()
+    private let table = BandedTableView()
+    /// Shown instead of a table on a page that has nothing to list.
+    private let placeholder = NSTextField(
+        wrappingLabelWithString:
+            "A page's console needs JavaScript, and the engine does not run any yet. "
+            + "The browser's own records are on the Log tab."
+    )
     private let scroller = NSScrollView()
 
     /// The request detail, beside the list. Its own scroller so a long header block does
@@ -37,12 +46,15 @@ final class DeveloperPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
     /// blob of text, and gets a text view.
     private let split = NSSplitView()
     private let detailScroller = NSScrollView()
-    private let detailTable = NSTableView()
+    private let detailTable = BandedTableView()
     private let bodyScroller = NSScrollView()
     private let bodyView = NSTextView()
     private let detailTabs: NSSegmentedControl
 
-    private var mode: Mode = .console
+    private var mode: Mode = .log
+    /// Which column the reader sorted by, per table. Timings default to slowest first,
+    /// which is the question the table exists to answer.
+    private var timingSort = (key: "total", ascending: false)
     private var logs: [Browser.LogLine] = []
     private var timings: [Browser.Timing] = []
     private var requests: [Browser.Request] = []
@@ -68,6 +80,13 @@ final class DeveloperPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
     /// The user asked to close the panel from its own header.
     var onClose: (() -> Void)?
 
+    /// The reader dragged the panel's top edge: the new height they are asking for. The
+    /// window owns the constraint, so it decides what is allowed.
+    var onResize: ((CGFloat) -> Void)?
+
+    /// Where a drag started, in window coordinates, and the height at that moment.
+    private var dragOrigin: (y: CGFloat, height: CGFloat)?
+
     /// Whose requests to show. A network panel mixing several tabs together is a log, not
     /// a panel — so the window keeps this pointed at whatever it is showing.
     var tab: BeaconTabId = 0 {
@@ -83,13 +102,13 @@ final class DeveloperPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
     init(browser: Browser) {
         self.browser = browser
         modeControl = NSSegmentedControl(
-            labels: ["Console", "Network", "Timings"],
+            labels: ["Log", "Console", "Network", "Timings"],
             trackingMode: .selectOne,
             target: nil,
             action: nil
         )
         detailTabs = NSSegmentedControl(
-            labels: ["Overview", "Request", "Response", "Body"],
+            labels: ["Overview", "Request", "Response", "Body", "Timing"],
             trackingMode: .selectOne,
             target: nil,
             action: nil
@@ -110,7 +129,13 @@ final class DeveloperPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
         modeControl.selectedSegment = 0
         modeControl.target = self
         modeControl.action = #selector(modeChanged)
-        modeControl.controlSize = .small
+        // Regular size, and wide enough that the three read as one control rather than
+        // three cramped boxes. At .small they were 21 points tall with the labels touching
+        // their borders.
+        modeControl.segmentStyle = .automatic
+        for segment in 0..<modeControl.segmentCount {
+            modeControl.setWidth(84, forSegment: segment)
+        }
 
         filterField.placeholderString = "Filter"
         filterField.controlSize = .small
@@ -124,7 +149,6 @@ final class DeveloperPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
 
         actionButton.title = "Clear"
         actionButton.bezelStyle = .rounded
-        actionButton.controlSize = .small
         actionButton.target = self
         actionButton.action = #selector(actionClicked)
 
@@ -142,7 +166,11 @@ final class DeveloperPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
 
         table.dataSource = self
         table.delegate = self
-        table.usesAlternatingRowBackgroundColors = true
+        // Banding drawn here rather than left to usesAlternatingRowBackgroundColors: the
+        // system colour is nearly invisible against the panel's background, which is what
+        // made these tables read as one undifferentiated block.
+        table.backgroundColor = .clear
+        table.gridStyleMask = []
         table.rowSizeStyle = .small
         table.headerView = NSTableHeaderView()
         table.allowsColumnResizing = true
@@ -156,6 +184,11 @@ final class DeveloperPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
         scroller.drawsBackground = true
         scroller.backgroundColor = .windowBackgroundColor
 
+        placeholder.font = .systemFont(ofSize: 12)
+        placeholder.textColor = .secondaryLabelColor
+        placeholder.alignment = .center
+        placeholder.isHidden = true
+
         detailTabs.selectedSegment = 0
         detailTabs.target = self
         detailTabs.action = #selector(detailPageChanged)
@@ -164,7 +197,7 @@ final class DeveloperPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
         detailTable.dataSource = self
         detailTable.delegate = self
         // The same banding as the request list above it, so the two read as one panel.
-        detailTable.usesAlternatingRowBackgroundColors = true
+        detailTable.backgroundColor = .clear
         detailTable.headerView = nil
         detailTable.style = .fullWidth
         detailTable.gridStyleMask = []
@@ -235,14 +268,14 @@ final class DeveloperPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
         split.setHoldingPriority(NSLayoutConstraint.Priority(rawValue: 249), forSubviewAt: 0)
         split.setHoldingPriority(NSLayoutConstraint.Priority(rawValue: 250), forSubviewAt: 1)
 
-        for view in [modeControl, filterField, actionButton, summaryLabel, closeButton, split] as [NSView] {
+        for view in [modeControl, filterField, actionButton, summaryLabel, closeButton, split, placeholder] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             addSubview(view)
         }
 
         NSLayoutConstraint.activate([
             modeControl.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
-            modeControl.topAnchor.constraint(equalTo: topAnchor, constant: 5),
+            modeControl.topAnchor.constraint(equalTo: topAnchor, constant: 9),
 
             actionButton.leadingAnchor.constraint(equalTo: modeControl.trailingAnchor, constant: 8),
             actionButton.centerYAnchor.constraint(equalTo: modeControl.centerYAnchor),
@@ -258,10 +291,14 @@ final class DeveloperPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
             closeButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
             closeButton.centerYAnchor.constraint(equalTo: modeControl.centerYAnchor),
 
-            split.topAnchor.constraint(equalTo: modeControl.bottomAnchor, constant: 5),
+            split.topAnchor.constraint(equalTo: modeControl.bottomAnchor, constant: 8),
             split.leadingAnchor.constraint(equalTo: leadingAnchor),
             split.trailingAnchor.constraint(equalTo: trailingAnchor),
             split.bottomAnchor.constraint(equalTo: bottomAnchor),
+
+            placeholder.centerXAnchor.constraint(equalTo: centerXAnchor),
+            placeholder.centerYAnchor.constraint(equalTo: split.centerYAnchor),
+            placeholder.widthAnchor.constraint(lessThanOrEqualToConstant: 420),
         ])
 
         rebuildColumns()
@@ -274,11 +311,72 @@ final class DeveloperPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
     private func showDetailPane(_ visible: Bool) {
         guard let detailPane, detailPane.isHidden == visible else { return }
         detailPane.isHidden = !visible
-        if visible {
-            // Placed once, when the pane appears — not on every refresh, or the divider
-            // would spring back four times a second and could never be dragged.
-            split.setPosition(bounds.width * 0.55, ofDividerAt: 0)
+        placeDivider()
+    }
+
+    /// Give the divider a sane position, but only when it has none.
+    ///
+    /// It cannot simply be set when the pane appears: the panel has just been unhidden and
+    /// laid out is not the same as laid out, so `bounds.width` is still 0 and the request
+    /// list collapses to nothing with the detail pane taking the whole panel. So this runs
+    /// again on every layout, and does nothing unless the list has actually been squeezed
+    /// out -- which leaves a divider the reader has dragged exactly where they put it.
+    private func placeDivider() {
+        guard let detailPane, !detailPane.isHidden, bounds.width > 0 else { return }
+        // Either side being squeezed out means the split has never been given a position --
+        // checking only one of them fixes the list and loses the detail pane instead.
+        let list = split.arrangedSubviews.first?.frame.width ?? 0
+        guard list < 60 || detailPane.frame.width < 60 else { return }
+        split.setPosition(bounds.width * 0.55, ofDividerAt: 0)
+    }
+
+    override func layout() {
+        super.layout()
+        placeDivider()
+    }
+
+    // ── dragging the top edge ─────────────────────────────────────────────
+    //
+    // The panel is one of two things sharing the window's height, so it is resized the way
+    // a split is: grab the edge and pull. The cursor changes over the strip, because an
+    // affordance nobody can see is not one.
+
+    /// How tall the grab strip along the top edge is.
+    private static let grabHeight: CGFloat = 6
+
+    private var grabStrip: NSRect {
+        NSRect(x: 0, y: bounds.maxY - Self.grabHeight, width: bounds.width, height: Self.grabHeight)
+    }
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        addCursorRect(grabStrip, cursor: .resizeUpDown)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        guard grabStrip.contains(point) else {
+            super.mouseDown(with: event)
+            return
         }
+        dragOrigin = (event.locationInWindow.y, bounds.height)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let dragOrigin else {
+            super.mouseDragged(with: event)
+            return
+        }
+        // The panel grows downwards from its top edge, so dragging up makes it taller.
+        onResize?(dragOrigin.height + (dragOrigin.y - event.locationInWindow.y))
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        if dragOrigin != nil {
+            dragOrigin = nil
+            return
+        }
+        super.mouseUp(with: event)
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -296,6 +394,11 @@ final class DeveloperPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
         line.line(to: CGPoint(x: bounds.maxX, y: bounds.maxY - 0.5))
         line.lineWidth = 1
         line.stroke()
+
+        // A short grip in the middle of that line, so the edge looks draggable.
+        NSColor.tertiaryLabelColor.setFill()
+        let grip = NSRect(x: bounds.midX - 14, y: bounds.maxY - 3.5, width: 28, height: 2)
+        NSBezierPath(roundedRect: grip, xRadius: 1, yRadius: 1).fill()
     }
 
     // ── polling ───────────────────────────────────────────────────────────
@@ -322,6 +425,8 @@ final class DeveloperPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
 
         switch mode {
         case .console:
+            summaryLabel.stringValue = ""
+        case .log:
             logs = browser.logSnapshot()
             summaryLabel.stringValue = "\(filteredLogs.count) of \(logs.count) records"
         case .network:
@@ -338,7 +443,7 @@ final class DeveloperPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
             restoreSelection()
             fillDetail()
         }
-        if mode == .console, wasAtBottom {
+        if mode == .log, wasAtBottom {
             scrollToBottom()
         }
     }
@@ -385,6 +490,8 @@ final class DeveloperPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
         let columns: [(String, String, CGFloat)]
         switch mode {
         case .console:
+            columns = []
+        case .log:
             columns = [
                 ("time", "Time", 78), ("level", "Level", 52), ("target", "Source", 160), ("message", "Message", 600),
             ]
@@ -404,7 +511,15 @@ final class DeveloperPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
             let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(identifier))
             column.title = title
             column.width = width
+            // Timings sort by any column; the other two are in an order that means
+            // something already (when it happened), and sorting would destroy it.
+            if mode == .timings {
+                column.sortDescriptorPrototype = NSSortDescriptor(key: identifier, ascending: true)
+            }
             table.addTableColumn(column)
+        }
+        if mode == .timings {
+            table.sortDescriptors = [NSSortDescriptor(key: timingSort.key, ascending: timingSort.ascending)]
         }
         table.reloadData()
     }
@@ -422,11 +537,32 @@ final class DeveloperPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
     }
 
     private var filteredTimings: [Browser.Timing] {
-        guard !filter.isEmpty else { return timings }
-        let needle = filter.lowercased()
-        return timings.filter {
-            $0.namespace.lowercased().contains(needle) || ($0.describes?.lowercased().contains(needle) ?? false)
+        var rows = timings
+        if !filter.isEmpty {
+            let needle = filter.lowercased()
+            rows = rows.filter {
+                $0.namespace.lowercased().contains(needle) || ($0.describes?.lowercased().contains(needle) ?? false)
+            }
         }
+        // The engine hands them over slowest first; any other order is the reader's choice.
+        let ascending = timingSort.ascending
+        switch timingSort.key {
+        case "namespace":
+            rows.sort { ascending ? $0.namespace < $1.namespace : $0.namespace > $1.namespace }
+        case "count":
+            rows.sort { ascending ? $0.count < $1.count : $0.count > $1.count }
+        case "avg":
+            rows.sort { ascending ? $0.avgUs < $1.avgUs : $0.avgUs > $1.avgUs }
+        case "p50":
+            rows.sort { ascending ? $0.p50Us < $1.p50Us : $0.p50Us > $1.p50Us }
+        case "p95":
+            rows.sort { ascending ? $0.p95Us < $1.p95Us : $0.p95Us > $1.p95Us }
+        case "max":
+            rows.sort { ascending ? $0.maxUs < $1.maxUs : $0.maxUs > $1.maxUs }
+        default:
+            rows.sort { ascending ? $0.totalUs < $1.totalUs : $0.totalUs > $1.totalUs }
+        }
+        return rows
     }
 
     private var filteredRequests: [Browser.Request] {
@@ -440,7 +576,8 @@ final class DeveloperPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
             return detailRows.count
         }
         switch mode {
-        case .console: return filteredLogs.count
+        case .log: return filteredLogs.count
+        case .console: return 0
         case .network: return filteredRequests.count
         case .timings: return filteredTimings.count
         }
@@ -485,6 +622,8 @@ final class DeveloperPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
 
         switch mode {
         case .console:
+            return cell
+        case .log:
             let entries = filteredLogs
             guard row < entries.count else { return cell }
             let line = entries[row]
@@ -526,6 +665,14 @@ final class DeveloperPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
             }
         }
         return cell
+    }
+
+    func tableView(_ tableView: NSTableView, sortDescriptorsDidChange oldDescriptors: [NSSortDescriptor]) {
+        guard tableView === table, mode == .timings, let sort = tableView.sortDescriptors.first,
+            let key = sort.key
+        else { return }
+        timingSort = (key, sort.ascending)
+        reload()
     }
 
     func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
@@ -725,6 +872,7 @@ final class DeveloperPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
         case 1: setRows(requestDetail(request))
         case 2: setRows(responseDetail(request))
         case 3: setBody(bodyDetail(request))
+        case 4: setRows(timingDetail(request))
         default: setRows(overviewDetail(request))
         }
     }
@@ -772,11 +920,38 @@ final class DeveloperPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
             }
         }
 
-        // ── where the time went ───────────────────────────────────────────
-        //
-        // Against this request's own total rather than the page's: a different question
-        // from the waterfall column's "when did this happen relative to everything else".
-        rows.append(.section("Timing"))
+        // What the page went on to fetch because of this document. Grouped by exclusion,
+        // not by parentage: the engine records no initiating request id, so this is
+        // everything fetched that a navigation did not ask for.
+        if request.kind == "document" {
+            let children = requests.filter { Self.identity($0) != Self.identity(request) && $0.initiator != "navigation" }
+            rows.append(.section("Subresources"))
+            if children.isEmpty {
+                rows.append(.note("This document pulled in nothing else."))
+            } else {
+                for child in children {
+                    let size = child.error == nil ? Self.bytes(child.receivedBytes) : child.stateLabel
+                    rows.append(.pair("\(child.kind) · \(size)", child.url))
+                }
+                rows.append(
+                    .note(
+                        "Everything the page fetched that a navigation did not: the engine records "
+                            + "no initiating request, so this is grouped by exclusion."
+                    )
+                )
+            }
+        }
+        return rows
+    }
+
+    /// Where one request's time went.
+    ///
+    /// Measured against this request's own total rather than the page's, which is a
+    /// different question from the waterfall column: that one answers "when did this happen
+    /// relative to everything else", this one answers "what was it doing all that time".
+    private func timingDetail(_ request: Browser.Request) -> [DetailRow] {
+        var rows: [DetailRow] = [.section("Timing")]
+
         if request.isInFlight {
             // No breakdown yet — the totals it divides up only exist once the request ends.
             // What does exist is the fact worth having: which phase it is sitting in.
@@ -805,28 +980,6 @@ final class DeveloperPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
             )
         } else {
             rows.append(.note("No timing recorded: this request is \(request.stateLabel)."))
-        }
-
-        // What the page went on to fetch because of this document. Grouped by exclusion,
-        // not by parentage: the engine records no initiating request id, so this is
-        // everything fetched that a navigation did not ask for.
-        if request.kind == "document" {
-            let children = requests.filter { Self.identity($0) != Self.identity(request) && $0.initiator != "navigation" }
-            rows.append(.section("Subresources"))
-            if children.isEmpty {
-                rows.append(.note("This document pulled in nothing else."))
-            } else {
-                for child in children {
-                    let size = child.error == nil ? Self.bytes(child.receivedBytes) : child.stateLabel
-                    rows.append(.pair("\(child.kind) · \(size)", child.url))
-                }
-                rows.append(
-                    .note(
-                        "Everything the page fetched that a navigation did not: the engine records "
-                            + "no initiating request, so this is grouped by exclusion."
-                    )
-                )
-            }
         }
         return rows
     }
@@ -966,6 +1119,8 @@ final class DeveloperPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
         switch mode {
         case .console:
             actionButton.title = "Clear"
+        case .log:
+            actionButton.title = "Clear"
             actionButton.toolTip = "Discard the captured log records"
         case .network:
             actionButton.title = "Clear"
@@ -974,6 +1129,13 @@ final class DeveloperPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
             actionButton.title = "Reset"
             actionButton.toolTip = "Start timing again from nothing, so the next navigation is measured on its own"
         }
+        // Nothing to list, filter or clear on a console that cannot have entries.
+        let empty = mode == .console
+        placeholder.isHidden = !empty
+        split.isHidden = empty
+        actionButton.isHidden = empty
+        filterField.isHidden = empty
+
         rebuildColumns()
         reload()
         fillDetail()
@@ -991,7 +1153,8 @@ final class DeveloperPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
 
     @objc private func actionClicked() {
         switch mode {
-        case .console: browser.clearLogs()
+        case .console: break
+        case .log: browser.clearLogs()
         case .network:
             browser.clearRequests()
             selectedRequest = nil
@@ -1033,5 +1196,24 @@ private final class WaterfallCell: NSView {
         NSBezierPath(rect: NSRect(x: x, y: y, width: waitWidth, height: height)).fill()
         NSColor.controlAccentColor.setFill()
         NSBezierPath(rect: NSRect(x: x + waitWidth, y: y, width: bodyWidth, height: height)).fill()
+    }
+}
+
+/// A table that draws its own banding.
+///
+/// `usesAlternatingRowBackgroundColors` paints the system's alternating colour, which
+/// against this panel's background is close enough to invisible that the rows read as one
+/// undifferentiated block. This draws a band the eye can follow across a wide table.
+private final class BandedTableView: NSTableView {
+    override func drawBackground(inClipRect clipRect: NSRect) {
+        super.drawBackground(inClipRect: clipRect)
+        guard numberOfRows > 0 else { return }
+        NSColor.labelColor.withAlphaComponent(0.05).setFill()
+        for row in 0..<numberOfRows where row % 2 == 1 {
+            let frame = rect(ofRow: row)
+            if frame.minY > clipRect.maxY { break }
+            if frame.maxY < clipRect.minY { continue }
+            frame.intersection(clipRect).fill()
+        }
     }
 }

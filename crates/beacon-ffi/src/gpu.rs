@@ -205,6 +205,9 @@ pub struct ViewSurface {
     pipeline: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
+    /// The view this was made over, as an address, so an attach can tell whether it already
+    /// has a surface for the view the shell is handing it. Never dereferenced.
+    view: usize,
 }
 
 impl ViewSurface {
@@ -270,7 +273,13 @@ impl ViewSurface {
             pipeline,
             layout,
             sampler,
+            view: ptr.as_ptr() as usize,
         })
+    }
+
+    /// Whether this surface was made over `handle`.
+    pub fn covers(&self, handle: *mut std::ffi::c_void) -> bool {
+        self.view == handle as usize
     }
 
     pub fn resize(&mut self, context: &FfiWgpuContext, width: u32, height: u32) {

@@ -2,21 +2,24 @@
    fixed regardless of light/dark theme. */
 .about-info-line {
     color: #14213d;
-    font-size: 13px;
+    font-size: 10px;
 }
 .about-info-link {
     padding: 0;
-    margin-top: 3px;
-    font-size: 13px;
+    margin-top: 0;
+    font-size: 10px;
 }
 .about-credits-heading {
-    color: #14213d;
+    color: #ffffff;
     font-size: 13px;
     font-weight: bold;
+    /* White on a photograph needs help where the lighthouse beam crosses behind it. */
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85);
 }
 .about-credits-name {
-    color: #44506b;
+    color: rgba(255, 255, 255, 0.88);
     font-size: 12px;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85);
 }
 /* The credits column sits on the artwork; keep the scroller transparent. */
 scrolledwindow.about-credits-scroller,

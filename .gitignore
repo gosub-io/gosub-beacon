@@ -4,3 +4,4 @@ gosub_cookies.db
 swift/build/
 swift/.build/
 .DS_Store
+swift/packaging/signing.env

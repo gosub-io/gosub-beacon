@@ -276,6 +276,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
 
         devPanel.isHidden = true
         devPanel.onClose = { [weak self] in self?.toggleDeveloperTools(nil) }
+        devPanel.onResize = { [weak self] wanted in self?.setDeveloperPanelHeight(wanted) }
 
         crashOverlay.isHidden = true
         crashOverlay.onReload = { [weak self] in
@@ -699,6 +700,11 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
         setDeveloperPanel(open: devPanel.isHidden)
     }
 
+    @objc func showLog(_ sender: Any?) {
+        setDeveloperPanel(open: true)
+        devPanel.show(.log)
+    }
+
     @objc func showConsole(_ sender: Any?) {
         setDeveloperPanel(open: true)
         devPanel.show(.console)
@@ -716,6 +722,18 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
 
     @objc func resetTimings(_ sender: Any?) {
         browser.resetTimings()
+    }
+
+    /// Resize the panel from a drag on its top edge.
+    ///
+    /// Clamped here rather than in the panel: how much room there is belongs to the window,
+    /// and a panel that could be dragged over the whole page would leave a browser showing
+    /// no page at all.
+    private func setDeveloperPanelHeight(_ wanted: CGFloat) {
+        guard let content = window?.contentView else { return }
+        let ceiling = max(120, content.bounds.height - 180)
+        devPanelHeight?.constant = min(max(wanted, 90), ceiling)
+        content.layoutSubtreeIfNeeded()
     }
 
     private func setDeveloperPanel(open: Bool) {
