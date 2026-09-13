@@ -6,7 +6,7 @@
 //! produce the same command, and the rule for what "back" does lives in one place.
 //!
 //! These are not the engine's commands. `gosub_engine::events::TabCommand` already covers
-//! navigation at the engine's level, and a `BeaconCommand` mostly forwards to one — after
+//! navigation at the engine's level, and a `BeaconCommand` mostly forwards to one - after
 //! deciding *which* tab, and updating the tab state that the engine knows nothing about.
 //! Anything the engine already has an opinion about belongs there, not here.
 
@@ -27,7 +27,7 @@ pub enum BeaconCommand {
     /// Stop the active tab's in-flight load.
     Stop,
 
-    /// Put text on the system clipboard (a context-menu "Copy …").
+    /// Put text on the system clipboard (a context-menu "Copy ...").
     CopyText(String),
     /// Open a finished download in the desktop's default application.
     OpenDownload(u64),

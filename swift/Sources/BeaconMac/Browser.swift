@@ -5,7 +5,7 @@ import Foundation
 /// Swift's view of the browser. A thin wrapper over the C ABI that turns pointers into
 /// values and nothing else.
 ///
-/// Deliberately holds no state of its own — no tab array, no current URL. Everything is
+/// Deliberately holds no state of its own - no tab array, no current URL. Everything is
 /// asked for when needed. That is the discipline the ABI is built around: two lists that
 /// can disagree is the bug this architecture exists to avoid, and the shell is where it
 /// would creep back in.
@@ -141,7 +141,7 @@ final class Browser {
         }
     }
 
-    /// Committed text from the input method — the only correct route for dead keys, CJK
+    /// Committed text from the input method - the only correct route for dead keys, CJK
     /// and emoji. Never synthesised from key names.
     func textInput(_ tab: BeaconTabId, text: String) {
         text.withCString { beacon_text_input(handle, tab, $0) }
@@ -191,7 +191,7 @@ final class Browser {
         let visitCount: UInt64
     }
 
-    /// Visited pages matching `query`, best first. An empty query matches nothing — a
+    /// Visited pages matching `query`, best first. An empty query matches nothing - a
     /// suggestion list for "" would be a history browser, not an autocomplete.
     func searchHistory(_ query: String, limit: Int = 8) -> [VisitedPage] {
         let count = query.withCString { beacon_history_search(handle, $0, limit) }
@@ -244,7 +244,7 @@ final class Browser {
     struct Timing {
         let namespace: String
         /// What the namespace measures, from the engine's own table. nil for one it does
-        /// not know — a caller timed it by hand — rather than the name repeated back.
+        /// not know - a caller timed it by hand - rather than the name repeated back.
         let describes: String?
         let count: UInt64
         let totalUs: UInt64
@@ -287,7 +287,7 @@ final class Browser {
     /// A value rather than an index wrapper because the panel refreshes four times a
     /// second and the snapshot underneath is replaced each time; a row the table is part
     /// way through drawing must not be able to change identity. The body is the exception
-    /// — it can be megabytes, and only the selected row ever needs it — so that stays
+    /// - it can be megabytes, and only the selected row ever needs it - so that stays
     /// behind `bodyText(at:)`, valid until the next snapshot.
     struct Request {
         let index: Int
@@ -323,7 +323,7 @@ final class Browser {
         let phase: BeaconRequestPhase
         let hasBody: Bool
         let bodyTruncated: Bool
-        /// A body was captured and then dropped to stay inside the budget — worth saying,
+        /// A body was captured and then dropped to stay inside the budget - worth saying,
         /// because it is not the same as never having captured one.
         let bodyEvicted: Bool
 
@@ -436,7 +436,7 @@ final class Browser {
         }
     }
 
-    /// Write a setting, typed by its own schema. False when the store refused it — put the
+    /// Write a setting, typed by its own schema. False when the store refused it - put the
     /// editor back rather than assume it landed.
     @discardableResult
     func setSetting(_ key: String, to value: String) -> Bool {
@@ -582,7 +582,7 @@ final class Browser {
     // ── events ────────────────────────────────────────────────────────────
 
     /// Drain everything the browser has said since the last call. Must run on the main
-    /// thread — the ABI is pulled, never pushed, precisely so this is the only thread it
+    /// thread - the ABI is pulled, never pushed, precisely so this is the only thread it
     /// ever touches.
     func pollEvents() -> [Event] {
         var out: [Event] = []
@@ -617,7 +617,7 @@ final class Browser {
 
     /// The same, keeping the ABI's distinction between "nothing to say" and an empty
     /// string. A request that never reached the network has no method; showing that as ""
-    /// would put an empty column where "—" belongs.
+    /// would put an empty column where "-" belongs.
     private func optionalString(_ pointer: UnsafeMutablePointer<CChar>?) -> String? {
         guard let pointer else { return nil }
         defer { beacon_string_free(pointer) }

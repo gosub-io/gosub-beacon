@@ -74,7 +74,7 @@ hit_string!(beacon_hit_link, "The nearest enclosing link.", |hit| hit.link_url.a
 hit_string!(beacon_hit_image, "The image at the point.", |hit| hit.image_url.as_deref());
 hit_string!(
     beacon_hit_text,
-    "The text node at the point, trimmed — what a `Copy` item on a context menu would copy.",
+    "The text node at the point, trimmed - what a `Copy` item on a context menu would copy.",
     |hit| hit.text.as_deref()
 );
 hit_string!(
@@ -98,7 +98,7 @@ pub unsafe extern "C" fn beacon_hit_is_editable(browser: *mut BeaconBrowser) -> 
 /// Open the source of `tab` in a new tab, highlighted unless `raw`. Returns the new tab's
 /// handle, or 0.
 ///
-/// Equivalent to opening `view-source:<url>` (or `raw:<url>`) yourself — those addresses
+/// Equivalent to opening `view-source:<url>` (or `raw:<url>`) yourself - those addresses
 /// work from [`crate::beacon_open_tab`] and [`crate::beacon_navigate`] too, so a typed
 /// address behaves the same as the menu item.
 ///
@@ -130,8 +130,8 @@ pub unsafe extern "C" fn beacon_view_source(browser: *mut BeaconBrowser, tab: u6
 
 /// Why the tab crashed, or NULL if it did not.
 ///
-/// A crashed tab keeps its place in the strip, its title and its address — it is a tab
-/// that cannot draw, not a tab that is gone — so a shell can show the reason over it and
+/// A crashed tab keeps its place in the strip, its title and its address - it is a tab
+/// that cannot draw, not a tab that is gone - so a shell can show the reason over it and
 /// offer to start it again.
 ///
 /// Free with [`crate::beacon_string_free`].
@@ -167,7 +167,7 @@ pub unsafe extern "C" fn beacon_revive_tab(browser: *mut BeaconBrowser, tab: u64
 
 /// Snapshot the entries forward of where `tab` is, and return how many.
 ///
-/// Usually one — the page you just came back from. More than one means the history forked:
+/// Usually one - the page you just came back from. More than one means the history forked:
 /// you went back and then somewhere else, and both branches are still there. That is what
 /// a press-and-hold on a Forward button offers, and the reason this is a list rather than
 /// a boolean.
@@ -215,7 +215,7 @@ pub unsafe extern "C" fn beacon_forward_go(browser: *mut BeaconBrowser, index: u
 
 /// Read the tabs the last session had open, and return how many.
 ///
-/// The file is written as the browser runs — a private session never writes — so there is
+/// The file is written as the browser runs - a private session never writes - so there is
 /// nothing to call on the way out. A shell restores this when it is started with no URL of
 /// its own, exactly as the GTK one does.
 ///

@@ -1,5 +1,5 @@
 /*
- * The first consumer of the Beacon C ABI — deliberately in C, and deliberately headless.
+ * The first consumer of the Beacon C ABI - deliberately in C, and deliberately headless.
  *
  * If the boundary is wrong, finding out here costs a compile. Finding out through Xcode
  * costs an afternoon. So before anyone writes Swift, this drives the ABI the way a real
@@ -410,7 +410,7 @@ int main(void) {
     /* History.
      *
      * The pages this test loads are file:// URLs, and the engine records a visit only for
-     * http and https — internal pages and local files are deliberately not "places"
+     * http and https - internal pages and local files are deliberately not "places"
      * (worker.rs, on navigation finished). So this run cannot produce a positive hit
      * without a network, and the checks below cover the ABI's discipline instead: what an
      * empty query means, that a miss clears the previous result rather than leaving it
@@ -438,8 +438,8 @@ int main(void) {
     /* Developer panel: logs and timings.
      *
      * The engine has been parsing and rendering throughout this run, so its timing table
-     * should not be empty. The log buffer may well be — the default level is warnings, and
-     * a clean run produces none — so that is checked for consistency, not for content. */
+     * should not be empty. The log buffer may well be - the default level is warnings, and
+     * a clean run produces none - so that is checked for consistency, not for content. */
     printf("\ndeveloper panel\n");
     size_t namespaces = beacon_timing_snapshot(browser);
     CHECK(namespaces > 0, "the engine recorded timings during this run (%zu namespaces)", namespaces);

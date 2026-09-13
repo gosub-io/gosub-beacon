@@ -1,4 +1,4 @@
-//! `gosub://config` — an `about:config`-style editor for the engine's settings store.
+//! `gosub://config` - an `about:config`-style editor for the engine's settings store.
 //!
 //! Shell-rendered (GTK widgets) because the engine cannot do forms yet. Each row shows
 //! a setting's key, type, current value and description; the value cell is an editor

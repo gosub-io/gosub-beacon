@@ -191,7 +191,7 @@ pub struct BrowserWindow {
     /// Browser state that reacts to the engine: the engine-tab mapping, the download
     /// list, MRU order and the closed-tab stack. Shares `tab_manager` above.
     pub beacon: Rc<RefCell<Beacon>>,
-    /// Clicks awaiting the engine's hit-test answer: token → (tab, window point, what to
+    /// Clicks awaiting the engine's hit-test answer: token -> (tab, window point, what to
     /// do with the answer). Right-click builds a context menu; Ctrl/middle-click opens the
     /// link it lands on in a background tab.
     pub pending_hit_tests: RefCell<HashMap<u64, (TabId, Point, HitIntent)>>,
@@ -214,7 +214,7 @@ pub struct BrowserWindow {
 ///
 /// glib does not compare: writing a property the value it already holds still emits `notify`,
 /// and every `notify` re-runs the bindings hanging off that property. For a tooltip binding
-/// that is fatal — GTK reads a `tooltip-text` write as a change and restarts its hover timer,
+/// that is fatal - GTK reads a `tooltip-text` write as a change and restarts its hover timer,
 /// so with this pane refreshing four times a second no tooltip in the devtools ever lived long
 /// enough to be shown. Verified against a standalone GTK4 program: identical hover, the
 /// tooltip appears with a static text and never appears with the text rewritten on a 250ms
@@ -439,7 +439,7 @@ impl BrowserWindow {
         _ = self.get_sender().send_blocking(Message::LoadUrl(tab_id, url));
     }
 
-    /// Reload the active tab — or, while it is loading, stop it (the button
+    /// Reload the active tab - or, while it is loading, stop it (the button
     /// doubles as a stop button; see `update_reload_button`).
     #[template_callback]
     fn handle_refresh_clicked(&self, _btn: &Button) {
@@ -953,7 +953,7 @@ impl BrowserWindow {
     /// pointer on the right cell, so the icon is what tells the reader there is more here.
     ///
     /// The tooltip sits on the cell rather than the icon, so it answers a hover anywhere in
-    /// the column — the icon advertises it, it is not a target you have to hit.
+    /// the column - the icon advertises it, it is not a target you have to hit.
     fn namespace_column(title: &str) -> gtk4::ColumnViewColumn {
         let factory = gtk4::SignalListItemFactory::new();
         factory.connect_setup(move |_, item| {
@@ -1208,12 +1208,12 @@ impl BrowserWindow {
             let status = match (request.status, request.state) {
                 (Some(code), _) => code.to_string(),
                 (None, beacon_core::devtools::RequestState::Failed) => request.failure_label().unwrap_or("err").to_string(),
-                _ => "—".to_string(),
+                _ => "-".to_string(),
             };
             let size = if request.received_bytes > 0 {
                 format_bytes(request.received_bytes)
             } else {
-                request.content_length.map(format_bytes).unwrap_or_else(|| "—".to_string())
+                request.content_length.map(format_bytes).unwrap_or_else(|| "-".to_string())
             };
             // A request still in flight shows how long it has been in flight, not the word
             // "loading". A page that is not responding is a page with a request sitting at
@@ -1229,7 +1229,7 @@ impl BrowserWindow {
                     // waiting for a reply and twelve seconds part way through a body are
                     // different problems with different fixes.
                     format!(
-                        "{} {}…",
+                        "{} {}...",
                         request.phase().label(),
                         format_duration(now_ms().saturating_sub(request.started_ms) * 1000)
                     )
@@ -1239,7 +1239,7 @@ impl BrowserWindow {
 
             // A request that never reached the wire has no method to report -- a file://
             // load, or one answered from cache before a hop was built.
-            let method = request.method.as_deref().unwrap_or("—").to_string();
+            let method = request.method.as_deref().unwrap_or("-").to_string();
             rows.push(NetworkRow {
                 id: request.id,
                 status,
@@ -1272,7 +1272,7 @@ impl BrowserWindow {
 
             match existing {
                 // Same request in the same place: write over what changed, and *only* what
-                // changed — an identical write is not free, it is a `notify` like any other.
+                // changed - an identical write is not free, it is a `notify` like any other.
                 Some(item) => {
                     set_changed!(item, status, set_status, row.status.as_str());
                     set_changed!(item, method, set_method, row.method.as_str());
@@ -1364,7 +1364,7 @@ impl BrowserWindow {
         let mut rows = vec![
             DetailRow::Section("Request".into()),
             DetailRow::Pair("URL".into(), request.url.clone()),
-            DetailRow::Pair("Method".into(), request.method.clone().unwrap_or_else(|| "—".into())),
+            DetailRow::Pair("Method".into(), request.method.clone().unwrap_or_else(|| "-".into())),
             DetailRow::Pair("Kind".into(), request.kind.clone()),
             DetailRow::Pair("Initiated by".into(), request.initiator.clone()),
             DetailRow::Pair("State".into(), request.state.label().into()),
@@ -2392,7 +2392,7 @@ impl BrowserWindow {
                 self.searchbar.set_text(tab.url().as_str());
             }
             let suffix = if self.private.get() { " (Private)" } else { "" };
-            self.obj().set_title(Some(&format!("{} — Gosub Beacon{suffix}", tab.title())));
+            self.obj().set_title(Some(&format!("{} - Gosub Beacon{suffix}", tab.title())));
         }
         drop(manager);
         // The raster DPR is a process-wide atomic: re-store it for this tab's zoom.
@@ -3128,14 +3128,14 @@ impl BrowserWindow {
                     row.append(&bar);
                     let status = gtk4::Label::new(Some(&match entry.total {
                         Some(total) => format!("{} of {}", human_bytes(entry.received), human_bytes(total)),
-                        None => format!("{} so far…", human_bytes(entry.received)),
+                        None => format!("{} so far...", human_bytes(entry.received)),
                     }));
                     status.set_halign(gtk4::Align::Start);
                     status.add_css_class("download-status");
                     row.append(&status);
                 }
                 DownloadState::Finished => {
-                    let status = gtk4::Label::new(Some(&format!("{} — {}", human_bytes(entry.received), entry.path.display())));
+                    let status = gtk4::Label::new(Some(&format!("{} - {}", human_bytes(entry.received), entry.path.display())));
                     status.set_halign(gtk4::Align::Start);
                     status.set_ellipsize(gtk4::pango::EllipsizeMode::Middle);
                     status.add_css_class("download-status");
@@ -3182,7 +3182,7 @@ impl BrowserWindow {
             let Ok(file) = result else { return };
             let Some(path) = file.path() else { return };
             let id = window.imp().beacon.borrow_mut().downloads_mut().next_id();
-            window.imp().log(&format!("Download #{id}: {url} → {}", path.display()));
+            window.imp().log(&format!("Download #{id}: {url} -> {}", path.display()));
             window.imp().add_download(id, &path);
             let handle = handle.clone();
             runtime().spawn(async move {
@@ -3496,7 +3496,7 @@ impl BrowserWindow {
         if let Some(handle) = tab.tab_handle() {
             // Resize -> tell the engine the new viewport. The DPR must be stored
             // before the viewport lands so the rasterizer renders at physical
-            // resolution — otherwise HiDPI/fractional-scale displays get a 1x
+            // resolution - otherwise HiDPI/fractional-scale displays get a 1x
             // buffer upscaled by the compositor (blurry text).
             let resize_handle = handle.clone();
             let resize_zoom = zoom.clone();
@@ -3504,7 +3504,7 @@ impl BrowserWindow {
             area.connect_resize(move |area, w, h| {
                 use gosub_render_pipeline::render::DEVICE_PIXEL_RATIO;
                 let z = resize_zoom.get();
-                // Rasterize at ceil(display scale × zoom) so zoomed-in pages stay sharp;
+                // Rasterize at ceil(display scale x zoom) so zoomed-in pages stay sharp;
                 // capped because tile memory grows with its square.
                 let raster_dpr = ((crate::render::render_dpr(area) as f64 * z).ceil() as u32).clamp(1, 4);
                 DEVICE_PIXEL_RATIO.store(raster_dpr, std::sync::atomic::Ordering::Relaxed);
@@ -3697,7 +3697,7 @@ impl BrowserWindow {
         // The bookmarks bar renders from the store as soon as the engine exists.
         self.rebuild_bookmarks_bar();
 
-        // Route engine events (navigation, redraw, …) to the window.
+        // Route engine events (navigation, redraw, ...) to the window.
         if let Some(mut event_rx) = event_rx {
             let weak = self.obj().downgrade();
             glib::spawn_future_local(async move {
@@ -3820,7 +3820,7 @@ impl BrowserWindow {
             }
             BeaconEvent::TitleChanged(tab_id, title) => {
                 if self.active_tab_id() == Some(tab_id) {
-                    self.obj().set_title(Some(&format!("{title} — Gosub Beacon")));
+                    self.obj().set_title(Some(&format!("{title} - Gosub Beacon")));
                 }
             }
             BeaconEvent::UrlChanged(tab_id, url) => {
@@ -3969,7 +3969,7 @@ fn short_url(url: &str) -> String {
             if tail.is_empty() {
                 format!("{host}{path}{query}")
             } else {
-                format!("{host}/…/{tail}{query}")
+                format!("{host}/.../{tail}{query}")
             }
         }
         Err(_) => url.to_string(),
@@ -3986,8 +3986,9 @@ fn truncate(value: &str, width: usize) -> String {
     if value.chars().count() <= width {
         return value.to_string();
     }
-    let mut out: String = value.chars().take(width.saturating_sub(1)).collect();
-    out.push('…');
+    // Three characters of ellipsis, so take three fewer -- the result still fits `width`.
+    let mut out: String = value.chars().take(width.saturating_sub(3)).collect();
+    out.push_str("...");
     out
 }
 

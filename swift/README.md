@@ -190,7 +190,11 @@ The About artwork lives in `Sources/BeaconMac/Resources/` as a copy of the GTK s
 `crates/beacon-gtk/resources/`, because SwiftPM will not take resources from outside its own
 target directory. Change the art and both need updating.
 
-`about.png` is the day scene and `about-credits.png` the night one, behind the credits list.
+`about.jpg` is the day scene and `about-credits.jpg` the night one, behind the credits list.
+They are JPEG rather than PNG: they are photographs, and PNG stored them at four times the
+size for no visible gain (2.1 MB each against roughly 470 KB, measuring 38-42 dB PSNR). The
+originals also carried an alpha channel - entirely unused in the credits scene, and 0.8%
+stray pixels in the other - so they are flattened onto black, which is what sits behind them.
 Neither carries text the window needs to own: the version, copyright and gosub.io link sit in
 the action bar, where the version comes from the build and the URL is a real link. The
 artwork runs edge to edge behind them.

@@ -1,7 +1,7 @@
 //! The browser chrome, in egui's own idiom.
 //!
-//! Deliberately not a GTK impersonation. egui has its own visual language — flat panels,
-//! its own widget styling, its own spacing scale — and this leans on that rather than
+//! Deliberately not a GTK impersonation. egui has its own visual language - flat panels,
+//! its own widget styling, its own spacing scale - and this leans on that rather than
 //! hand-painting an imitation of Adwaita. What it borrows from other browsers is
 //! *behaviour*: where the tabs are, what the toolbar does, that hovering a link tells you
 //! where it goes.
@@ -34,7 +34,7 @@ impl Favicons {
         decoded
     }
 
-    /// Forget a tab's icon — on close, or when fresh bytes arrive.
+    /// Forget a tab's icon - on close, or when fresh bytes arrive.
     pub fn forget(&mut self, tab_id: TabId) {
         self.textures.remove(&tab_id);
     }
@@ -87,7 +87,7 @@ pub fn tab(ui: &mut Ui, label: &str, icon: Option<&egui::TextureHandle>, loading
     let mut cursor = rect.min.x + 8.0;
     let middle = rect.center().y;
 
-    // Icon slot: spinner while loading, favicon once there is one, and nothing otherwise —
+    // Icon slot: spinner while loading, favicon once there is one, and nothing otherwise -
     // an empty slot rather than a placeholder glyph, so titles do not shift when it arrives.
     let icon_box = Rect::from_center_size(egui::pos2(cursor + 8.0, middle), Vec2::splat(16.0));
     if loading {

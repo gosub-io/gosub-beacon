@@ -28,14 +28,23 @@ url.workspace = true
 # Where there is no native view to draw into, Skia rasterizes tiles on the CPU and the shell
 # is handed finished pixels. Simple, and it needs no GPU at all -- which is what lets the C
 # smoke test run headless in CI.
-[target.'cfg(not(any(target_os = "macos", target_os = "windows")))'.dependencies]
+[target.'cfg(not(target_os = "macos"))'.dependencies]
 gosub_renderer_skia.workspace = true
 skia-safe.workspace = true
 
-# On macOS and Windows the native chrome owns a view, so Vello renders on the GPU and the
-# page is blitted straight into it -- no copy, no readback. Every Mac has Metal, so there is
-# no software-fallback question to answer.
-[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+# On macOS the native chrome owns a view, so Vello renders on the GPU and the page is
+# blitted straight into it -- no copy, no readback. Every Mac has Metal, so there is no
+# software-fallback question to answer.
+#
+# Windows used to be here and is deliberately not any more. A Windows machine whose
+# display is a basic driver rather than a real one -- a VM, in practice -- exposes no
+# hardware D3D12 adapter, wgpu falls back to WARP, and Vello's compute shaders crash
+# inside d3d10warp.dll with an access violation (0xC0000005) before the first frame.
+# Reproduced identically from two unrelated shells. The CPU rasterizer needs no adapter
+# at all, so Windows takes that path and renders everywhere. Re-enabling the GPU path
+# for real hardware means making this a runtime choice, not a compile-time one --
+# gosub_renderer_dynamic already exists for exactly that.
+[target.'cfg(target_os = "macos")'.dependencies]
 gosub_renderer_vello.workspace = true
 vello.workspace = true
 parking_lot.workspace = true

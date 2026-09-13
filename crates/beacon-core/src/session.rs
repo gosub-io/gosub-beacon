@@ -1,7 +1,7 @@
 //! Session persistence: which tabs are open, saved as the browser runs and restored on
 //! the next start (when no URLs are given on the command line).
 //!
-//! The file is one tab per line in strip order, `[*][!]<url>` — `*` marks the active
+//! The file is one tab per line in strip order, `[*][!]<url>` - `*` marks the active
 //! tab, `!` a pinned one. Private windows never write. One session covers one window;
 //! with several normal windows open the last writer wins.
 

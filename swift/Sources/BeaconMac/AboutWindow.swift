@@ -2,8 +2,8 @@ import AppKit
 
 /// The About window: the branded artwork, with a version block and a credits page.
 ///
-/// A port of the GTK shell's dialog rather than a re-imagining — same artwork, same two
-/// pages, same crossfade — because it is the app's face and the two shells should not
+/// A port of the GTK shell's dialog rather than a re-imagining - same artwork, same two
+/// pages, same crossfade - because it is the app's face and the two shells should not
 /// disagree about it. What changes is the framing: this is a Mac panel opened from the
 /// application menu, not an F1 dialog.
 ///
@@ -255,8 +255,13 @@ final class AboutWindowController: NSWindowController {
         return Bundle.main
     }()
 
-    /// Load a bundled PNG. A missing file yields an empty view rather than a crash, so a
-    /// packaging mistake costs the artwork and not the dialog.
+    /// Load the bundled artwork. A missing file yields an empty view rather than a crash,
+    /// so a packaging mistake costs the artwork and not the dialog.
+    ///
+    /// JPEG, not PNG: these are photographs, and PNG stored them at four times the size
+    /// for no visible gain. The originals carried an alpha channel too -- fully unused in
+    /// about-credits, and 0.8% stray pixels in about -- so they are flattened onto black,
+    /// which is what is behind them anyway.
     private func artwork(named name: String) -> NSImageView {
         let view = NSImageView()
         view.imageScaling = .scaleProportionallyUpOrDown
@@ -269,12 +274,12 @@ final class AboutWindowController: NSWindowController {
             view.setContentCompressionResistancePriority(.defaultLow, for: axis)
             view.setContentHuggingPriority(.defaultLow, for: axis)
         }
-        if let url = Self.resources.url(forResource: name, withExtension: "png"),
+        if let url = Self.resources.url(forResource: name, withExtension: "jpg"),
             let image = NSImage(contentsOf: url)
         {
             view.image = image
         } else {
-            NSLog("beacon: About artwork '\(name).png' is not in the bundle")
+            NSLog("beacon: About artwork '\(name).jpg' is not in the bundle")
         }
         return view
     }

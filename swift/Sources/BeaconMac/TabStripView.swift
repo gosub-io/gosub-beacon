@@ -4,7 +4,7 @@ import CBeacon
 /// One tab's chip: favicon, title, close button.
 ///
 /// Drawn rather than assembled from controls. A browser rebuilds this strip on every title,
-/// favicon and loading change — several times a second on a busy page — and tearing down a
+/// favicon and loading change - several times a second on a busy page - and tearing down a
 /// stack of NSViews that often is both slower and flickerier than filling a few rects.
 final class TabChip: NSView {
     let tab: BeaconTabId
@@ -18,7 +18,7 @@ final class TabChip: NSView {
     var onSelect: ((BeaconTabId) -> Void)?
     var onClose: ((BeaconTabId) -> Void)?
     var onContextMenu: ((BeaconTabId, NSEvent) -> Void)?
-    /// Dragging is the strip's business — it is the only thing that knows the other chips.
+    /// Dragging is the strip's business - it is the only thing that knows the other chips.
     var onDrag: ((TabChip, NSEvent) -> Void)?
     var onDragEnd: ((TabChip) -> Void)?
 
@@ -82,7 +82,7 @@ final class TabChip: NSView {
     }
 
     /// Where the press started, so a drag is told apart from a click by distance rather
-    /// than by timing — a slow, deliberate click should still select.
+    /// than by timing - a slow, deliberate click should still select.
     private var pressOrigin: NSPoint?
 
     override func mouseDown(with event: NSEvent) {
@@ -376,7 +376,7 @@ final class TabStripView: NSView {
 
     /// Which strip position the dragged chip's centre now falls in.
     ///
-    /// Measured against the *settled* chips, not the dragged one — comparing it with its own
+    /// Measured against the *settled* chips, not the dragged one - comparing it with its own
     /// old slot is what makes a drag oscillate between two positions.
     private func dropIndex(forCentre centre: CGFloat, of chip: TabChip) -> Int {
         var index = 0
@@ -425,7 +425,7 @@ final class TabStripView: NSView {
         }
         content.frame = CGRect(x: 0, y: 0, width: max(x, available), height: bounds.height)
 
-        // Keep the active tab on screen — activating an off-screen tab and seeing no
+        // Keep the active tab on screen - activating an off-screen tab and seeing no
         // highlight anywhere is how the GTK strip looked broken. Not while dragging, or the
         // strip scrolls out from under the pointer.
         if draggingChip == nil, let chip = chips[activeTab] {

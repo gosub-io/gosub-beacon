@@ -2,7 +2,7 @@
 //!
 //! Parsed once in `main` and stashed in [`Cli::global`], because argv was previously read in
 //! three unrelated places (GTK hand-off, startup tabs, the private-window check) and each
-//! re-scan invented its own rules — most visibly `filter(|a| !a.starts_with('-'))`, which
+//! re-scan invented its own rules - most visibly `filter(|a| !a.starts_with('-'))`, which
 //! silently swallowed every flag.
 
 use clap::Parser;

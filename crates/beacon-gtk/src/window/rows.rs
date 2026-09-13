@@ -189,7 +189,7 @@ mod tests {
     use std::rc::Rc;
 
     /// Whether writing a property its own value again still emits `notify` decides whether the
-    /// devtools' 250ms refresh is free or a storm — every `notify` re-runs the bindings hanging
+    /// devtools' 250ms refresh is free or a storm - every `notify` re-runs the bindings hanging
     /// off it, and a tooltip binding rewriting `tooltip-text` restarts GTK's hover timer.
     #[test]
     fn writing_a_property_its_own_value_still_notifies() {

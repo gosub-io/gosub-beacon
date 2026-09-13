@@ -41,7 +41,7 @@ pub(crate) fn show(window: &super::BrowserWindow, tab_id: TabId, point: Point, h
     if let Some(link) = hit.link_url.clone() {
         let section = Menu::new();
         section.append(Some("Open Link in New Tab"), Some("page.open-link-new-tab"));
-        section.append(Some("Save Link As…"), Some("page.save-link-as"));
+        section.append(Some("Save Link As..."), Some("page.save-link-as"));
         section.append(Some("Copy Link Address"), Some("page.copy-link"));
         menu.append_section(None, &section);
         add_action(&actions, "save-link-as", {

@@ -1,2 +1,20 @@
 [registries]
 gosub = { index = "sparse+https://registry.gosub.io/" }
+# Skia's bundled ICU and windows-sys both define the ICU C API, and the linker sees two
+# definitions of every `uloc_*`/`ubrk_*`/`u_*` symbol.
+#
+# Neither side is wrong and neither is optional. skia-safe's `textlayout` feature pulls
+# skparagraph, which needs skunicode_icu.lib -- the prebuilt bundles its own static ICU.
+# Meanwhile windows-sys declares the same functions as `raw-dylib` imports from the
+# system icuuc.dll, which Windows has shipped since 10/1703. Both end up in the link and
+# lld-link refuses the duplicates.
+#
+# /NODEFAULTLIB does not help: the system side is a raw-dylib import generated at link
+# time, not a default library that can be excluded. Both implementations are the same ICU
+# C API, so taking the first definition is safe here; the alternative is dropping
+# `textlayout`, which the engine's Skia renderer needs.
+#
+# Revisit if rust-skia offers a prebuilt that links the system ICU on Windows -- then
+# there would be only one definition and this could go.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "link-arg=/FORCE:MULTIPLE"]

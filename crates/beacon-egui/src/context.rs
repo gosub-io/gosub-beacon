@@ -2,7 +2,7 @@
 //!
 //! `VelloBackend` is generic over a [`WgpuContextProvider`] so the embedder decides where
 //! the GPU comes from. Here it is egui's own wgpu render state, which means the page and
-//! the chrome share one device and one queue — the page's texture can be handed straight
+//! the chrome share one device and one queue - the page's texture can be handed straight
 //! to egui with no readback.
 
 use std::collections::HashMap;
@@ -23,7 +23,7 @@ pub struct EguiContextProvider {
 
 impl EguiContextProvider {
     /// `None` when eframe is not running its wgpu renderer, which the caller must treat as
-    /// fatal — there is no software fallback here.
+    /// fatal - there is no software fallback here.
     pub fn from_eframe(cc: &CreationContext) -> Option<Self> {
         let state = cc.wgpu_render_state.as_ref()?;
         Some(Self {

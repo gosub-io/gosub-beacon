@@ -5,7 +5,7 @@ import CBeacon
 ///
 /// Everything shown here is read back from the browser when it is drawn. The tab strip is
 /// rebuilt from the browser's own answers rather than from a list kept alongside them, and
-/// the address field is filled from `browser.url(of:)`. That is not ceremony — it is what
+/// the address field is filled from `browser.url(of:)`. That is not ceremony - it is what
 /// stops this shell slowly becoming a second, disagreeing browser.
 ///
 /// The one thing the window does own is *which* tabs it shows. The browser has no concept
@@ -263,7 +263,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
         bookmarksBar.isHidden = true
 
         // Explicit constraints rather than an outer NSStackView. A plain NSView has no
-        // intrinsic content size, so inside a stack the page collapses to zero height —
+        // intrinsic content size, so inside a stack the page collapses to zero height -
         // which looks exactly like "the renderer is broken" and is not.
         hoverLabel.font = .systemFont(ofSize: 11)
         hoverLabel.textColor = .secondaryLabelColor
@@ -391,7 +391,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
     /// Reopen the tabs a previous run had open, in the order it had them.
     ///
     /// Pinned tabs stay pinned, and whatever was in front comes back in front. Nothing here
-    /// decides what a session *is* — Beacon writes the file as it runs, so this only puts
+    /// decides what a session *is* - Beacon writes the file as it runs, so this only puts
     /// back what it recorded.
     func restore(_ session: [Browser.SessionTab]) {
         var front: BeaconTabId = 0
@@ -491,12 +491,12 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
                 NSLog("beacon: tab crashed: \(event.text ?? "")")
                 needsChromeRefresh = true
             case BEACON_NAVIGATION_FAILED:
-                // The tab already holds the error page — Beacon put it there — so this is
+                // The tab already holds the error page - Beacon put it there - so this is
                 // only worth a line in the log a developer might be reading.
                 NSLog("beacon: navigation failed: \(event.text ?? "")")
                 needsChromeRefresh = true
             case BEACON_HIT_TEST:
-                // The token is ours, handed back — but it arrives as a double, and a
+                // The token is ours, handed back - but it arrives as a double, and a
                 // conversion that traps would turn a garbled event into a crash.
                 if event.number > 0, event.number < Double(UInt64.max) {
                     answerHitTest(token: UInt64(event.number))
@@ -512,7 +512,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
 
     /// Rebuild everything from what the browser currently says.
     func refreshChrome() {
-        // Drop tabs the browser no longer has — a crash or an engine-side close.
+        // Drop tabs the browser no longer has - a crash or an engine-side close.
         let live = Set(browser.tabs)
         ownedTabs.removeAll { !live.contains($0) }
         if !ownedTabs.contains(currentTab) {
@@ -564,7 +564,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
     /// piece of chrome someone reads without looking.
     private func setWindowTitle(_ pageTitle: String) {
         let base = pageTitle.isEmpty ? "Gosub Beacon" : pageTitle
-        window?.title = browser.isPrivate ? "\(base) — Private" : base
+        window?.title = browser.isPrivate ? "\(base) - Private" : base
     }
 
     /// Whether this window's session is private. The browser is asked, not remembered.
@@ -742,7 +742,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
         // Polling stops with the panel: a closed panel should cost nothing at all.
         devPanel.setActive(open)
         // The page view is resized by the constraint change, and its own setFrameSize sends
-        // the new viewport — but only once AppKit has actually laid out.
+        // the new viewport - but only once AppKit has actually laid out.
         window?.contentView?.layoutSubtreeIfNeeded()
     }
 
@@ -813,7 +813,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
                 }
             }
             let item = NSMenuItem(
-                title: "\(download.filename) — \(detail)",
+                title: "\(download.filename) - \(detail)",
                 action: #selector(openDownload(_:)),
                 keyEquivalent: ""
             )
@@ -862,7 +862,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
 
         if let link = hit.link {
             add(to: menu, "Open Link in New Tab", #selector(openLinkInNewTab(_:)), link)
-            add(to: menu, "Download Linked File…", #selector(saveLinkAs(_:)), link)
+            add(to: menu, "Download Linked File...", #selector(saveLinkAs(_:)), link)
             add(to: menu, "Copy Link", #selector(copyString(_:)), link)
             menu.addItem(.separator())
         }
@@ -927,7 +927,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
     @objc func viewSource(_ sender: Any?) {
         guard currentTab != 0 else { return }
         // Through the browser, which fetches the bytes and marks them up: a tab opened on
-        // "view-source:…" by hand would do exactly the same thing.
+        // "view-source:..." by hand would do exactly the same thing.
         let tab = browser.viewSource(of: currentTab)
         guard tab != 0 else { return }
         ownedTabs.append(tab)
@@ -938,7 +938,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
 
     /// Fill the Forward button's press-and-hold menu with what is actually ahead.
     ///
-    /// Usually one page — the one you just came back from. More than one means the history
+    /// Usually one page - the one you just came back from. More than one means the history
     /// forked: you went back and then somewhere else, and both branches are still there.
     /// That fork is the only reason this menu exists, so with nothing ahead it stays empty
     /// and the press falls through to the button's own click.
@@ -961,7 +961,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
             return url
         }
         let last = parsed.lastPathComponent
-        return last.isEmpty ? host : "\(host)/…/\(last)"
+        return last.isEmpty ? host : "\(host)/.../\(last)"
     }
 
     @objc private func goForwardTo(_ sender: NSMenuItem) {
@@ -1061,7 +1061,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
 
     @objc private func reloadTabFromMenu(_ sender: NSMenuItem) {
         guard let tab = sender.representedObject as? BeaconTabId else { return }
-        // Reload acts on the active tab, so make it that first — the browser owns which tab
+        // Reload acts on the active tab, so make it that first - the browser owns which tab
         // is active, and this is the shell asking it to change its mind, not working around it.
         select(tab)
         browser.reload()
@@ -1141,7 +1141,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
             return false
 
         case #selector(NSResponder.cancelOperation(_:)):
-            // Escape puts the address back to the page's own and hands focus to the page —
+            // Escape puts the address back to the page's own and hands focus to the page -
             // Safari's behaviour, and the only way out of a half-typed address that does not
             // involve selecting and retyping it.
             addressField.stringValue = currentTab != 0 ? browser.url(of: currentTab) : ""

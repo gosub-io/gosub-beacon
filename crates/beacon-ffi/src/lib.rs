@@ -4,7 +4,7 @@
 //! The rules this boundary is built on, all of which exist to stop a native shell growing
 //! its own idea of what the browser is:
 //!
-//! - **The shell keeps no state.** It asks — `tab_count`, `tab_at`, `tab_title`. Two lists
+//! - **The shell keeps no state.** It asks - `tab_count`, `tab_at`, `tab_title`. Two lists
 //!   that can disagree is a bug we have already had, when a GTK stack and the tab manager
 //!   both believed they knew the active tab.
 //! - **Events are pulled, never pushed.** [`beacon_poll_events`] is called from the shell's
@@ -12,7 +12,7 @@
 //!   WinUI both insist on the UI thread.
 //! - **Nothing Rust crosses.** Opaque pointers, `uint64_t` handles, C strings the caller
 //!   frees with [`beacon_string_free`].
-//! - **Single-threaded.** Every function here must be called from the same thread — the
+//! - **Single-threaded.** Every function here must be called from the same thread - the
 //!   shell's UI thread. The engine's own work happens on a tokio runtime underneath, and
 //!   never touches these types.
 //!
@@ -36,16 +36,16 @@ use gosub_render_pipeline::render::backend::ExternalHandle;
 use gosub_render_pipeline::render::{composite_tiles, TileTarget};
 use tokio::runtime::Runtime;
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(target_os = "macos")]
 mod gpu;
 
-/// CPU tiles through Skia — the same path the GTK frontend rasterizes with. The shell gets
+/// CPU tiles through Skia - the same path the GTK frontend rasterizes with. The shell gets
 /// finished pixels; nothing here needs a GPU or a view.
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+#[cfg(not(target_os = "macos"))]
 type FfiConfig = gosub_engine::DefaultRenderConfig<gosub_renderer_skia::SkiaBackend, gosub_renderer_skia::SkiaFontSystem>;
 
 /// Vello on the GPU, so the page can be blitted into a view the native chrome owns.
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(target_os = "macos")]
 type FfiConfig = gosub_engine::DefaultRenderConfig<gosub_renderer_vello::VelloBackend<gpu::FfiWgpuContext>>;
 
 /// Send this library's logging to stderr, once.
@@ -164,10 +164,10 @@ pub struct BeaconBrowser {
     next_offer: u64,
 
     /// The wgpu device Vello draws through, kept so attached views can share it.
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[cfg(target_os = "macos")]
     gpu: std::sync::Arc<gpu::FfiWgpuContext>,
     /// Views the shell has attached, one per tab.
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[cfg(target_os = "macos")]
     views: HashMap<TabId, gpu::ViewSurface>,
 }
 
@@ -238,7 +238,7 @@ pub struct BeaconCEvent {
     pub tab: u64,
     /// Borrowed until the next `beacon_poll_events`; NULL when the event carries no text.
     pub text: *const c_char,
-    /// Progress fraction, loading flag as 0/1, cursor shape — per event kind.
+    /// Progress fraction, loading flag as 0/1, cursor shape - per event kind.
     pub number: f64,
 }
 
@@ -598,7 +598,7 @@ impl BeaconBrowser {
     /// Shared by `beacon_draw_view` and by the resize, which must repaint for itself: the
     /// two disagreeing about how a frame reaches a view is exactly how one of them ends up
     /// showing nothing.
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[cfg(target_os = "macos")]
     fn present_latest(&mut self, tab_id: TabId) -> bool {
         let engine_id = self.tabs.lock().unwrap().get_tab(tab_id).and_then(|t| t.engine_tab_id());
         let Some(engine_id) = engine_id else { return false };
@@ -648,10 +648,10 @@ pub unsafe extern "C" fn beacon_new(config: *const BeaconConfig) -> *mut BeaconB
     init_logging();
     let private = unsafe { config.as_ref() }.map(|c| c.private_mode).unwrap_or(false);
 
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(not(target_os = "macos"))]
     let backend = Arc::new(gosub_renderer_skia::SkiaBackend::new());
 
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[cfg(target_os = "macos")]
     let (gpu_context, backend) = {
         let context = match gpu::FfiWgpuContext::new(runtime()) {
             Ok(c) => Arc::new(c),
@@ -717,9 +717,9 @@ pub unsafe extern "C" fn beacon_new(config: *const BeaconConfig) -> *mut BeaconB
         pending: Vec::new(),
         strings: Vec::new(),
         frame: Vec::new(),
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        #[cfg(target_os = "macos")]
         gpu: gpu_context,
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        #[cfg(target_os = "macos")]
         views: HashMap::new(),
     }))
 }
@@ -819,7 +819,7 @@ pub unsafe extern "C" fn beacon_close_tab(browser: *mut BeaconBrowser, tab: u64)
     // Before the handle goes: `beacon_detach_view` resolves the tab through it, so a shell
     // that detaches after closing -- which is the order a tab strip closes a tab in -- would
     // find nothing and leave the surface behind, alive over a view it no longer draws.
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[cfg(target_os = "macos")]
     b.views.remove(&tab_id);
     b.handles.remove(&tab);
 }
@@ -1464,7 +1464,7 @@ pub const BEACON_LOG_TRACE: u32 = 5;
 
 /// Copy the newest `max` log records and return how many are available to read.
 ///
-/// What is captured depends on `BEACON_LOG`/`RUST_LOG`, which default to warnings only —
+/// What is captured depends on `BEACON_LOG`/`RUST_LOG`, which default to warnings only -
 /// a developer panel showing nothing usually means the level, not a missing feature.
 ///
 /// # Safety
@@ -1487,7 +1487,7 @@ pub unsafe extern "C" fn beacon_log_message(browser: *mut BeaconBrowser, index: 
     }
 }
 
-/// Which crate or module emitted it — the useful thing to filter a busy log by.
+/// Which crate or module emitted it - the useful thing to filter a busy log by.
 ///
 /// # Safety
 /// `browser` must be a live handle from [`beacon_new`].
@@ -1925,7 +1925,7 @@ pub unsafe extern "C" fn beacon_poll_events(browser: *mut BeaconBrowser, out: *m
 ///
 /// On the GPU path this reads the page texture back off the card, which is deliberately the
 /// slow route: a shell that cares about speed attaches a view with
-/// [`beacon_attach_view`] and never calls this. It exists for headless use — tests,
+/// [`beacon_attach_view`] and never calls this. It exists for headless use - tests,
 /// screenshots, thumbnails.
 ///
 /// # Safety
@@ -1950,7 +1950,7 @@ pub unsafe extern "C" fn beacon_acquire_frame(browser: *mut BeaconBrowser, tab: 
             viewport_height,
             ..
         } => ((viewport_width * dpr) as usize, (viewport_height * dpr) as usize, *dpr),
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        #[cfg(target_os = "macos")]
         ExternalHandle::WgpuTextureId { id, .. } => match b.gpu.read_back(*id) {
             Some((pixels, w, h)) => {
                 b.frame = pixels;
@@ -1984,7 +1984,7 @@ pub unsafe extern "C" fn beacon_acquire_frame(browser: *mut BeaconBrowser, tab: 
     }
 
     // Composite onto opaque white at the frame's own scroll position, exactly as the other
-    // frontends do — going through the shared compositor is what gets `fixed` and `sticky`
+    // frontends do - going through the shared compositor is what gets `fixed` and `sticky`
     // right, and the offset is what makes scrolling visible at all.
     let mut argb = vec![0xFFFF_FFFFu32; width * height];
     composite_tiles(
@@ -2044,7 +2044,7 @@ pub extern "C" fn beacon_reserved(_: *mut c_void) {}
 
 /// Draw `tab` directly into a view the shell owns: an `NSView*` on macOS, an `HWND` on
 /// Windows. The page is rendered into that view with no copy and no readback, which is what
-/// a native chrome wants — it lays the view out among its own widgets and Beacon fills it.
+/// a native chrome wants - it lays the view out among its own widgets and Beacon fills it.
 ///
 /// Returns false on platforms without this path, or if the view cannot be wrapped.
 ///
@@ -2053,12 +2053,12 @@ pub extern "C" fn beacon_reserved(_: *mut c_void) {}
 /// attachment: call [`beacon_detach_view`] before the view is destroyed.
 #[no_mangle]
 pub unsafe extern "C" fn beacon_attach_view(browser: *mut BeaconBrowser, tab: u64, view: *mut c_void, width: u32, height: u32) -> bool {
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(not(target_os = "macos"))]
     {
         let _ = (browser, tab, view, width, height);
         false
     }
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[cfg(target_os = "macos")]
     {
         let b = browser!(browser, false);
         let Some(tab_id) = b.tab(tab) else { return false };
@@ -2105,11 +2105,11 @@ pub unsafe extern "C" fn beacon_attach_view(browser: *mut BeaconBrowser, tab: u6
 /// `browser` must be a live handle from [`beacon_new`].
 #[no_mangle]
 pub unsafe extern "C" fn beacon_detach_view(browser: *mut BeaconBrowser, tab: u64) {
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(not(target_os = "macos"))]
     {
         let _ = (browser, tab);
     }
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[cfg(target_os = "macos")]
     {
         let b = browser!(browser);
         if let Some(tab_id) = b.tab(tab) {
@@ -2124,11 +2124,11 @@ pub unsafe extern "C" fn beacon_detach_view(browser: *mut BeaconBrowser, tab: u6
 /// `browser` must be a live handle from [`beacon_new`].
 #[no_mangle]
 pub unsafe extern "C" fn beacon_resize_view(browser: *mut BeaconBrowser, tab: u64, width: u32, height: u32) {
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(not(target_os = "macos"))]
     {
         let _ = (browser, tab, width, height);
     }
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[cfg(target_os = "macos")]
     {
         let b = browser!(browser);
         let Some(tab_id) = b.tab(tab) else { return };
@@ -2153,12 +2153,12 @@ pub unsafe extern "C" fn beacon_resize_view(browser: *mut BeaconBrowser, tab: u6
 /// `browser` must be a live handle from [`beacon_new`].
 #[no_mangle]
 pub unsafe extern "C" fn beacon_draw_view(browser: *mut BeaconBrowser, tab: u64) -> bool {
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(not(target_os = "macos"))]
     {
         let _ = (browser, tab);
         false
     }
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    #[cfg(target_os = "macos")]
     {
         let b = browser!(browser, false);
         let Some(tab_id) = b.tab(tab) else { return false };

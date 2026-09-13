@@ -1,7 +1,7 @@
 //! The browser, minus the window.
 //!
 //! Tabs, navigation, session history mirroring, session save/restore, downloads,
-//! bookmarks queries and address parsing belong here — everything a frontend needs to
+//! bookmarks queries and address parsing belong here - everything a frontend needs to
 //! decide *what* to show, with no opinion about *how*. Nothing in this crate may depend
 //! on GTK, egui, winit or any other toolkit; that constraint is the whole point.
 

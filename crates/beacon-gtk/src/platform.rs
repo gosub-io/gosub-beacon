@@ -1,7 +1,7 @@
 //! GTK's answer to [`beacon_core::platform::Platform`].
 //!
-//! Both operations need a widget to hang off — the clipboard belongs to a display, and
-//! `FileLauncher` wants a parent window for its portal prompt — so this holds a weak
+//! Both operations need a widget to hang off - the clipboard belongs to a display, and
+//! `FileLauncher` wants a parent window for its portal prompt - so this holds a weak
 //! reference to the window. Weak, because the window owns the `Beacon` that owns this:
 //! a strong reference here would be a cycle, and the window would never be dropped.
 

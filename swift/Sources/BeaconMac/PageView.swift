@@ -20,7 +20,7 @@ final class PageView: NSView, NSTextInputClient {
     var onHoverChanged: ((String) -> Void)?
 
     /// A right-click, with the page point it landed on. The window asks the engine what is
-    /// there and builds the menu from the answer — the hovered link alone would only cover
+    /// there and builds the menu from the answer - the hovered link alone would only cover
     /// a pointer that had come to rest on one.
     var onContextMenu: ((NSEvent, Float, Float) -> Void)?
     /// A gesture that means "open what is here in another tab": ⌘-click, or a middle click.
@@ -64,7 +64,7 @@ final class PageView: NSView, NSTextInputClient {
         let size = devicePixelSize
         guard size.width > 0, size.height > 0 else {
             // Silence here is how a zero-height page view looks like a broken renderer.
-            NSLog("beacon: not attaching — page view is \(bounds.width)x\(bounds.height) points")
+            NSLog("beacon: not attaching - page view is \(bounds.width)x\(bounds.height) points")
             return
         }
 
@@ -75,7 +75,7 @@ final class PageView: NSView, NSTextInputClient {
         if attached {
             sendViewport()
         } else {
-            NSLog("beacon: could not attach a view for tab \(tab) — see the beacon [WARN] line above")
+            NSLog("beacon: could not attach a view for tab \(tab) - see the beacon [WARN] line above")
         }
     }
 
@@ -131,7 +131,7 @@ final class PageView: NSView, NSTextInputClient {
         browser.setViewport(tab, width: width, height: height, scale: scale)
     }
 
-    /// Repaint. Called when a redraw event arrives, not from `draw(_:)` — the page is not
+    /// Repaint. Called when a redraw event arrives, not from `draw(_:)` - the page is not
     /// drawn with Core Graphics, so AppKit's own drawing cycle is not involved.
     func redraw() {
         guard attached, tab != 0 else { return }
@@ -243,7 +243,7 @@ final class PageView: NSView, NSTextInputClient {
             if swipeHandled { return }
         }
 
-        // AppKit reports a wheel notch as ±1 lines and a trackpad as precise deltas; the
+        // AppKit reports a wheel notch as +/-1 lines and a trackpad as precise deltas; the
         // engine scrolls in CSS pixels, so lines are scaled and precise deltas passed
         // through. Signs are inverted: scrolling down moves the page up.
         let step: Float = event.hasPreciseScrollingDeltas ? 1.0 : 40.0

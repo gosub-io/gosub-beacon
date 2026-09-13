@@ -2,7 +2,7 @@
 //!
 //! `gosub://config` is a page under GTK because GTK can put widgets in a tab; a Mac shell
 //! wants a Preferences window instead, and neither is the browser's business. So the ABI
-//! hands over rows — key, description, type, current value, default, constraint — and the
+//! hands over rows - key, description, type, current value, default, constraint - and the
 //! shell decides what a boolean or a bounded number looks like on its platform.
 //!
 //! Snapshot then read by index, like every other list here. The rules about what a write
@@ -89,7 +89,7 @@ setting_string!(
 );
 setting_string!(
     beacon_setting_value,
-    "The value in force, as text — the stored override, or the default when there is none.",
+    "The value in force, as text - the stored override, or the default when there is none.",
     |row| Some(row.current.value_string())
 );
 setting_string!(beacon_setting_default, "The schema's default, as text.", |row| Some(
@@ -115,7 +115,7 @@ pub unsafe extern "C" fn beacon_setting_type(browser: *mut BeaconBrowser, index:
     }
 }
 
-/// Whether this setting has been changed from its default — what an editor marks, and what
+/// Whether this setting has been changed from its default - what an editor marks, and what
 /// decides whether a reset control does anything.
 ///
 /// # Safety
@@ -158,7 +158,7 @@ pub unsafe extern "C" fn beacon_setting_choice(browser: *mut BeaconBrowser, inde
 }
 
 /// The bounds of a numeric setting, written into `lo` and `hi`. False when the setting is
-/// not range-constrained, leaving both untouched — a stepper should then use whatever its
+/// not range-constrained, leaving both untouched - a stepper should then use whatever its
 /// platform's default bounds are.
 ///
 /// The widest range when the schema lists several: a setting allowing `-1` or `0-9999`
@@ -189,7 +189,7 @@ pub unsafe extern "C" fn beacon_setting_range(browser: *mut BeaconBrowser, index
 /// Write `value` to `key`, typed by the key's own schema: `"true"`, `"8080"`, `"left"`.
 ///
 /// False when the key is unknown, the value is outside its constraint, or the store
-/// refused the write — a shell should put the editor back rather than assume it landed.
+/// refused the write - a shell should put the editor back rather than assume it landed.
 /// Writing the default removes the override, so the stored profile only holds real changes.
 ///
 /// Some settings (`net.*`) are read once when the engine starts, so a write may only take

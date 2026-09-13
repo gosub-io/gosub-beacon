@@ -3,7 +3,7 @@
 //! [`Beacon`] owns the mapping between engine tabs and ours, the download list, and the
 //! MRU / closed-tab state, and shares the tab manager with the frontend. Its job is
 //! [`Beacon::on_engine_event`]: take one `EngineEvent`, update the tabs, and say what
-//! changed in terms a frontend can draw — see [`crate::event::BeaconEvent`].
+//! changed in terms a frontend can draw - see [`crate::event::BeaconEvent`].
 //!
 //! Everything here used to live in the GTK window's `handle_engine_event`, interleaved
 //! with widget calls, which meant none of it could be exercised without a display.
@@ -31,7 +31,7 @@ pub const DRAW_FPS: u16 = 30;
 pub struct Beacon {
     /// Shared with the frontend, which also reads it to build the tab strip.
     tabs: Arc<Mutex<GosubTabManager>>,
-    /// Engine tab id → our tab id, for routing engine events.
+    /// Engine tab id -> our tab id, for routing engine events.
     engine_tabs: HashMap<EngineTabId, TabId>,
     downloads: Downloads,
     mru: MruList,

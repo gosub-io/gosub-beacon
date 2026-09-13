@@ -87,7 +87,7 @@ impl About {
 
     /// A GtkPicture's *natural* size is the paintable's full resolution and a
     /// non-resizable window allocates at natural size, so a size request alone
-    /// cannot shrink the dialog — scale the pixbuf itself to the target size.
+    /// cannot shrink the dialog - scale the pixbuf itself to the target size.
     fn scaled_art(resource: &str) -> Picture {
         let picture = match Pixbuf::from_resource_at_scale(resource, ART_WIDTH, ART_HEIGHT, true) {
             Ok(pixbuf) => Picture::for_paintable(&Texture::for_pixbuf(&pixbuf)),
@@ -103,7 +103,7 @@ impl About {
     /// without landing on the artwork; it lives in the action bar instead.
     fn build_art_page() -> Overlay {
         let overlay = Overlay::new();
-        overlay.set_child(Some(&Self::scaled_art("/io/gosub/beacon/assets/about.png")));
+        overlay.set_child(Some(&Self::scaled_art("/io/gosub/beacon/assets/about.jpg")));
         overlay
     }
 
@@ -126,7 +126,7 @@ impl About {
     /// Credits artwork keeps the whole left half white; the scrolling credits
     /// column is overlaid there.
     fn build_credits_page() -> Overlay {
-        let picture = Self::scaled_art("/io/gosub/beacon/assets/about-credits.png");
+        let picture = Self::scaled_art("/io/gosub/beacon/assets/about-credits.jpg");
 
         let list = GtkBox::new(Orientation::Vertical, 4);
         list.set_margin_end(12);

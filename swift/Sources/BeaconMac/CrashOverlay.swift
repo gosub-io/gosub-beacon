@@ -4,7 +4,7 @@ import AppKit
 ///
 /// Drawn by the shell rather than pushed into the tab as HTML, which is what a failed
 /// *navigation* gets: there is no worker left to render a page with. The tab keeps
-/// everything else — its place in the strip, its title, its address — because what died is
+/// everything else - its place in the strip, its title, its address - because what died is
 /// the process behind one tab, not the browser.
 final class CrashOverlay: NSView {
     /// Called when the reader asks for the tab to be started again.

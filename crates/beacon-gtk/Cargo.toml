@@ -29,8 +29,10 @@ tokio.workspace = true
 url.workspace = true
 uuid.workspace = true
 
-# EGL is how Skia binds the GL context on Wayland/X11; macOS uses CGL natively.
-[target.'cfg(not(target_os = "macos"))'.dependencies]
+# EGL is how Skia binds the GL context on Wayland/X11; macOS uses CGL natively. Gated to
+# Linux rather than "not macOS" because Windows has neither, and asking for EGL there
+# changes the skia prebuilt key to one that was never published.
+[target.'cfg(target_os = "linux")'.dependencies]
 skia-safe = { workspace = true, features = ["egl"] }
 
 [build-dependencies]

@@ -5,7 +5,7 @@
 //! a request that vanished between two accessor calls would be worse than a stale row.
 //!
 //! The rows themselves are `beacon_core::devtools`'s, folded together from the engine's
-//! resource events by [`beacon_core::beacon::Beacon::on_engine_event`] — so every shell
+//! resource events by [`beacon_core::beacon::Beacon::on_engine_event`] - so every shell
 //! gets the same panel over the same data rather than each learning to read the engine.
 
 use std::ffi::c_char;
@@ -71,7 +71,7 @@ pub struct BeaconRequestRow {
     pub has_body: bool,
     /// The response continued past the captured preview.
     pub body_truncated: bool,
-    /// A body was captured and then dropped to stay inside the total budget — which is a
+    /// A body was captured and then dropped to stay inside the total budget - which is a
     /// different thing to say than "none was captured", and a panel should say it.
     pub body_evicted: bool,
 }
@@ -80,7 +80,7 @@ fn absent(value: Option<u64>) -> u64 {
     value.unwrap_or(BEACON_ABSENT)
 }
 
-/// Copy the requests for `tab` — or every tab when it is 0 — and return how many are
+/// Copy the requests for `tab` - or every tab when it is 0 - and return how many are
 /// readable. Newest last, in the order the page fetched them.
 ///
 /// # Safety
@@ -208,7 +208,7 @@ pub unsafe extern "C" fn beacon_net_at(browser: *mut BeaconBrowser, index: usize
 }
 
 /// One string off a row. Every one of these frees with [`crate::beacon_string_free`], and
-/// returns NULL rather than an empty string for "nothing to say" — a request that never
+/// returns NULL rather than an empty string for "nothing to say" - a request that never
 /// reached the wire has no method, which is not the same as an empty one.
 macro_rules! row_string {
     ($name:ident, $doc:literal, |$request:ident| $value:expr) => {
@@ -233,7 +233,7 @@ macro_rules! row_string {
 }
 
 row_string!(beacon_net_url, "The URL requested.", |r| Some(r.url.clone()));
-row_string!(beacon_net_kind, "`document`, `stylesheet`, `script`, `image`, `font`, …", |r| {
+row_string!(beacon_net_kind, "`document`, `stylesheet`, `script`, `image`, `font`, ...", |r| {
     Some(r.kind.clone())
 });
 row_string!(
@@ -243,7 +243,7 @@ row_string!(
 );
 row_string!(
     beacon_net_method,
-    "The method actually sent. NULL for a request that never reached the network — a file:// load, or one answered from cache.",
+    "The method actually sent. NULL for a request that never reached the network - a file:// load, or one answered from cache.",
     |r| r.method.clone()
 );
 row_string!(beacon_net_content_type, "The response's declared content type.", |r| r
@@ -269,7 +269,7 @@ row_string!(
 );
 row_string!(
     beacon_net_failure_label,
-    "A short name for why it failed — `TLS`, `timeout`, `no connection` — when the stack classified it. NULL otherwise.",
+    "A short name for why it failed - `TLS`, `timeout`, `no connection` - when the stack classified it. NULL otherwise.",
     |r| r.failure_label().map(str::to_string)
 );
 row_string!(

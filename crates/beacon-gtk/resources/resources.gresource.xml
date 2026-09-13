@@ -7,7 +7,7 @@
     <gresource prefix="/io/gosub/beacon/assets">
         <file>gosub.svg</file>
         <file>submarine.svg</file>
-        <file>about.png</file>
-        <file>about-credits.png</file>
+        <file>about.jpg</file>
+        <file>about-credits.jpg</file>
     </gresource>
 </gresources>

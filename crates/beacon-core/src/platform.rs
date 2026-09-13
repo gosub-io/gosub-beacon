@@ -1,7 +1,7 @@
 //! The few things the browser needs from the desktop it is running on.
 //!
 //! Deliberately tiny. Beacon's whole platform surface today is a clipboard write and
-//! "open this file in whatever the desktop uses for it" — two operations, at four call
+//! "open this file in whatever the desktop uses for it" - two operations, at four call
 //! sites. Notifications and a global menu bar will belong here when something actually
 //! wants them; inventing the methods now would be guessing at signatures with no second
 //! implementation to check them against.

@@ -1,9 +1,9 @@
-# Gosub Beacon — GTK browser
+# Gosub Beacon - GTK browser
 
 Beacon is a GTK4 browser built on the [Gosub engine](https://github.com/gosub-io/gosub-engine).
 The engine does the actual work (networking, cookies, storage, history, rendering); Beacon
 is the native chrome around it. It exists to test the engine in a real application, so
-don't expect a daily driver — but basic browsing works.
+don't expect a daily driver - but basic browsing works.
 
 ![Gosub Beacon with three tabs loaded](./docs/screenshots/beacon-2026-08.png)
 
@@ -24,7 +24,7 @@ Currently working:
 - file:// URLs: local pages load their own subresources, directories get an index
   page, and a filesystem path typed in the address bar just works
 - private windows (Ctrl+Shift+P): in-memory cookies and storage, no history recorded
-- page zoom (Ctrl+±/0, Ctrl+wheel)
+- page zoom (Ctrl++ / Ctrl+- / Ctrl+0, Ctrl+wheel)
 - crashed tabs show a reload page instead of taking the browser down
 
 Not working yet: JavaScript, forms and text input, text selection.
@@ -55,7 +55,7 @@ sudo apt install libgtk-4-dev libglib2.0-dev libcairo2-dev libgdk-pixbuf-2.0-dev
                  clang libclang-dev libgl-dev libegl-dev libfontconfig-dev libfreetype-dev
 ```
 
-The dependencies above are for the GTK frontend. The egui one needs none of them — it
+The dependencies above are for the GTK frontend. The egui one needs none of them - it
 renders through Vello on wgpu and pulls in neither GTK nor Skia:
 
 ```bash
@@ -64,7 +64,7 @@ cargo build --no-default-features --features egui   # just the egui one
 ```
 
 Linux is the only platform with a working browser today. macOS is being approached
-through the egui frontend rather than GTK-on-Quartz — CI builds it on `macos-14`, but
+through the egui frontend rather than GTK-on-Quartz - CI builds it on `macos-14`, but
 nothing there has been run yet, so treat it as unproven rather than supported. Windows is
 untouched. Help with either is welcome.
 

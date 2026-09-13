@@ -1,7 +1,7 @@
 //! Follow the desktop's light/dark preference.
 //!
 //! Beacon is plain GTK4 with no libadwaita, and GTK does not itself watch the desktop's
-//! colour-scheme preference — it only exposes `gtk-application-prefer-dark-theme` for the
+//! colour-scheme preference - it only exposes `gtk-application-prefer-dark-theme` for the
 //! application to set. So read the preference from the XDG desktop portal and mirror it into
 //! that property, then keep mirroring it as the user changes it.
 //!

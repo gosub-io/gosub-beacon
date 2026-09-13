@@ -6,8 +6,8 @@ import CBeacon
 /// The GTK shell draws these as a `gosub://config` page because GTK can put widgets in a
 /// tab. On macOS a page would be wrong twice over: settings live behind ⌘, in every Mac
 /// application, and a browser page that is really a preferences panel is a thing people
-/// have learned to distrust. Same store, same rules — `beacon_setting_set` decides what a
-/// write means, here as there — drawn where a Mac user looks for it.
+/// have learned to distrust. Same store, same rules - `beacon_setting_set` decides what a
+/// write means, here as there - drawn where a Mac user looks for it.
 ///
 /// Each row gets the editor its type asks for: a switch for a boolean, a popup for a
 /// setting restricted to named values, a number field for a bounded number, text for the
@@ -133,8 +133,8 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
     ///
     /// Deferred to the next turn of the run loop on purpose: this is called from an
     /// editor's own action, and rebuilding the row that owns the control currently
-    /// delivering that action — replacing a switch mid-click, or a text field while its
-    /// field editor is still resigning — is how table views come apart.
+    /// delivering that action - replacing a switch mid-click, or a text field while its
+    /// field editor is still resigning - is how table views come apart.
     private func reloadPreservingScroll() {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
@@ -167,7 +167,7 @@ private final class SettingRowView: NSView {
 
     private func build() {
         let key = NSTextField(labelWithString: setting.key)
-        // Bold marks a setting that has been changed from its default — the one thing worth
+        // Bold marks a setting that has been changed from its default - the one thing worth
         // being able to find by eye in a list of a hundred.
         key.font = .systemFont(ofSize: 12, weight: setting.isModified ? .semibold : .regular)
 
@@ -221,13 +221,13 @@ private final class SettingRowView: NSView {
     private func constraintText() -> String? {
         guard setting.choices.isEmpty else { return nil } // already shown by the popup
         if let (low, high) = setting.bounds {
-            return "\(low)–\(high)"
+            return "\(low)-\(high)"
         }
         return nil
     }
 
     private func makeEditor() -> NSView {
-        // A switch is the Mac control for a boolean, and it commits the moment it moves —
+        // A switch is the Mac control for a boolean, and it commits the moment it moves -
         // there is nothing to confirm about a two-state value.
         if setting.type == BEACON_SETTING_BOOL {
             let toggle = NSSwitch()

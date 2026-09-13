@@ -4,13 +4,13 @@ import CBeacon
 /// The application: one browser, a menu bar, and however many windows the user opens.
 ///
 /// The menu bar is built in code rather than loaded from a nib so the whole shell stays
-/// readable as source. It is not optional on macOS — an app without one looks broken before
-/// the user has clicked anything — and it is where the shortcuts live: a menu item with a
+/// readable as source. It is not optional on macOS - an app without one looks broken before
+/// the user has clicked anything - and it is where the shortcuts live: a menu item with a
 /// key equivalent is the Mac way to bind a key, not a hand-rolled key handler.
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var browser: Browser?
     /// One private session shared by every private window, created on demand and destroyed
-    /// when the last of them closes — which is what actually makes it private: the engine
+    /// when the last of them closes - which is what actually makes it private: the engine
     /// holds its cookies and storage in memory, so tearing it down is what forgets them.
     private var privateBrowser: Browser?
     /// The address asked for on the command line, if any. Nothing means "carry on where
@@ -19,10 +19,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// Held so the window survives being closed and can be reopened.
     private var aboutWindow: AboutWindowController?
     /// Likewise the Settings window, which is one window for the application rather than
-    /// one per browser window — the settings it edits are the engine's, and there is one
+    /// one per browser window - the settings it edits are the engine's, and there is one
     /// engine.
     private var settingsWindow: SettingsWindowController?
-    /// Kept so its title can follow the panel's state — a menu item that says "Show" while
+    /// Kept so its title can follow the panel's state - a menu item that says "Show" while
     /// the thing is already showing is a small lie the user has to work around.
     private weak var developToggleItem: NSMenuItem?
 
@@ -61,7 +61,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// tabs the last session had open.
     ///
     /// Restoring only when nothing was asked for is what the GTK shell does, and it is the
-    /// behaviour that makes `open -a Beacon https://…` mean what it says.
+    /// behaviour that makes `open -a Beacon https://...` mean what it says.
     private func openFirstWindow(browser: Browser) {
         if let startURL {
             newWindow(startURL: startURL)
@@ -121,8 +121,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     // Menu items target this delegate rather than a window, because a menu bar belongs to
     // the application and may fire when no window is key at all.
 
-    /// A new tab needs a window to put it in. With none — every browser window closed, but
-    /// the Settings or About window keeping the application alive — ⌘T means "a window",
+    /// A new tab needs a window to put it in. With none - every browser window closed, but
+    /// the Settings or About window keeping the application alive - ⌘T means "a window",
     /// which is what it means everywhere else on the Mac.
     @objc private func newTab(_ sender: Any?) {
         if let front {
@@ -168,10 +168,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     /// Menu items point at this delegate rather than at a window, so the window's own
-    /// validation is never consulted — greying Back and Forward has to happen here.
+    /// validation is never consulted - greying Back and Forward has to happen here.
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         // Items that belong to the application rather than to a window stay live even when
-        // no browser window is key — which is exactly the state someone is in while the
+        // no browser window is key - which is exactly the state someone is in while the
         // Settings or About window is in front.
         switch item.action {
         case #selector(showSettings(_:)), #selector(newWindowAction(_:)), #selector(newPrivateWindowAction(_:)),
@@ -257,7 +257,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     private func applicationMenu() -> NSMenuItem {
-        // The app menu's title is ignored — macOS always shows the process name in bold —
+        // The app menu's title is ignored - macOS always shows the process name in bold -
         // but the standard items are expected in this exact order.
         let about = NSMenuItem(title: "About Gosub Beacon", action: #selector(showAbout), keyEquivalent: "")
         about.target = self
@@ -275,10 +275,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         return submenu("Gosub Beacon", [
             about,
             .separator(),
-            // "Settings…" with ⌘, is where every Mac application keeps this, and since
+            // "Settings..." with ⌘, is where every Mac application keeps this, and since
             // macOS 13 it is what the item is called. The GTK shell shows the same store as
             // a gosub://config page.
-            item("Settings…", #selector(showSettings(_:)), ","),
+            item("Settings...", #selector(showSettings(_:)), ","),
             .separator(),
             hide, hideOthers, showAll,
             .separator(),
@@ -311,7 +311,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             NSMenuItem(title: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v"),
             NSMenuItem(title: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a"),
             .separator(),
-            item("Open Location…", #selector(focusAddressBar(_:)), "l"),
+            item("Open Location...", #selector(focusAddressBar(_:)), "l"),
         ])
     }
 
@@ -383,7 +383,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             item("Show Previous Tab", #selector(selectPreviousTab(_:)), "\t", [.control, .shift]),
             .separator(),
         ]
-        // Cmd+1..8 select a tab, Cmd+9 the last one — Safari's and Chrome's behaviour.
+        // Cmd+1..8 select a tab, Cmd+9 the last one - Safari's and Chrome's behaviour.
         for number in 1...9 {
             let title = number == 9 ? "Last Tab" : "Tab \(number)"
             items.append(item(title, #selector(selectTabByNumber(_:)), "\(number)", .command, tag: number))

@@ -1,0 +1,45 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <RootNamespace>Gosub.Beacon.Windows</RootNamespace>
+
+    <!-- Match the Rust workspace version; .NET defaults to 1.0.0 and the About dialog would
+         then disagree with the other two shells. -->
+    <Version>0.1.0</Version>
+    <AssemblyName>GosubBeacon</AssemblyName>
+    <ApplicationIcon></ApplicationIcon>
+
+    <!-- The engine is x64 only (the skia prebuilts and the Rust target), so pin it here
+         rather than let AnyCPU produce an exe that cannot load beacon.dll. -->
+    <PlatformTarget>x64</PlatformTarget>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>false</SelfContained>
+  </PropertyGroup>
+
+  <!-- The About artwork, shared with the macOS shell rather than copied, so the two cannot
+       disagree. JPEG rather than PNG: these are photographs, and PNG stored them at four
+       times the size. Link= sets the logical path, so they resolve at runtime as
+       pack://application:,,,/Resources/about.jpg -->
+  <ItemGroup>
+    <Resource Include="$(MSBuildThisFileDirectory)../../../swift/Sources/BeaconMac/Resources/about.jpg"
+              Link="Resources/about.jpg" />
+    <Resource Include="$(MSBuildThisFileDirectory)../../../swift/Sources/BeaconMac/Resources/about-credits.jpg"
+              Link="Resources/about-credits.jpg" />
+  </ItemGroup>
+
+  <!-- beacon.dll is built by cargo, not MSBuild. Copy whichever profile exists, newest last
+       so a release build wins over a stale debug one. A missing DLL is not a build error: the
+       managed half compiles without it and App.xaml.cs reports it at startup. -->
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)../../../target/x86_64-pc-windows-msvc/debug/beacon.dll"
+          Condition="Exists('$(MSBuildThisFileDirectory)../../../target/x86_64-pc-windows-msvc/debug/beacon.dll')"
+          Link="beacon.dll" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="$(MSBuildThisFileDirectory)../../../target/x86_64-pc-windows-msvc/release/beacon.dll"
+          Condition="Exists('$(MSBuildThisFileDirectory)../../../target/x86_64-pc-windows-msvc/release/beacon.dll')"
+          Link="beacon.dll" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

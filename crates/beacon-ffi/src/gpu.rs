@@ -1,14 +1,22 @@
 //! The GPU path: Vello renders the page into a wgpu texture, and that texture is blitted
 //! into a view the native shell owns.
 //!
-//! This is the arrangement a Swift or WinUI chrome wants. The shell lays out a view among
-//! its own widgets and hands the pointer over; the page is drawn straight into it, with no
-//! copy and no readback. `beacon_acquire_frame` still exists for anything headless — the C
-//! smoke test, screenshots — and on this path it reads the texture back, which is the slow
-//! route by design rather than by accident.
+//! This is the arrangement the Swift chrome wants. The shell lays out a view among its own
+//! widgets and hands the pointer over; the page is drawn straight into it, with no copy and
+//! no readback. `beacon_acquire_frame` still exists for anything headless - the C smoke
+//! test, screenshots - and on this path it reads the texture back, which is the slow route
+//! by design rather than by accident.
 //!
-//! Only compiled where a native surface makes sense. Elsewhere the CPU rasterizer is both
-//! simpler and sufficient.
+//! **macOS only.** Not because no other platform has a native view to draw into, but because
+//! macOS is the only one that can promise a working GPU: Metal is required by the OS, comes
+//! from the same vendor, and is present exactly once. The Windows shell was built on this
+//! path and had to leave it - see the target blocks in Cargo.toml. Everywhere else the CPU
+//! rasterizer is both simpler and sufficient.
+//!
+//! The `target_os = "windows"` arms further down are therefore unreachable today. They are
+//! kept because the HWND half of the boundary is already declared in beacon.h and is what a
+//! runtime backend choice would switch back on - but nothing compiles them, so treat them
+//! as a sketch rather than as working code.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -33,19 +41,50 @@ pub struct FfiWgpuContext {
 }
 
 impl FfiWgpuContext {
-    /// Pick an adapter and device with no surface in hand. On macOS this is Metal, which
-    /// every Mac has — there is no software-fallback question to answer here.
+    /// Pick an adapter and device with no surface in hand.
+    ///
+    /// This module only compiles on macOS, so in practice this is Metal: required by the OS
+    /// since 10.14, supplied by the same vendor as the OS, and present exactly once. There
+    /// is no adapter-availability question to answer here - which is precisely why the GPU
+    /// path is macOS-only. See the target blocks in Cargo.toml for what happened on the
+    /// platform where that question does get asked.
     pub fn new(rt: &tokio::runtime::Runtime) -> anyhow::Result<Self> {
         let instance = wgpu::Instance::default();
-        let adapter = rt
-            .block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+
+        let request = |force_fallback_adapter| {
+            rt.block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::default(),
                 // No surface yet; one is attached later and must be compatible with this
                 // adapter. On macOS that is safe because there is a single Metal adapter.
                 compatible_surface: None,
-                force_fallback_adapter: false,
+                force_fallback_adapter,
             }))
-            .map_err(|e| anyhow::anyhow!("no wgpu adapter: {e}"))?;
+        };
+
+        // Hardware first, then a software adapter rather than refusing to start.
+        //
+        // Do not read the fallback as a safety net for Vello: it is not one. Vello's compute
+        // shaders do NOT survive Direct3D's software rasterizer -- WARP segfaults inside
+        // d3d10warp.dll (0xC0000005) before the first frame, reproduced identically from two
+        // unrelated Windows shells, and that is why Windows now takes the CPU rasterizer
+        // instead of this path. Where a software adapter does work, lavapipe is the one that
+        // does; macOS has no software Metal at all, so here the second request almost
+        // certainly fails too.
+        //
+        // It earns its place for the error rather than the recovery: both reasons are kept,
+        // because "no adapter" with the hardware reason discarded sends you looking for a
+        // driver problem on a machine that was never going to have a driver.
+        let adapter = match request(false) {
+            Ok(adapter) => adapter,
+            Err(hardware_err) => {
+                log::warn!("no hardware GPU adapter ({hardware_err}); asking for a software one");
+                request(true)
+                    .map_err(|software_err| anyhow::anyhow!("no wgpu adapter: hardware: {hardware_err}; software: {software_err}"))?
+            }
+        };
+
+        let info = adapter.get_info();
+        log::info!("wgpu adapter: {} ({:?}, {:?})", info.name, info.device_type, info.backend);
 
         let (device, queue) = rt
             .block_on(adapter.request_device(&wgpu::DeviceDescriptor {
@@ -215,7 +254,7 @@ impl ViewSurface {
     ///
     /// # Safety
     /// `handle` must be a valid pointer to a view of the platform's expected type, and it
-    /// must outlive this surface — the shell must call `beacon_detach_view` before the view
+    /// must outlive this surface - the shell must call `beacon_detach_view` before the view
     /// goes away.
     pub unsafe fn new(context: &FfiWgpuContext, handle: *mut std::ffi::c_void, width: u32, height: u32) -> anyhow::Result<Self> {
         let ptr = std::ptr::NonNull::new(handle).ok_or_else(|| anyhow::anyhow!("null view handle"))?;
@@ -250,7 +289,7 @@ impl ViewSurface {
         let caps = surface.get_capabilities(&context.adapter);
 
         // Non-sRGB where possible: Vello's texture already holds sRGB-encoded bytes, and an
-        // sRGB surface format would encode them twice — washing colours out and thinning
+        // sRGB surface format would encode them twice - washing colours out and thinning
         // glyph edges.
         let format = caps.formats.iter().copied().find(|f| !f.is_srgb()).unwrap_or(caps.formats[0]);
 

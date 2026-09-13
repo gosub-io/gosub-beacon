@@ -4,7 +4,7 @@
 //! The second host for the same browser. Everything about what Beacon *does* is in
 //! `beacon-core`; this crate draws it. Where it differs from `beacon-gtk` is instructive:
 //! there is no widget tree to keep in step, so most `BeaconEvent`s need no handling at all
-//! — the chrome is rebuilt from current state on every frame.
+//! - the chrome is rebuilt from current state on every frame.
 
 mod app;
 mod chrome;

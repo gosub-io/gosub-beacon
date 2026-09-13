@@ -1,7 +1,7 @@
 //! In-flight and finished downloads for this session.
 //!
 //! The engine does the transferring and reports progress by its own download id; this is
-//! the shell's side of it — what the user sees in the downloads list, and the bookkeeping
+//! the shell's side of it - what the user sees in the downloads list, and the bookkeeping
 //! that keeps it in step.
 
 use std::path::PathBuf;
@@ -77,7 +77,7 @@ impl Downloads {
         });
     }
 
-    /// Apply an update to one entry. Returns whether the entry existed — progress for an
+    /// Apply an update to one entry. Returns whether the entry existed - progress for an
     /// unknown id means the engine outlived our record of it, which is worth ignoring
     /// rather than panicking over.
     pub fn update(&mut self, id: u64, apply: impl FnOnce(&mut DownloadEntry)) -> bool {

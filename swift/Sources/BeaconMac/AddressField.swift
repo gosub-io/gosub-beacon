@@ -3,7 +3,7 @@ import AppKit
 /// The field editor the address bar borrows.
 ///
 /// It exists for one override. AppKit's completion machinery asks the field editor which
-/// range a completion should replace, and the default answer is the current *word* — so
+/// range a completion should replace, and the default answer is the current *word* - so
 /// completing "exa" inside "https://exa" would replace three characters and leave the rest,
 /// producing nonsense like `https://https://example.com`. An address is one token as far as
 /// completion is concerned, so the whole string is the answer.
@@ -20,7 +20,7 @@ final class AddressFieldEditor: NSTextView {
 /// - `Ctrl+A` selects all. macOS gives text fields emacs bindings in which it means *move
 ///   to the beginning of the line*; in a browser address bar every other platform selects,
 ///   and that is what people reach for. `⌘A` keeps working through the Edit menu.
-/// - Clicking an unfocused field selects the whole address, so typing replaces it — Safari
+/// - Clicking an unfocused field selects the whole address, so typing replaces it - Safari
 ///   and Chrome both do this, and it is the difference between "type a new address" being
 ///   one gesture or three.
 final class AddressField: NSTextField {

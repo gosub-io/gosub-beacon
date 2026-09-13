@@ -135,7 +135,7 @@ fn emit_line(out: &mut String, spans: &[(Class, &str)]) {
 /// Fetch `url` and mark up what comes back as a source page.
 ///
 /// The two halves of `view-source:` in one place: where the bytes come from (a local file
-/// read, or a one-shot HTTP fetch outside the engine — see [`crate::fetch`]) and what they
+/// read, or a one-shot HTTP fetch outside the engine - see [`crate::fetch`]) and what they
 /// are turned into. Every shell wants both, and neither half is toolkit-specific.
 ///
 /// `highlighted` off is the `raw:` prefix. `user_agent` should be the engine's configured

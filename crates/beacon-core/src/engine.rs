@@ -66,7 +66,7 @@ impl<C: BeaconConfig> BrowserEngine<C> {
     /// A `private` engine backs a private-browsing window: cookies, local storage and
     /// session storage live in memory only, and the engine records no visited history.
     /// Settings are still read from (and written to) the shared store, and the persistent
-    /// bookmarks/history remain readable for the UI (bookmarks bar, URL completion) —
+    /// bookmarks/history remain readable for the UI (bookmarks bar, URL completion) -
     /// matching what mainstream browsers do in private mode.
     pub fn new(rt: &Runtime, private: bool, backend: Arc<C::RenderBackend>) -> anyhow::Result<Self> {
         let _guard = rt.enter();
@@ -240,7 +240,7 @@ impl<C: BeaconConfig> BrowserEngine<C> {
         self.engine.settings()
     }
 
-    /// Take the engine event stream (navigation, redraw, hover, …). Only the first
+    /// Take the engine event stream (navigation, redraw, hover, ...). Only the first
     /// caller receives the receiver that was subscribed before zone creation.
     pub fn take_event_rx(&mut self) -> Option<broadcast::Receiver<EngineEvent>> {
         self.event_rx.take()
@@ -258,7 +258,7 @@ impl<C: BeaconConfig> BrowserEngine<C> {
     /// `GtkStack` page is never allocated, so its GLArea's resize handler (the only other
     /// `SetViewport` source) does not fire until the tab is first shown. Without an initial
     /// viewport, background tabs lay out and rasterize at the wrong size and must fully
-    /// re-render on switch. `None` is safe — the engine applies its own non-zero fallback —
+    /// re-render on switch. `None` is safe - the engine applies its own non-zero fallback -
     /// but prefer a real size, since a viewport that differs when the tab is first shown
     /// costs a full cache drop and re-layout.
     pub fn create_tab(&mut self, rt: &Runtime, title: &str, viewport: Option<(u32, u32)>) -> anyhow::Result<TabHandle> {

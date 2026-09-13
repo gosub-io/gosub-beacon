@@ -30,8 +30,8 @@ pub fn backend() -> Arc<gosub_renderer_skia::SkiaBackend> {
 /// Resolve the device-pixel ratio to render at for `widget`.
 ///
 /// `GtkWidget::scale_factor()` only ever reports an integer, so on a fractionally
-/// scaled display (e.g. 1.25× or 1.5×, common on Wayland) it returns 1 and the page
-/// is rasterized at logical resolution — the compositor then upscales the whole
+/// scaled display (e.g. 1.25x or 1.5x, common on Wayland) it returns 1 and the page
+/// is rasterized at logical resolution - the compositor then upscales the whole
 /// surface, blurring text. `GdkSurface::scale()` exposes the true fractional scale;
 /// round it *up* and render at that resolution: downscaling a slightly-too-large
 /// buffer stays sharp, upscaling a too-small one does not.
@@ -108,7 +108,7 @@ pub fn render_frame_gl(
         canvas.clear(skia_safe::Color4f::new(1.0, 1.0, 1.0, 1.0));
 
         // `target_scale` is the physical-px-per-CSS-px the shell wants on screen (display
-        // scale × page zoom). Tiles arrive rasterized at `tile_dpr`; the difference is bridged
+        // scale x page zoom). Tiles arrive rasterized at `tile_dpr`; the difference is bridged
         // here, which also keeps stale tiles (rasterized at the previous zoom's dpr) at the
         // correct on-screen size until fresh ones land.
         let correction = match compositor.frame_for(tab_id) {

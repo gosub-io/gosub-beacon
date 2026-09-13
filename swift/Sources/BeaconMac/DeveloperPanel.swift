@@ -5,7 +5,7 @@ import CBeacon
 /// under the page.
 ///
 /// Three tabs rather than three panels, because they answer the same question from
-/// different ends — *what did the engine do*, *what did it fetch*, *how long did it take* —
+/// different ends - *what did the engine do*, *what did it fetch*, *how long did it take* -
 /// and a developer switches between them constantly.
 ///
 /// It polls rather than being pushed to. Log records arrive on whatever thread the engine
@@ -42,7 +42,7 @@ final class DeveloperPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
     /// not push the list off the bottom of the panel.
     ///
     /// A table rather than a block of text: a header list *is* key/value data, and banded
-    /// rows are what makes forty of them scannable. The body is the exception — that is one
+    /// rows are what makes forty of them scannable. The body is the exception - that is one
     /// blob of text, and gets a text view.
     private let split = NSSplitView()
     private let detailScroller = NSScrollView()
@@ -88,7 +88,7 @@ final class DeveloperPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
     private var dragOrigin: (y: CGFloat, height: CGFloat)?
 
     /// Whose requests to show. A network panel mixing several tabs together is a log, not
-    /// a panel — so the window keeps this pointed at whatever it is showing.
+    /// a panel - so the window keeps this pointed at whatever it is showing.
     var tab: BeaconTabId = 0 {
         didSet {
             guard tab != oldValue, mode == .network else { return }
@@ -381,7 +381,7 @@ final class DeveloperPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
 
     override func draw(_ dirtyRect: NSRect) {
         NSColor.windowBackgroundColor.setFill()
-        // `bounds`, intersected with what was asked for — never `dirtyRect` alone. AppKit
+        // `bounds`, intersected with what was asked for - never `dirtyRect` alone. AppKit
         // can hand over a rect larger than the view, and since macOS 14 `clipsToBounds`
         // defaults to false, so filling it paints outside this view: a panel 300 points tall
         // painting the window's background over the page above it, which is exactly what it
@@ -403,7 +403,7 @@ final class DeveloperPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
 
     // ── polling ───────────────────────────────────────────────────────────
 
-    /// Start or stop polling with the panel's visibility. A closed panel costs nothing —
+    /// Start or stop polling with the panel's visibility. A closed panel costs nothing -
     /// and, because capture follows the same switch, costs the page nothing either.
     func setActive(_ active: Bool) {
         refresh?.invalidate()
@@ -448,7 +448,7 @@ final class DeveloperPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
         }
     }
 
-    /// What the page is still waiting on, and for how long — the first question anyone asks
+    /// What the page is still waiting on, and for how long - the first question anyone asks
     /// of an unresponsive page, answered without having to read down the list.
     private func networkSummary() -> String {
         let transferred = requests.reduce(UInt64(0)) { $0 + $1.receivedBytes }
@@ -749,7 +749,7 @@ final class DeveloperPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
             } else if request.state == BEACON_REQUEST_FAILED {
                 cell.stringValue = request.failureLabel ?? "failed"
             } else {
-                cell.stringValue = "—"
+                cell.stringValue = "-"
             }
             if request.error != nil {
                 cell.textColor = .systemRed
@@ -758,7 +758,7 @@ final class DeveloperPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
         case "method":
             // A request that never reached the wire has no method: a file:// load, or one
             // answered from cache before a connection was built.
-            cell.stringValue = request.method ?? "—"
+            cell.stringValue = request.method ?? "-"
         case "kind":
             cell.stringValue = request.kind
             cell.toolTip = "Fetched by: \(request.initiator)"
@@ -768,17 +768,17 @@ final class DeveloperPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
             } else if let declared = request.contentLength {
                 cell.stringValue = Self.bytes(declared)
             } else {
-                cell.stringValue = "—"
+                cell.stringValue = "-"
             }
         case "time":
             if let elapsed = request.elapsedUs {
                 cell.stringValue = Self.duration(elapsed)
             } else if request.isInFlight {
-                // How long it has been in flight, and in which phase — not the word
+                // How long it has been in flight, and in which phase - not the word
                 // "loading". A page that is not responding is a page with a request sitting
                 // at twelve seconds, and that is only visible if the number is on screen.
                 let age = (Self.nowMs() &- request.startedMs) * 1000
-                cell.stringValue = "\(request.phaseLabel) \(Self.duration(age))…"
+                cell.stringValue = "\(request.phaseLabel) \(Self.duration(age))..."
                 cell.toolTip = request.phaseHint
             } else {
                 cell.stringValue = request.stateLabel
@@ -791,7 +791,7 @@ final class DeveloperPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
         }
     }
 
-    /// Where a request sits, and how it divides, against the whole page's fetching — the
+    /// Where a request sits, and how it divides, against the whole page's fetching - the
     /// three numbers a waterfall bar is drawn from, each 0...1 of the page's span.
     private func waterfall(for request: Browser.Request) -> (offset: Double, wait: Double, body: Double) {
         let start = requests.map(\.startedMs).min() ?? request.startedMs
@@ -805,7 +805,7 @@ final class DeveloperPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
         let total = Double((request.elapsedUs ?? 0) / 1000) / span
         // Wait is the time to the response headers; the rest of the bar is the body coming
         // in after them. A row that is mostly wait is a slow server, one that is mostly body
-        // is a big file — which is the whole reason for splitting the bar in two.
+        // is a big file - which is the whole reason for splitting the bar in two.
         let wait: Double
         if let headers = request.headersMs, headers >= request.startedMs {
             wait = min(Double(headers &- request.startedMs) / span, total)
@@ -883,7 +883,7 @@ final class DeveloperPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
             .pair("URL", request.url),
             // A request that never reached the wire has no method: a file:// load, or one
             // answered from cache before a connection was built.
-            .pair("Method", request.method ?? "—"),
+            .pair("Method", request.method ?? "-"),
             .pair("Kind", request.kind),
             .pair("Initiated by", request.initiator),
             .pair("State", request.stateLabel),
@@ -953,7 +953,7 @@ final class DeveloperPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
         var rows: [DetailRow] = [.section("Timing")]
 
         if request.isInFlight {
-            // No breakdown yet — the totals it divides up only exist once the request ends.
+            // No breakdown yet - the totals it divides up only exist once the request ends.
             // What does exist is the fact worth having: which phase it is sitting in.
             rows.append(.pair("Phase", request.phaseLabel))
             rows.append(.pair("Running for", Self.duration((Self.nowMs() &- request.startedMs) * 1000)))
@@ -1039,7 +1039,7 @@ final class DeveloperPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
             No body captured for this request.
 
             Capture starts when this panel opens, so anything that finished earlier has
-            none — reload the page to record it.
+            none - reload the page to record it.
 
             Video, audio and downloads are never captured, and neither is a response that
             declares itself larger than the per-request cap.
@@ -1175,7 +1175,7 @@ final class DeveloperPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
 /// One request's bar in the waterfall column: where it started against the page's whole
 /// span, how much of it was waiting for the server, and how much was the body arriving.
 ///
-/// Drawn rather than written because the shape *is* the information — which requests
+/// Drawn rather than written because the shape *is* the information - which requests
 /// overlap, which one started late, which one is all wait.
 private final class WaterfallCell: NSView {
     var span: (offset: Double, wait: Double, body: Double) = (0, 0, 0)

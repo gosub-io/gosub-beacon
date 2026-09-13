@@ -2,8 +2,8 @@
 //! [`BeaconCommand`]s and [`BeaconEvent`]s into pixels.
 //!
 //! Everything about *what the browser does* lives in `beacon-core`; this file is only
-//! about drawing it and collecting input. Where it reaches past core — sending
-//! `TabCommand` straight to a tab handle for pointer and viewport events — that is
+//! about drawing it and collecting input. Where it reaches past core - sending
+//! `TabCommand` straight to a tab handle for pointer and viewport events - that is
 //! per-frame input plumbing the command seam has no opinion about yet.
 
 use std::collections::HashMap;
@@ -36,7 +36,7 @@ struct TabView {
     /// CPU tile-cache path.
     cpu_texture: Option<egui::TextureHandle>,
     /// (engine wgpu texture id, egui handle) for the GPU path. Keyed on the texture id so it
-    /// is re-registered only when the texture itself changes — on resize, not every frame.
+    /// is re-registered only when the texture itself changes - on resize, not every frame.
     gpu_texture: Option<(u64, egui::TextureId)>,
     scroll_x: f32,
     scroll_y: f32,
@@ -606,7 +606,7 @@ impl eframe::App for BeaconApp {
 
             let Some(texture) = texture else {
                 ui.centered_and_justified(|ui| {
-                    ui.label(egui::RichText::new("Loading…").italics().color(egui::Color32::GRAY));
+                    ui.label(egui::RichText::new("Loading...").italics().color(egui::Color32::GRAY));
                 });
                 return;
             };

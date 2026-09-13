@@ -4,8 +4,8 @@ import CBeacon
 /// Turning an `NSEvent` into what the web calls a key.
 ///
 /// This mapping lives in the shell on purpose. `KeyboardEvent.code` names a *physical* key
-/// and `KeyboardEvent.key` names what that key produces under the current layout — on a
-/// French AZERTY board the key labelled A is `KeyQ` — and only the window server knows the
+/// and `KeyboardEvent.key` names what that key produces under the current layout - on a
+/// French AZERTY board the key labelled A is `KeyQ` - and only the window server knows the
 /// layout. The engine is handed both and never has to guess.
 enum KeyMap {
     /// Modifier bits in the ABI's terms. `META` is Command, which is what the web calls

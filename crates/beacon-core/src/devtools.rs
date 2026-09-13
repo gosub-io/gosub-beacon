@@ -2,8 +2,8 @@
 //!
 //! This lives in the core rather than in a frontend because there is nothing
 //! toolkit-specific about it. A GTK pane, an AppKit table and a C shell all want the same
-//! two lists, and the alternative — each frontend keeping its own ring buffer and its own
-//! idea of what a timing row is — is exactly the duplication this crate exists to prevent.
+//! two lists, and the alternative - each frontend keeping its own ring buffer and its own
+//! idea of what a timing row is - is exactly the duplication this crate exists to prevent.
 //!
 //! The log side is process-global because `log` allows one logger for the whole process,
 //! and the engine's crates log from whatever thread they happen to be on. Frontends read
@@ -16,7 +16,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[derive(Clone, Debug)]
 pub struct LogLine {
     pub level: log::Level,
-    /// The emitting crate or module — what a busy log is usefully filtered by.
+    /// The emitting crate or module - what a busy log is usefully filtered by.
     pub target: String,
     pub message: String,
     /// Milliseconds since the Unix epoch. Stored rather than formatted: what a timestamp
@@ -38,7 +38,7 @@ fn now_ms() -> u64 {
 
 /// Add a line to the buffer without going through `log`.
 ///
-/// For a frontend's own running commentary — "Visiting …", "Zoom: 150%" — which belongs in
+/// For a frontend's own running commentary - "Visiting ...", "Zoom: 150%" - which belongs in
 /// the same pane as the engine's records rather than in a second one beside it.
 pub fn record(level: log::Level, target: &str, message: &str) {
     push(LogLine {
@@ -82,7 +82,7 @@ pub fn clear_logs() {
 /// A `log::Log` that copies everything into the panel buffer on its way to `inner`.
 ///
 /// Composed rather than substituted because a frontend has already chosen how it wants
-/// records printed — `colog` under GTK, a plain stderr line under the C ABI — and the panel
+/// records printed - `colog` under GTK, a plain stderr line under the C ABI - and the panel
 /// should not be the thing that takes that away.
 struct Tee {
     inner: Box<dyn log::Log>,
@@ -120,7 +120,7 @@ impl log::Log for Tee {
 /// drops anything above it before a logger is ever consulted. For an `env_logger`, that is
 /// exactly what its `filter()` returns.
 ///
-/// Does nothing if a logger is already installed — an embedder that set one up first keeps
+/// Does nothing if a logger is already installed - an embedder that set one up first keeps
 /// it, and the panel simply stays empty rather than the process failing to start.
 pub fn install_logger(inner: Box<dyn log::Log>, max_level: log::LevelFilter) {
     if log::set_boxed_logger(Box::new(Tee { inner })).is_ok() {
@@ -560,7 +560,7 @@ fn initiator_label(initiator: &gosub_engine::net::types::Initiator) -> String {
     .to_string()
 }
 
-/// Every request seen, oldest first — which is the order the page fetched them.
+/// Every request seen, oldest first - which is the order the page fetched them.
 ///
 /// `tab` narrows it to one tab's requests; `None` returns all of them, including those the
 /// engine never attributed to a tab.
@@ -601,7 +601,7 @@ pub fn format_body(bytes: &[u8], truncated: bool) -> String {
         Ok(text) => {
             let mut out = text.to_string();
             if truncated {
-                out.push_str("\n\n… truncated: only the start of the body is captured.\n");
+                out.push_str("\n\n... truncated: only the start of the body is captured.\n");
             }
             out
         }
@@ -671,7 +671,7 @@ pub fn format_bytes(bytes: u64) -> String {
 
 pub use gosub_shared::timing::NamespaceStats;
 
-/// The engine's timing table, slowest namespace first — a developer panel is opened to find
+/// The engine's timing table, slowest namespace first - a developer panel is opened to find
 /// where the time went.
 ///
 /// Empty when the engine was built without its `timing` feature: the whole subsystem

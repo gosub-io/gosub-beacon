@@ -3,7 +3,7 @@
 //! The store itself is the engine's (`gosub_engine::Config`): typed values, a schema with
 //! a description and a default for each key, and an optional constraint. What lives here
 //! is the handful of rules a *settings editor* needs and neither the engine nor a shell
-//! should have to reinvent — chiefly that text typed into a box becomes a value of the
+//! should have to reinvent - chiefly that text typed into a box becomes a value of the
 //! key's own type, and that setting a key back to its default removes the override rather
 //! than storing a copy of it, so the persisted store only ever holds real customizations.
 //!
@@ -16,7 +16,7 @@ use gosub_engine::{Config, Constraint, Setting, SettingInfo};
 #[derive(Clone, Debug)]
 pub struct SettingRow {
     pub info: SettingInfo,
-    /// The value in force — the stored override, or the schema default when there is none.
+    /// The value in force - the stored override, or the schema default when there is none.
     pub current: Setting,
 }
 
@@ -62,7 +62,7 @@ pub fn rows(config: &Config, filter: &str) -> Vec<SettingRow> {
 
 /// Parse `text` into a `Setting` of the same variant as `template`.
 ///
-/// A settings editor hands back text — from an entry, a dropdown or a number field — and
+/// A settings editor hands back text - from an entry, a dropdown or a number field - and
 /// the store wants a typed value. The type comes from the schema's default rather than
 /// from what the text looks like, so `net.port = "8080"` stays an integer and a string
 /// setting that happens to read `true` stays a string.
@@ -81,7 +81,7 @@ pub fn parse_like(template: &Setting, text: &str) -> Setting {
 /// Store `value` under `key`, or remove the override when it equals the default.
 ///
 /// Returns false when the key is unknown, the value is outside the key's constraint, or
-/// the store refused the write — all of which an editor should show rather than pretend
+/// the store refused the write - all of which an editor should show rather than pretend
 /// the edit landed.
 pub fn set(config: &Config, key: &str, value: Setting) -> bool {
     let Some(info) = config.get_info(key) else {

@@ -1,0 +1,16 @@
+<Project>
+  <PropertyGroup>
+    <!-- WPF is Windows-only, but the SDK builds it on Linux when told to target Windows
+         explicitly, which keeps the C# half cross-building like the Rust half. -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+
+    <!-- The C ABI is unmanaged and not trimmable or AOT-safe; declare it rather than
+         discovering it at publish time. -->
+    <IsAotCompatible>false</IsAotCompatible>
+  </PropertyGroup>
+</Project>
