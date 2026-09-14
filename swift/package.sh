@@ -65,9 +65,22 @@ if git -C "$root" rev-parse --verify -q HEAD >/dev/null 2>&1; then
 fi
 build_date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
-# GosubBeacon-0.1.0-1234-5df7700abc.dmg: two of them side by side in Downloads are then two
-# different things by name alone, which "GosubBeacon.dmg" and "GosubBeacon (1).dmg" are not.
-dmg="$out/GosubBeacon-$version-$build-$commit.dmg"
+# The engine is a path dependency, so the same Beacon commit builds differently against
+# different engine checkouts; without the engine's commit in the identity, two such builds
+# would carry the same name and one would silently replace the other. Same rules as above.
+engine=unknown
+engine_dir="$(sed -n 's/^gosub_engine = { path = "\(.*\)\/crates\/gosub_engine".*/\1/p' "$root/Cargo.toml" | head -1)"
+if [[ -n "$engine_dir" ]] && git -C "$root/$engine_dir" rev-parse --verify -q HEAD >/dev/null 2>&1; then
+    engine="$(git -C "$root/$engine_dir" rev-parse --short=10 HEAD)"
+    if [[ -n "$(git -C "$root/$engine_dir" status --porcelain --untracked-files=no)" ]]; then
+        engine="$engine-dirty"
+    fi
+fi
+
+# GosubBeacon-0.1.0-1234-5df7700abc-engine-d9045adb12.dmg: two of them side by side in
+# Downloads are then two different things by name alone, which "GosubBeacon.dmg" and
+# "GosubBeacon (1).dmg" are not.
+dmg="$out/GosubBeacon-$version-$build-$commit-engine-$engine.dmg"
 
 say() { printf '\033[1m==>\033[0m %s\n' "$1"; }
 
@@ -155,7 +168,7 @@ bin="$(swift build --package-path "$here" -c release --show-bin-path)"
 
 # ── assemble ──────────────────────────────────────────────────────────────────
 
-say "assembling $(basename "$app") -- version $version, build $build, commit $commit"
+say "assembling $(basename "$app") -- version $version, build $build, commit $commit, engine $engine"
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Frameworks" "$app/Contents/Resources"
 
@@ -187,6 +200,7 @@ cat > "$app/Contents/Info.plist" <<PLIST
     <key>CFBundleVersion</key>           <string>$build</string>
     <!-- Beacon's own keys: which commit this is, read by the About window. -->
     <key>BeaconBuildCommit</key>         <string>$commit</string>
+    <key>BeaconEngineCommit</key>        <string>$engine</string>
     <key>BeaconBuildDate</key>           <string>$build_date</string>
     <key>LSMinimumSystemVersion</key>    <string>13.0</string>
     <key>NSHighResolutionCapable</key>   <true/>

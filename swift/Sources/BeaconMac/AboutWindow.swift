@@ -335,6 +335,12 @@ extension Bundle {
         object(forInfoDictionaryKey: "BeaconBuildDate") as? String
     }
 
+    /// The gosub-engine commit this was built against. A path dependency, so not implied
+    /// by Beacon's own commit.
+    var engineCommit: String? {
+        object(forInfoDictionaryKey: "BeaconEngineCommit") as? String
+    }
+
     /// "0.1.0 (1234, 5df7700abc)": the version, then what tells this build apart from every
     /// other 0.1.0. Plain "0.1.0" when there is no bundle to read the rest from.
     var versionLabel: String {
@@ -347,6 +353,7 @@ extension Bundle {
         var lines = ["Version \(shortVersion)"]
         if let buildNumber { lines.append("Build \(buildNumber)") }
         if let buildCommit { lines.append("Commit \(buildCommit)") }
+        if let engineCommit { lines.append("Engine \(engineCommit)") }
         if let buildDate { lines.append("Built \(buildDate)") }
         return lines.joined(separator: "\n")
     }
