@@ -175,6 +175,16 @@ final class PageView: NSView, NSTextInputClient {
         browser.mouseMoved(tab, x: x, y: y)
     }
 
+    // With a button held, AppKit reports the pointer through this instead of mouseMoved, and
+    // keeps reporting to the view that took the mouse-down even once the pointer has left it.
+    // The engine has one notion of a move; a drag (a range slider, a text selection, a
+    // textarea's grip) is a move with a drag in progress, so this is the same call.
+    override func mouseDragged(with event: NSEvent) {
+        guard tab != 0 else { return }
+        let (x, y) = pagePoint(event)
+        browser.mouseMoved(tab, x: x, y: y)
+    }
+
     override func mouseDown(with event: NSEvent) {
         guard tab != 0 else { return }
         window?.makeFirstResponder(self)
