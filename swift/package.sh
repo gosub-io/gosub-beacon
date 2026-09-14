@@ -31,13 +31,43 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="$(cd "$here/.." && pwd)"
 out="$here/build"
 app="$out/Gosub Beacon.app"
-dmg="$out/GosubBeacon.dmg"
 app_only=false
 volume="Gosub Beacon"
 [[ "${1:-}" == "--app" ]] && app_only=true
 
 # The version the About window shows, taken from the workspace so there is one answer.
 version="$(sed -n 's/^version = "\(.*\)"/\1/p' "$root/Cargo.toml" | head -1)"
+
+# ── build identity ────────────────────────────────────────────────────────────
+#
+# The version alone cannot tell two builds apart: it changes once a release, and every DMG in
+# between would be "0.1.0". So each build also carries where it came from:
+#
+#   build    the number of commits on HEAD. Goes up with every commit and never repeats on a
+#            branch, which is what CFBundleVersion wants -- a value macOS can order, so that
+#            "is this newer than the one installed?" has an answer. A DMG from a branch can
+#            collide with one from main at the same depth, which is what the commit is for.
+#   commit   the short SHA, with -dirty when the working copy had uncommitted changes, so a
+#            build from a half-finished change is never mistaken for the commit it names.
+#
+# Both land in the DMG's file name, in Info.plist (Finder's Get Info shows "0.1.0 (1234)"),
+# and in the About window. Outside a git checkout -- a source tarball -- they are "0" and
+# "unknown", and the build still goes through.
+build=0
+commit=unknown
+if git -C "$root" rev-parse --verify -q HEAD >/dev/null 2>&1; then
+    build="$(git -C "$root" rev-list --count HEAD)"
+    commit="$(git -C "$root" rev-parse --short=10 HEAD)"
+    # Tracked files only: an untracked scratch directory is not a change to what is built.
+    if [[ -n "$(git -C "$root" status --porcelain --untracked-files=no)" ]]; then
+        commit="$commit-dirty"
+    fi
+fi
+build_date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+# GosubBeacon-0.1.0-1234-5df7700abc.dmg: two of them side by side in Downloads are then two
+# different things by name alone, which "GosubBeacon.dmg" and "GosubBeacon (1).dmg" are not.
+dmg="$out/GosubBeacon-$version-$build-$commit.dmg"
 
 say() { printf '\033[1m==>\033[0m %s\n' "$1"; }
 
@@ -125,7 +155,7 @@ bin="$(swift build --package-path "$here" -c release --show-bin-path)"
 
 # ── assemble ──────────────────────────────────────────────────────────────────
 
-say "assembling $(basename "$app")"
+say "assembling $(basename "$app") -- version $version, build $build, commit $commit"
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Frameworks" "$app/Contents/Resources"
 
@@ -154,7 +184,10 @@ cat > "$app/Contents/Info.plist" <<PLIST
     <key>CFBundleIconFile</key>          <string>AppIcon</string>
     <key>CFBundlePackageType</key>       <string>APPL</string>
     <key>CFBundleShortVersionString</key><string>$version</string>
-    <key>CFBundleVersion</key>           <string>$version</string>
+    <key>CFBundleVersion</key>           <string>$build</string>
+    <!-- Beacon's own keys: which commit this is, read by the About window. -->
+    <key>BeaconBuildCommit</key>         <string>$commit</string>
+    <key>BeaconBuildDate</key>           <string>$build_date</string>
     <key>LSMinimumSystemVersion</key>    <string>13.0</string>
     <key>NSHighResolutionCapable</key>   <true/>
     <!-- The page is rendered on the GPU; let macOS keep a laptop on its integrated one. -->

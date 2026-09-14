@@ -90,10 +90,13 @@ final class AboutWindowController: NSWindowController {
         closeButton.keyEquivalent = "\u{1b}"
 
         let info = NSTextField(
-            labelWithString: "Gosub Beacon \(Bundle.main.shortVersion) · Powered by the Gosub Engine · © 2026 Gosub Project"
+            labelWithString: "Gosub Beacon \(Bundle.main.versionLabel) · Powered by the Gosub Engine · © 2026 Gosub Project"
         )
         info.font = .systemFont(ofSize: 10)
         info.textColor = .secondaryLabelColor
+        // The full build identity, for a bug report: hover, or select-and-copy from the label.
+        info.toolTip = Bundle.main.buildDescription
+        info.isSelectable = true
 
         let link = NSButton(title: "https://gosub.io", target: self, action: #selector(openWebsite))
         link.isBordered = false
@@ -315,5 +318,36 @@ extension Bundle {
     /// rather than showing an empty string in the one place people look for a version.
     var shortVersion: String {
         (object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "0.1.0"
+    }
+
+    /// The commit count package.sh wrote into CFBundleVersion; nil for a `swift run` binary.
+    var buildNumber: String? {
+        object(forInfoDictionaryKey: "CFBundleVersion") as? String
+    }
+
+    /// The short git SHA, "-dirty" when built from uncommitted changes. Beacon's own key,
+    /// written by package.sh; nil outside a packaged bundle.
+    var buildCommit: String? {
+        object(forInfoDictionaryKey: "BeaconBuildCommit") as? String
+    }
+
+    var buildDate: String? {
+        object(forInfoDictionaryKey: "BeaconBuildDate") as? String
+    }
+
+    /// "0.1.0 (1234, 5df7700abc)": the version, then what tells this build apart from every
+    /// other 0.1.0. Plain "0.1.0" when there is no bundle to read the rest from.
+    var versionLabel: String {
+        let build = [buildNumber, buildCommit].compactMap { $0 }
+        return build.isEmpty ? shortVersion : "\(shortVersion) (\(build.joined(separator: ", ")))"
+    }
+
+    /// Everything known about the build, one item per line.
+    var buildDescription: String {
+        var lines = ["Version \(shortVersion)"]
+        if let buildNumber { lines.append("Build \(buildNumber)") }
+        if let buildCommit { lines.append("Commit \(buildCommit)") }
+        if let buildDate { lines.append("Built \(buildDate)") }
+        return lines.joined(separator: "\n")
     }
 }

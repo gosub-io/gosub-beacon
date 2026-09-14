@@ -32,7 +32,7 @@ boundary.
 ## Packaging
 
 ```bash
-./package.sh          # release build -> build/Gosub Beacon.app and build/GosubBeacon.dmg
+./package.sh          # release build -> build/Gosub Beacon.app and build/GosubBeacon-<version>-<build>-<commit>.dmg
 ./package.sh --app    # stop after the .app
 ```
 
@@ -49,6 +49,14 @@ Two things inside the bundle are easy to get wrong. The SwiftPM resource bundle
 `Bundle.module` traps and the About window takes the app down. And `Info.plist` is what
 gives the menu bar its name and the About window its version. Without a bundle, both fall
 back to the process name and a hard-coded string.
+
+The version (`0.1.0`, from the workspace `Cargo.toml`) changes once a release, so on its own
+it cannot tell two builds apart. Each build therefore also records where it came from: the
+commit count on `HEAD` goes into `CFBundleVersion` and the short SHA into a `BeaconBuildCommit`
+key, with `-dirty` appended when the working copy had uncommitted changes. Both are in the
+DMG's file name, in Finder's Get Info (`0.1.0 (1234)`), and in the About window's version
+line, whose tooltip adds the build date. Built outside a git checkout, they are `0` and
+`unknown`.
 
 The icon is `packaging/icon.png`, the Beacon lighthouse on a 1024 square. The script turns
 it into an `.icns` (16 through 512, each at 1x and 2x) with `sips` and `iconutil`.
