@@ -3853,6 +3853,7 @@ impl BrowserWindow {
                 let name = match cursor {
                     Cursor::Pointer => "pointer",
                     Cursor::Text => "text",
+                    Cursor::Resize => "nwse-resize",
                     Cursor::Default => "default",
                 };
                 if let Some(area) = self.render_areas.borrow().get(&tab_id) {

@@ -626,6 +626,7 @@ impl eframe::App for BeaconApp {
                     ui.ctx().set_cursor_icon(match self.cursor {
                         Cursor::Pointer => egui::CursorIcon::PointingHand,
                         Cursor::Text => egui::CursorIcon::Text,
+                        Cursor::Resize => egui::CursorIcon::ResizeNwSe,
                         Cursor::Default => egui::CursorIcon::Default,
                     });
                 }

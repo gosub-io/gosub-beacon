@@ -1859,6 +1859,9 @@ pub unsafe extern "C" fn beacon_poll_events(browser: *mut BeaconBrowser, out: *m
                     Cursor::Default => 0.0,
                     Cursor::Pointer => 1.0,
                     Cursor::Text => 2.0,
+                    // Additive: the Swift side falls through to the arrow for a code it does
+                    // not know, so it keeps working until it grows a case for this one.
+                    Cursor::Resize => 3.0,
                 },
             ),
             // An offer is parked here with an id rather than pushed at the shell whole: the

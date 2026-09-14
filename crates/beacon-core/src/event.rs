@@ -18,6 +18,8 @@ pub enum Cursor {
     Default,
     Pointer,
     Text,
+    /// Diagonal resize arrows, over a textarea's resize grip.
+    Resize,
 }
 
 /// Something the frontend should reflect.

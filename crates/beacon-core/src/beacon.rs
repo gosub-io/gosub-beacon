@@ -234,6 +234,7 @@ impl Beacon {
                 let cursor = match cursor {
                     CursorShape::Pointer => Cursor::Pointer,
                     CursorShape::Text => Cursor::Text,
+                    CursorShape::Resize => Cursor::Resize,
                     CursorShape::Default => Cursor::Default,
                 };
                 vec![BeaconEvent::CursorChanged(our_id, cursor)]
