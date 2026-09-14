@@ -264,6 +264,11 @@ final class PageView: NSView, NSTextInputClient {
 
     override var acceptsFirstResponder: Bool { true }
 
+    /// The key press being interpreted by the input method, while `interpretKeyEvents` is
+    /// on the stack. `insertText` reads it to send the committed character as this press,
+    /// and sets `sent` so `keyDown` knows the press has been delivered.
+    private var pressInFlight: (event: NSEvent, sent: Bool)?
+
     override func keyDown(with event: NSEvent) {
         guard tab != 0 else { return super.keyDown(with: event) }
 
@@ -275,14 +280,21 @@ final class PageView: NSView, NSTextInputClient {
             return
         }
 
-        if let key = KeyMap.key(for: event) {
+        // The engine's contract is one KeyDown per press, carrying the character where there
+        // is one, with TextInput reserved for input-method commits and pastes. What the
+        // character is, only the input method knows: Option+e then e is one "é", not an "e"
+        // and an "é", and a CJK composition commits several at once, or nothing yet. So it
+        // goes first, and calls back into insertText below with whatever it made of the
+        // press. If it made nothing -- Backspace, an arrow, Enter outside a composition --
+        // the named key is sent afterwards.
+        pressInFlight = (event, false)
+        interpretKeyEvents([event])
+        let delivered = pressInFlight?.sent ?? false
+        pressInFlight = nil
+
+        if !delivered, let key = KeyMap.key(for: event) {
             browser.keyDown(tab, key: key, code: KeyMap.code(for: event), modifiers: KeyMap.modifiers(event.modifierFlags))
         }
-
-        // Let the input method have the event too: it is what turns a dead key followed by
-        // a vowel into "é", and what makes a CJK candidate window work at all. It calls
-        // back into insertText below when it has committed text.
-        interpretKeyEvents([event])
     }
 
     override func keyUp(with event: NSEvent) {
@@ -308,10 +320,23 @@ final class PageView: NSView, NSTextInputClient {
         } else {
             return
         }
-        // Control characters arrive here as well as through keyDown; the page already got
-        // those as named keys and does not want them twice.
+        // Control characters arrive here too (Ctrl+A is U+0001). They are not text; the
+        // named-key path in keyDown is the one that reports those.
         guard !text.isEmpty, text.unicodeScalars.allSatisfy({ $0.value >= 0x20 }) else { return }
-        browser.textInput(tab, text: text)
+
+        if let press = pressInFlight, text.unicodeScalars.count == 1 {
+            // A single character is the key press itself, as the input method resolved it:
+            // "a", " ", "é". Sent as the KeyDown so the engine can treat it as a key -- typing
+            // into a field, but also type-ahead in a select -- and never as text on top.
+            browser.keyDown(tab, key: text, code: KeyMap.code(for: press.event),
+                            modifiers: KeyMap.modifiers(press.event.modifierFlags))
+        } else {
+            // Several characters at once is a composition being committed, or a commit that
+            // arrived on its own (a candidate picked with the mouse). Text, not a key; and
+            // the press that triggered it, if any, was the input method's to consume.
+            browser.textInput(tab, text: text)
+        }
+        pressInFlight?.sent = true
     }
 
     func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {}
