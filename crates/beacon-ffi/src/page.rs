@@ -93,6 +93,78 @@ pub unsafe extern "C" fn beacon_hit_is_editable(browser: *mut BeaconBrowser) -> 
     b.hit.as_ref().is_some_and(|hit| hit.is_editable)
 }
 
+// ── pickers ──────────────────────────────────────────────────────────────────
+
+/// Where the last `BEACON_PICKER` event wants its picker: the control's border box in unzoomed
+/// viewport CSS px. False, leaving `out` untouched, when no picker was requested.
+///
+/// # Safety
+/// `browser` must be a live handle from [`crate::beacon_new`]; `out` a valid `BeaconRect*`.
+#[no_mangle]
+pub unsafe extern "C" fn beacon_picker_anchor(browser: *mut BeaconBrowser, out: *mut crate::BeaconRect) -> bool {
+    let b = browser!(browser, false);
+    let (Some(picker), false) = (b.picker.as_ref(), out.is_null()) else {
+        return false;
+    };
+    unsafe { std::ptr::write(out, picker.anchor) };
+    true
+}
+
+macro_rules! picker_string {
+    ($name:ident, $doc:literal, $field:ident) => {
+        #[doc = $doc]
+        ///
+        /// From the last `BEACON_PICKER` event, as the attribute was written. Free with
+        /// [`crate::beacon_string_free`]; NULL when the control has no such attribute, or no
+        /// picker was requested.
+        ///
+        /// # Safety
+        /// `browser` must be a live handle from [`crate::beacon_new`].
+        #[no_mangle]
+        pub unsafe extern "C" fn $name(browser: *mut BeaconBrowser) -> *mut c_char {
+            let b = browser!(browser, std::ptr::null_mut());
+            match b.picker.as_ref().and_then(|p| p.$field.as_deref()) {
+                Some(value) => to_c_string(value),
+                None => std::ptr::null_mut(),
+            }
+        }
+    };
+}
+
+picker_string!(beacon_picker_min, "The control's `min` attribute.", min);
+picker_string!(beacon_picker_max, "The control's `max` attribute.", max);
+picker_string!(beacon_picker_step, "The control's `step` attribute.", step);
+
+/// The picker moved to `value`. For a colour, any CSS notation (`#663399`, `rebeccapurple`,
+/// `rgb(102 51 153)`); for the date kinds, the ISO form (`2026-09-15`, `10:35`,
+/// `2026-09-15T10:35`, `2026-09`, `2026-W38`). The engine stores the control's sanitised
+/// value (black for a colour it cannot parse, empty for a date it cannot) and repaints, so
+/// calling this on every change gives a live preview. A cancel is this with the value the
+/// event handed over, then `beacon_picker_close`.
+///
+/// # Safety
+/// `browser` must be a live handle from [`crate::beacon_new`]; `value` NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn beacon_picker_set(browser: *mut BeaconBrowser, tab: u64, value: *const c_char) {
+    let b = browser!(browser);
+    let Some(tab_id) = b.tab(tab) else { return };
+    let Some(value) = crate::to_str(value) else { return };
+    b.send_and_draw(tab_id, TabCommand::PickerChanged { value: value.to_string() });
+}
+
+/// The picker closed. Anything sent through `beacon_picker_set` after this is dropped until
+/// the next request.
+///
+/// # Safety
+/// `browser` must be a live handle from [`crate::beacon_new`].
+#[no_mangle]
+pub unsafe extern "C" fn beacon_picker_close(browser: *mut BeaconBrowser, tab: u64) {
+    let b = browser!(browser);
+    let Some(tab_id) = b.tab(tab) else { return };
+    b.picker = None;
+    b.send(tab_id, TabCommand::PickerClosed);
+}
+
 // ── the page's source ────────────────────────────────────────────────────────
 
 /// Open the source of `tab` in a new tab, highlighted unless `raw`. Returns the new tab's

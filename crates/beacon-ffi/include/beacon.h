@@ -72,7 +72,15 @@ typedef enum {
     BEACON_NAVIGATION_FAILED = 15,
     /* An answer to beacon_hit_test; `number` is the token you were given. Read it with
      * beacon_hit_link and friends before the next hit test replaces it. */
-    BEACON_HIT_TEST = 16
+    BEACON_HIT_TEST = 16,
+    /* The user activated an input that opens a picker in `tab`. `number` is the kind: 0
+     * colour, 1 date, 2 time, 3 datetime-local, 4 month, 5 week (BeaconPickerKind); `text`
+     * is the control's current value, sanitised: #rrggbb for a colour, the ISO form for the
+     * date kinds (2026-09-15, 10:35, 2026-09-15T10:35, 2026-09, 2026-W38), or empty. Where
+     * to put the picker and the control's min/max/step are read with beacon_picker_anchor
+     * and friends. Answer with beacon_picker_set as the choice moves and beacon_picker_close
+     * when the picker goes away. */
+    BEACON_PICKER = 17
 } BeaconEventKind;
 
 typedef struct {
@@ -96,6 +104,16 @@ typedef struct {
 } BeaconFrame;
 
 typedef enum { BEACON_BUTTON_LEFT = 0, BEACON_BUTTON_MIDDLE = 1, BEACON_BUTTON_RIGHT = 2 } BeaconButton;
+
+/* A rectangle in the page: unzoomed CSS px from the top-left of the viewport, the same
+ * space beacon_mouse_down takes its coordinates in. Multiply by beacon_zoom to land on the
+ * screen. */
+typedef struct {
+    float x;
+    float y;
+    float width;
+    float height;
+} BeaconRect;
 
 /* ── lifecycle ─────────────────────────────────────────────────────────────── */
 
@@ -402,6 +420,41 @@ char *beacon_hit_text(BeaconBrowser *browser);
 /* Always NULL until text selection lands in the engine. */
 char *beacon_hit_selection(BeaconBrowser *browser);
 bool beacon_hit_is_editable(BeaconBrowser *browser);
+
+/* ── pickers ───────────────────────────────────────────────────────────────── */
+
+/* The engine draws no pickers of its own: an <input> of type color, date, time,
+ * datetime-local, month or week that is clicked (or gets Enter/Space) arrives as a
+ * BEACON_PICKER event and the shell opens whatever a picker looks like on its platform,
+ * over the control. */
+
+typedef enum {
+    BEACON_PICKER_COLOR = 0,
+    BEACON_PICKER_DATE = 1,
+    BEACON_PICKER_TIME = 2,
+    BEACON_PICKER_DATETIME_LOCAL = 3,
+    BEACON_PICKER_MONTH = 4,
+    BEACON_PICKER_WEEK = 5
+} BeaconPickerKind;
+
+/* The border box of the control that asked, from the last BEACON_PICKER event. False,
+ * leaving *out untouched, when none has. */
+bool beacon_picker_anchor(BeaconBrowser *browser, BeaconRect *out);
+/* The control's min, max and step attributes as written, from the last BEACON_PICKER
+ * event, for greying out what the control would refuse. NULL when absent. Free with
+ * beacon_string_free. */
+char *beacon_picker_min(BeaconBrowser *browser);
+char *beacon_picker_max(BeaconBrowser *browser);
+char *beacon_picker_step(BeaconBrowser *browser);
+/* The picker's current value: for a colour any CSS notation ("#663399", "rebeccapurple",
+ * "rgb(102 51 153)"), for the date kinds the ISO form. The engine stores the control's
+ * sanitised value (black for a colour it cannot parse, empty for a date that does not
+ * exist, as the HTML spec says) and repaints, so call this on every change for a live
+ * preview. Cancel is this with the value the event handed you, then close. */
+void beacon_picker_set(BeaconBrowser *browser, BeaconTabId tab, const char *value);
+/* The picker went away. Later beacon_picker_set calls are dropped until the next request,
+ * so a stray callback from a closing panel cannot land on a control that has moved on. */
+void beacon_picker_close(BeaconBrowser *browser, BeaconTabId tab);
 
 /* ── the page's source ─────────────────────────────────────────────────────── */
 
