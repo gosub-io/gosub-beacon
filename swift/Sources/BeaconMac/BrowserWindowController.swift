@@ -482,6 +482,10 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
                 applyCursor(event.number)
             case BEACON_DOWNLOAD_OFFERED:
                 offerDownload(offer: UInt64(event.number), suggested: event.text ?? "download")
+            case BEACON_PICKER:
+                if event.tab == currentTab, let kind = Browser.PickerKind(number: event.number) {
+                    openPicker(tab: event.tab, kind: kind, value: event.text ?? "")
+                }
             case BEACON_DOWNLOAD_CHANGED:
                 refreshDownloads()
             case BEACON_TABS_CHANGED, BEACON_NAV_STATE_CHANGED, BEACON_LOADING_CHANGED,
@@ -765,6 +769,72 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
     @objc private func bookmarkClicked(_ sender: NSButton) {
         guard let url = sender.toolTip, currentTab != 0 else { return }
         browser.navigate(currentTab, to: url)
+    }
+
+    // ── pickers ───────────────────────────────────────────────────────────
+
+    /// The picker a page control opened, while it is up: the colour picker's own window,
+    /// or the compact shell the date and time kinds share.
+    private var picker: NSWindowController?
+
+    /// Open the picker for the control that asked. Its choices go straight back to the
+    /// engine as they are made, so the control on the page follows along; Cancel puts the
+    /// original value back, and either way the engine is told when the picker is gone.
+    private func openPicker(tab: BeaconTabId, kind: Browser.PickerKind, value: String) {
+        if let old = picker {
+            // A second request while one is up: the engine has already moved on to the new
+            // control, so the old picker must go quietly -- its cancel would land on the
+            // wrong input.
+            (old as? PickerShellWindowController)?.detach()
+            old.close()
+            picker = nil
+        }
+
+        // The control's box: CSS px in the page, so through the zoom, the flipped page view
+        // and the window to reach the screen.
+        let anchor = browser.pickerAnchor().map { rect -> NSRect in
+            let zoom = CGFloat(browser.zoom(of: tab))
+            let inView = NSRect(x: rect.minX * zoom, y: rect.minY * zoom, width: rect.width * zoom, height: rect.height * zoom)
+            let inWindow = pageView.convert(inView, to: nil)
+            return window?.convertToScreen(inWindow) ?? inWindow
+        }
+        let bounds = browser.pickerBounds()
+
+        let onChange: (String) -> Void = { [weak self] value in
+            self?.browser.setPickerValue(tab, value)
+        }
+        // `chosen` is nil on cancel: the original goes back before the engine is told the
+        // picker is gone, so a stray change after that cannot land.
+        let onFinish: (NSWindowController?, String?) -> Void = { [weak self] controller, chosen in
+            guard let self else { return }
+            if chosen == nil {
+                self.browser.setPickerValue(tab, value)
+            }
+            self.browser.closePicker(tab)
+            if self.picker === controller {
+                self.picker = nil
+            }
+        }
+
+        switch kind {
+        case .color:
+            let initial = CSSColor.parse(value) ?? .black
+            // How much picker to show is the engine's setting, so it means the same in every
+            // shell that honours it. The strip is live even though the control is opaque:
+            // `hex` drops the alpha on the way to the page, and the strip's tooltip says so.
+            let layout = ColorPickerWindowController.Layout(setting: browser.setting("useragent.colorpicker.details"))
+            let controller = ColorPickerWindowController(initial: initial, allowsAlpha: true, layout: layout)
+            controller.onChange = { onChange($0.hex) }
+            controller.onFinish = { [weak controller] chosen in onFinish(controller, chosen?.hex) }
+            picker = controller
+            controller.present(near: anchor, of: window)
+        case .date, .time, .dateTimeLocal, .month, .week:
+            let controller = PickerWindowController(kind: kind, value: value, min: bounds.min, max: bounds.max, step: bounds.step)
+            controller.onChange = onChange
+            controller.onFinish = { [weak controller] chosen in onFinish(controller, chosen) }
+            picker = controller
+            controller.present(near: anchor, of: window)
+        }
     }
 
     // ── downloads ─────────────────────────────────────────────────────────

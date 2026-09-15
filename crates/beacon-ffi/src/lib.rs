@@ -29,7 +29,7 @@ use beacon_core::beacon::{Beacon, DRAW_FPS};
 use beacon_core::command::BeaconCommand;
 use beacon_core::devtools;
 use beacon_core::engine::BrowserEngine;
-use beacon_core::event::{BeaconEvent, Cursor};
+use beacon_core::event::{BeaconEvent, Cursor, PickerKind};
 use beacon_core::tab::{GosubTab, GosubTabManager, TabId};
 use gosub_engine::events::{DownloadId, EngineEvent, HitTestResponse, Modifiers, MouseButton, TabCommand};
 use gosub_render_pipeline::render::backend::ExternalHandle;
@@ -162,6 +162,9 @@ pub struct BeaconBrowser {
     /// offer when two arrive together.
     offers: HashMap<u64, PendingOffer>,
     next_offer: u64,
+    /// The last picker request, read back by `beacon_picker_anchor` and friends after the
+    /// `BEACON_PICKER` event carrying the kind and value.
+    picker: Option<PickerDetails>,
 
     /// The wgpu device Vello draws through, kept so attached views can share it.
     #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -193,6 +196,14 @@ struct ViewportState {
     logical_height: u32,
     scale: f32,
     zoom: f32,
+}
+
+/// What a picker request carries beyond its kind and value, kept for the accessors.
+struct PickerDetails {
+    anchor: BeaconRect,
+    min: Option<String>,
+    max: Option<String>,
+    step: Option<String>,
 }
 
 /// A download the engine offered, waiting for the shell to name a file or decline.
@@ -229,6 +240,17 @@ pub enum BeaconEventKind {
     DownloadChanged = 14,
     NavigationFailed = 15,
     HitTest = 16,
+    Picker = 17,
+}
+
+/// A rectangle in the page, in unzoomed CSS px of the viewport.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct BeaconRect {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
 }
 
 #[repr(C)]
@@ -714,6 +736,7 @@ pub unsafe extern "C" fn beacon_new(config: *const BeaconConfig) -> *mut BeaconB
         progress: HashMap::new(),
         offers: HashMap::new(),
         next_offer: 1,
+        picker: None,
         pending: Vec::new(),
         strings: Vec::new(),
         frame: Vec::new(),
@@ -1892,6 +1915,37 @@ pub unsafe extern "C" fn beacon_poll_events(browser: *mut BeaconBrowser, out: *m
                 )
             }
             BeaconEvent::DownloadChanged(id) => (BeaconEventKind::DownloadChanged, None, None, id as f64),
+            // One picker is ever open, so the details are a single slot rather than a
+            // table keyed like the download offers; the value rides along as the event's
+            // text and the kind as its number.
+            BeaconEvent::PickerRequested {
+                tab_id,
+                kind,
+                x,
+                y,
+                width,
+                height,
+                value,
+                min,
+                max,
+                step,
+            } => {
+                b.picker = Some(PickerDetails {
+                    anchor: BeaconRect { x, y, width, height },
+                    min,
+                    max,
+                    step,
+                });
+                let kind = match kind {
+                    PickerKind::Color => 0.0,
+                    PickerKind::Date => 1.0,
+                    PickerKind::Time => 2.0,
+                    PickerKind::DateTimeLocal => 3.0,
+                    PickerKind::Month => 4.0,
+                    PickerKind::Week => 5.0,
+                };
+                (BeaconEventKind::Picker, Some(tab_id), Some(value), kind)
+            }
             BeaconEvent::Log(message) => (BeaconEventKind::Log, None, Some(message), 0.0),
         };
 

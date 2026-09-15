@@ -377,6 +377,82 @@ int main(void) {
     pump(browser);
     CHECK(frame_digest(browser, tab) != 0, "the tab survives keyboard input");
 
+    /* ── 5b. pickers ───────────────────────────────────────────────────── */
+    printf("\npickers\n");
+    const char *page_picker = "/tmp/beacon-ffi-picker.html";
+    char url_picker[256];
+    snprintf(url_picker, sizeof url_picker, "file://%s", page_picker);
+    CHECK(write_page(page_picker,
+                     "<input type=\"color\" value=\"#0066CC\" style=\"position:absolute;left:100px;top:50px;"
+                     "width:44px;height:21px;margin:0;border:0;padding:0\">"
+                     "<input type=\"date\" value=\"2026-09-15\" min=\"2026-01-01\" step=\"7\" style=\"position:absolute;"
+                     "left:100px;top:150px;width:160px;height:24px;margin:0;border:0;padding:0\">"),
+          "the picker page is written");
+    BeaconTabId picker_tab = beacon_open_tab(browser, url_picker);
+    beacon_set_viewport(browser, picker_tab, 1024, 768, 1.0f);
+    CHECK(settle(browser, picker_tab, 15000), "the picker page finishes loading");
+    CHECK(wait_for_frame(browser, picker_tab, 10000), "and renders");
+    BeaconRect anchor = {0};
+    CHECK(!beacon_picker_anchor(browser, &anchor), "no picker has been asked for yet");
+
+    /* Click each control and keep what its event says: the text is borrowed only until the
+     * next poll, so it is copied out on the way past. */
+    const float clicks[2][2] = {{122.0f, 60.0f}, {180.0f, 162.0f}};
+    const char *expect_value[2] = {"#0066cc", "2026-09-15"};
+    const double expect_kind[2] = {BEACON_PICKER_COLOR, BEACON_PICKER_DATE};
+    for (int c = 0; c < 2; c++) {
+        beacon_mouse_move(browser, picker_tab, clicks[c][0], clicks[c][1]);
+        beacon_mouse_down(browser, picker_tab, clicks[c][0], clicks[c][1], BEACON_BUTTON_LEFT);
+        beacon_mouse_up(browser, picker_tab, clicks[c][0], clicks[c][1], BEACON_BUTTON_LEFT);
+        BeaconEvent events[64];
+        char current[32] = "";
+        double kind = -1;
+        int asked = 0;
+        for (int waited = 0; waited < 5000 && !asked; waited += 50) {
+            size_t n;
+            while ((n = beacon_poll_events(browser, events, 64)) > 0 && !asked) {
+                for (size_t i = 0; i < n; i++) {
+                    if (events[i].kind == BEACON_PICKER && events[i].tab == picker_tab) {
+                        asked = 1;
+                        kind = events[i].number;
+                        if (events[i].text) {
+                            snprintf(current, sizeof current, "%s", events[i].text);
+                        }
+                    }
+                }
+            }
+            sleep_ms(50);
+        }
+        CHECK(asked, "clicking control %d asks the shell for its picker", c);
+        CHECK(kind == expect_kind[c], "the event says which kind (%g)", kind);
+        CHECK(strcmp(current, expect_value[c]) == 0, "the event carries the sanitised current value (%s)", current);
+        CHECK(beacon_picker_anchor(browser, &anchor), "the anchor is readable after the event");
+        CHECK(anchor.x == 100.0f && anchor.y == (c == 0 ? 50.0f : 150.0f), "the anchor is the control's box (%.0f,%.0f)",
+              anchor.x, anchor.y);
+        char *min = beacon_picker_min(browser);
+        char *max = beacon_picker_max(browser);
+        char *step = beacon_picker_step(browser);
+        if (c == 0) {
+            CHECK(min == NULL && max == NULL && step == NULL, "a colour input has no bounds");
+        } else {
+            CHECK(min && strcmp(min, "2026-01-01") == 0, "min comes through as written (%s)", min ? min : "null");
+            CHECK(max == NULL, "an absent max is NULL");
+            CHECK(step && strcmp(step, "7") == 0, "step comes through as written (%s)", step ? step : "null");
+        }
+        beacon_string_free(min);
+        beacon_string_free(max);
+        beacon_string_free(step);
+        beacon_picker_set(browser, picker_tab, c == 0 ? "rebeccapurple" : "2026-10-01");
+        beacon_picker_close(browser, picker_tab);
+        CHECK(!beacon_picker_anchor(browser, &anchor), "closing the picker clears its details");
+    }
+    beacon_picker_set(browser, picker_tab, "#123456"); /* dropped, not a crash */
+    sleep_ms(300);
+    pump(browser);
+    CHECK(frame_digest(browser, picker_tab) != 0, "the tab still renders after the picker traffic");
+    beacon_close_tab(browser, picker_tab);
+    pump(browser);
+
     /* ── 6. bookmarks and downloads ────────────────────────────────────── */
     printf("\nbookmarks and downloads\n");
     CHECK(!beacon_tab_is_bookmarked(browser, tab), "a page starts unbookmarked");

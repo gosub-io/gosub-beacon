@@ -448,6 +448,11 @@ final class Browser {
         key.withCString { beacon_setting_reset(handle, $0) }
     }
 
+    /// One setting's current value, or nil when the engine has no such key.
+    func setting(_ key: String) -> String? {
+        settings(matching: key).first { $0.key == key }?.value
+    }
+
     /// The page a new tab opens on. Asked for rather than hard-coded, so the setting means
     /// the same thing here as it does in the GTK shell.
     var homepage: String { takeString(beacon_homepage(handle)) }
@@ -480,6 +485,47 @@ final class Browser {
             isEditable: beacon_hit_is_editable(handle)
         )
     }
+
+    // ── pickers ───────────────────────────────────────────────────────────
+
+    /// Which picker a `BEACON_PICKER` event asks for, from its `number`.
+    enum PickerKind {
+        case color, date, time, dateTimeLocal, month, week
+
+        init?(number: Double) {
+            switch UInt32(number) {
+            case BEACON_PICKER_COLOR.rawValue: self = .color
+            case BEACON_PICKER_DATE.rawValue: self = .date
+            case BEACON_PICKER_TIME.rawValue: self = .time
+            case BEACON_PICKER_DATETIME_LOCAL.rawValue: self = .dateTimeLocal
+            case BEACON_PICKER_MONTH.rawValue: self = .month
+            case BEACON_PICKER_WEEK.rawValue: self = .week
+            default: return nil
+            }
+        }
+    }
+
+    /// Where the control that asked for a picker is, in unzoomed CSS px of the page view,
+    /// from the last `BEACON_PICKER` event. nil when none has asked.
+    func pickerAnchor() -> CGRect? {
+        var rect = BeaconRect()
+        guard beacon_picker_anchor(handle, &rect) else { return nil }
+        return CGRect(x: CGFloat(rect.x), y: CGFloat(rect.y), width: CGFloat(rect.width), height: CGFloat(rect.height))
+    }
+
+    /// The control's `min`, `max` and `step` as written, from the last `BEACON_PICKER` event.
+    func pickerBounds() -> (min: String?, max: String?, step: String?) {
+        (optionalString(beacon_picker_min(handle)), optionalString(beacon_picker_max(handle)), optionalString(beacon_picker_step(handle)))
+    }
+
+    /// The picker's current value: a CSS colour in any notation, or the ISO form of a date
+    /// kind. Sent on every change, so the control on the page follows the picker.
+    func setPickerValue(_ tab: BeaconTabId, _ value: String) {
+        value.withCString { beacon_picker_set(handle, tab, $0) }
+    }
+
+    /// The picker went away; the engine stops listening until the next request.
+    func closePicker(_ tab: BeaconTabId) { beacon_picker_close(handle, tab) }
 
     // ── source, crashes, forward history, session ─────────────────────────
 

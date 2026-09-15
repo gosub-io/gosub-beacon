@@ -247,7 +247,7 @@ final class AboutWindowController: NSWindowController {
     ///
     /// `Bundle.main` covers both shapes: Contents/Resources in a packaged app, and the
     /// directory the executable sits in when it is run straight out of .build.
-    private static let resources: Bundle = {
+    static let resources: Bundle = {
         if let url = Bundle.main.url(forResource: "BeaconMac_BeaconMac", withExtension: "bundle"),
             let bundle = Bundle(url: url)
         {
