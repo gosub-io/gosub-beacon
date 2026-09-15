@@ -180,6 +180,66 @@ Some settings (`net.*`) are read once when the engine starts, so a change may on
 effect next launch; the window says so. The GTK shell shows the same store as its
 `gosub://config` page.
 
+### Pickers
+
+The engine draws no pickers of its own. An `<input>` of type `color`, `date`, `time`,
+`datetime-local`, `month` or `week` that is clicked (or gets Enter/Space) arrives as a
+`BEACON_PICKER` event with the kind, the control's current value and its `min`/`max`/`step`,
+and this shell opens one of two pickers (`ColorPicker/`) as a sheet of the browser window --
+modal to it, so the page cannot be used or closed until the picker is answered -- both
+transcribed from the Figma files rather than laid out by eye. Every change goes straight back through
+`beacon_picker_set`, so the control on the page follows the picker; Cancel sends the
+original value before `beacon_picker_close`.
+
+**Colour** (`ColorPickerWindow.swift`, from `Picker – Full Design.svg`, 1396 × 910 pt): not
+`NSColorPanel`, which speaks in colour spaces and its own swatch drawer, but a picker built
+around what a web form holds -- six hex digits in sRGB, and 148 names. A saturation/value
+plane with hue and opacity strips, a hex field, a CSS-name field that takes anything a
+stylesheet would (`rebeccapurple`, `rgb(102 51 153)`, `hsl(270 50% 40%)`), RGB and HSL
+fields, up to ten quick swatches (right-click to remove; the "+" goes when the row is full), an eyedropper that samples any pixel on screen
+(macOS's own `NSColorSampler`, so no permission prompt), and the named colours as a
+searchable list beside it. Whatever the plane lands on, the nearest name is shown; an exact hit says so and
+lists its aliases (`gray`/`grey`, `aqua`/`cyan`). Searching for a name that is itself a
+colour (`purple`) also turns up the names nearest to it. The parts are the Full Design's, laid out in the shared
+picker shell at 960 × 600 rather than the design's 1396 × 910, which covered most of a
+laptop screen. The form control is opaque, so
+its opacity strip changes only what the hex field shows: the page gets the opaque part. The design's "Page" chip (colours the page uses) is
+not offered: it needs an engine API that does not exist yet; its "Show all 148 CSS colors"
+button is not either, since the list already shows them all when nothing is searched. How much of the picker
+appears is the engine setting `useragent.colorpicker.details` (in Settings, under
+useragent): `full`, `nocss` (no list card, 690 × 600), or `packed` (the plane and the hue
+strip with a hex readout, 362 × 312, no sidebar or fields).
+
+**Date and time** (`PickerWindow.swift`, from the three time-picker screens `Picker – Time
+Select 12h.png`, `... 24h.png` and `Picker - Quick Select.png`, 983 × 910 pt, drawn at 0.7 of that unless
+`BeaconPickerScale` in the defaults says otherwise): the large shell, whose sidebar offers the input's own section -- Time, Date, Month or Week, or Date
+and Time for `datetime-local` -- and Quick select. Time is the clock face with the hour
+numerals on the outer ring and the minutes on the inner one, as designed, and the hands
+the conventional way round: a short hour hand and a long minute hand, each ending in a
+numbered knob that drags (the hour hand sits on whole hours, and in 24 h mode the ring shows 00-11 or
+12-23 for the chosen half); a PM/AM column (00-11 / 12-23 in 24 h mode); Hour and Minute steppers (a
+`step` under a minute adds Seconds); and a caption naming the time and its daypart. A
+12 h / 24 h toggle in the card's corner is remembered across pickers and otherwise follows
+the locale. Quick select lists relative rows (Now, In 15 minutes, …, drawn as filling
+pies) and dayparts (Morning 06:00, Noon, Evening 18:00, Night 00:00), or for the date
+kinds relative days and jumps (Next Monday, Next month, …). Date (from the eight `Date Picker – …` screens) is the
+calendar: Today at the top right, a month title that drills down into a month & year view
+(a grid of months, a year stepper, a grid of years), a grid with the neighbouring months'
+days greyed and the chosen day as a disc, Day/Month/Year steppers that take typing (a month
+by name or number) and the up/down arrow keys, and the chosen date spelled out with its
+weekday. Days outside `min`/`max` or off the `step` grid are greyed; a `week` input tints
+the chosen week's row; a `month` input opens on the month & year view, with the chosen month
+spelled out at its foot and quick picks of This month, Next month, In 3 and 6 months,
+January next year, Same month next year. Quick select for
+the date kinds lists Today, Tomorrow, This weekend; Next Monday, Next Friday; In 1 week,
+In 2 weeks, In 1 month. A `datetime-local` input has Date and Time sections, captions
+naming the whole value ("Tuesday, 15 September 2026 at 10:30 PM"), and a Quick select
+page with a Day group and a Time group so both halves can be picked there; its Now sets
+both. OK commits, Escape cancels.
+
+The sidebar artwork is `Resources/picker-sidebar.png`, cut from the design file; the
+submarine is drawn as the design draws it (hull, tower, periscope, three portholes).
+
 ### Session restore
 
 Beacon writes the open tabs as it runs, so launching with no address on the command line

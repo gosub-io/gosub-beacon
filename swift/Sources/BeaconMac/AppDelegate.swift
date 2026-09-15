@@ -42,6 +42,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         WindowRegistry.shared.onChange = { [weak self] in self?.pruneSessions() }
         openFirstWindow(browser: browser)
         NSApp.activate(ignoringOtherApps: true)
+
+        // A click without a pointer, to drive the page over SSH.
+        if let click = ProcessInfo.processInfo.environment["BEACON_PICKER_CLICK"] {
+            let parts = click.split(separator: ",").compactMap { Float($0.trimmingCharacters(in: .whitespaces)) }
+            if parts.count == 2 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                    WindowRegistry.shared.frontmost?.debugClick(x: parts[0], y: parts[1])
+                }
+            }
+        }
+        // A picker on its own, for comparing against the design without a page to click.
+        if let demo = ProcessInfo.processInfo.environment["BEACON_PICKER_DEMO"] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                WindowRegistry.shared.frontmost?.showPickerDemo(demo)
+            }
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
