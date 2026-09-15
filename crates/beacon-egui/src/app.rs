@@ -271,6 +271,7 @@ impl BeaconApp {
                 // state every frame, so these need no separate handling in an immediate-mode
                 // UI -- unlike GTK, where each one has a widget to poke.
                 BeaconEvent::Redraw
+                | BeaconEvent::PickerRequested { .. }
                 | BeaconEvent::TabsChanged
                 | BeaconEvent::ActiveTabChanged(_)
                 | BeaconEvent::TitleChanged(..)

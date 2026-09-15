@@ -3867,6 +3867,13 @@ impl BrowserWindow {
                 ..
             } => self.save_download_as(tab_id, url, &suggested_filename),
             BeaconEvent::DownloadChanged(_) => self.refresh_downloads(),
+            // No pickers in this shell yet: the Mac one has them (`swift/.../ColorPicker/`);
+            // a GTK one would answer with `TabCommand::PickerChanged` the same way.
+            BeaconEvent::PickerRequested { kind, value, .. } => {
+                self.log(&format!(
+                    "{kind:?} picker requested (current {value:?}); not available in the GTK shell yet"
+                ));
+            }
             BeaconEvent::Log(message) => self.log(&message),
         }
     }

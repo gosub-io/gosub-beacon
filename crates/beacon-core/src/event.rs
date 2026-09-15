@@ -22,6 +22,17 @@ pub enum Cursor {
     Resize,
 }
 
+/// Which picker an input wants, independent of the engine's own enum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PickerKind {
+    Color,
+    Date,
+    Time,
+    DateTimeLocal,
+    Month,
+    Week,
+}
+
 /// Something the frontend should reflect.
 #[derive(Debug, Clone, PartialEq)]
 pub enum BeaconEvent {
@@ -56,6 +67,24 @@ pub enum BeaconEvent {
     HoverUrl(TabId, Option<String>),
     /// The pointer shape for what is under the cursor.
     CursorChanged(TabId, Cursor),
+    /// The user activated an input that opens a picker (colour, date, time, …); the
+    /// frontend should open its picker over the control and feed choices back with the
+    /// engine's `PickerChanged` while it is open. The anchor is the control's border box in
+    /// viewport CSS px, unzoomed - the space pointer events are sent in. `value` is the
+    /// control's current value, sanitised (`#rrggbb`, an ISO date/time, or empty); `min`,
+    /// `max` and `step` are its attributes as written.
+    PickerRequested {
+        tab_id: TabId,
+        kind: PickerKind,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        value: String,
+        min: Option<String>,
+        max: Option<String>,
+        step: Option<String>,
+    },
 
     /// A download was offered; the frontend should ask the user where to put it.
     DownloadOffered {

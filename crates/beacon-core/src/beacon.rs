@@ -12,11 +12,11 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
-use gosub_engine::events::{CursorShape, EngineEvent, NavigationEvent, TabCommand as EngineTabCommand};
+use gosub_engine::events::{CursorShape, EngineEvent, NavigationEvent, PickerKind as EnginePickerKind, TabCommand as EngineTabCommand};
 
 use crate::command::BeaconCommand;
 use crate::download::{DownloadState, Downloads};
-use crate::event::{BeaconEvent, Cursor};
+use crate::event::{BeaconEvent, Cursor, PickerKind};
 use crate::platform::Platform;
 use crate::state::{ClosedTabs, MruList};
 use crate::tab::{GosubTabManager, TabId};
@@ -239,6 +239,40 @@ impl Beacon {
                 };
                 vec![BeaconEvent::CursorChanged(our_id, cursor)]
             }
+
+            EngineEvent::PickerRequested {
+                tab_id,
+                kind,
+                x,
+                y,
+                width,
+                height,
+                value,
+                min,
+                max,
+                step,
+            } => match self.tab_for_engine(tab_id) {
+                Some(our_id) => vec![BeaconEvent::PickerRequested {
+                    tab_id: our_id,
+                    kind: match kind {
+                        EnginePickerKind::Color => PickerKind::Color,
+                        EnginePickerKind::Date => PickerKind::Date,
+                        EnginePickerKind::Time => PickerKind::Time,
+                        EnginePickerKind::DateTimeLocal => PickerKind::DateTimeLocal,
+                        EnginePickerKind::Month => PickerKind::Month,
+                        EnginePickerKind::Week => PickerKind::Week,
+                    },
+                    x,
+                    y,
+                    width,
+                    height,
+                    value,
+                    min,
+                    max,
+                    step,
+                }],
+                None => Vec::new(),
+            },
 
             // The tab's engine worker died. The tab stays in the strip, marked crashed, so
             // the frontend can offer to reload it rather than taking the browser down.
@@ -645,6 +679,38 @@ mod tests {
             cursor: CursorShape::Pointer,
         });
         assert_eq!(out, vec![BeaconEvent::CursorChanged(tab_id, Cursor::Pointer)]);
+    }
+
+    #[test]
+    fn a_picker_input_asks_the_frontend_for_its_picker() {
+        let (mut beacon, tab_id, engine_id) = beacon_with_tab();
+        let out = beacon.on_engine_event(EngineEvent::PickerRequested {
+            tab_id: engine_id,
+            kind: EnginePickerKind::Date,
+            x: 10.0,
+            y: 20.0,
+            width: 44.0,
+            height: 21.0,
+            value: "2026-09-15".into(),
+            min: Some("2026-01-01".into()),
+            max: None,
+            step: None,
+        });
+        assert_eq!(
+            out,
+            vec![BeaconEvent::PickerRequested {
+                tab_id,
+                kind: PickerKind::Date,
+                x: 10.0,
+                y: 20.0,
+                width: 44.0,
+                height: 21.0,
+                value: "2026-09-15".into(),
+                min: Some("2026-01-01".into()),
+                max: None,
+                step: None,
+            }]
+        );
     }
 
     #[test]
