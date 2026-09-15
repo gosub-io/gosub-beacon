@@ -206,14 +206,13 @@ class PickerShellWindowController: NSWindowController, NSWindowDelegate {
 
     /// Show the picker as a sheet of `parent`: modal to that window, so the page behind it
     /// cannot be clicked or closed until the picker is answered, and ⌘W dismisses the picker
-    /// rather than the browser. Without a parent (a demo launch with no window yet) it is a
-    /// floating window beside `anchor`, the control that asked.
+    /// rather than the browser. Without a parent it is a floating window beside `anchor`,
+    /// the control that asked.
     func present(near anchor: NSRect?, of parent: NSWindow?) {
         guard let window else { return }
         if let parent {
             window.level = .normal
             parent.beginSheet(window) { _ in }
-            NSLog("beacon: picker sheet on \(parent.title), \(window.frame.size), visible \(window.isVisible)")
             return
         }
         let size = window.frame.size
@@ -229,7 +228,6 @@ class PickerShellWindowController: NSWindowController, NSWindowDelegate {
         window.setFrameOrigin(origin)
         showWindow(nil)
         window.makeKeyAndOrderFront(nil)
-        NSLog("beacon: picker window at \(window.frame), visible \(window.isVisible), key \(window.isKeyWindow)")
     }
 
     /// Forget the caller: a picker being replaced must not answer for the control that has
