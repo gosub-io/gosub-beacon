@@ -2780,6 +2780,7 @@ dependencies = [
  "log",
  "nom 8.0.0",
  "parking_lot",
+ "serde",
  "serde_json",
 ]
 
@@ -2836,6 +2837,7 @@ version = "0.1.0"
 dependencies = [
  "cosmic-text",
  "cow-utils",
+ "fontique",
  "gosub_interface",
  "gosub_shared",
  "parking_lot",
