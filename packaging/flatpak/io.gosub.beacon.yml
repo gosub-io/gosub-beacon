@@ -1,0 +1,100 @@
+# Flatpak manifest for the GTK frontend.
+#
+# The GTK build needs GTK >= 4.14 (the `v4_14` feature on the gtk4 crate), which rules out
+# several distributions people still run. Flatpak sidesteps that by bringing its own GTK:
+# the GNOME runtime supplies GTK, pango, cairo, fontconfig, the GSettings schemas and the
+# icon theme, and mesa arrives as a runtime extension. See ./README.md for how to build.
+#
+# The app id stays lowercase because `APP_ID` in crates/beacon-gtk/src/lib.rs is
+# `io.gosub.beacon`, and a flatpak may only own its own bus name.
+app-id: io.gosub.beacon
+runtime: org.gnome.Platform
+runtime-version: '50'
+sdk: org.gnome.Sdk
+# No branch: flatpak-builder resolves the extension against the SDK's freedesktop base.
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: gosub-beacon-gtk
+
+finish-args:
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  # GtkGLArea composites the page through GL/EGL.
+  - --device=dri
+  - --share=network
+  # No filesystem grant: `gtk4::FileDialog` goes through the portal, so downloads and
+  # "save link as" work without one. `file://` browsing does not -- see README.md.
+
+cleanup:
+  - /include
+  - /lib/pkgconfig
+  - /share/man
+  - '*.a'
+
+modules:
+  - name: beacon
+    buildsystem: simple
+    build-options:
+      append-path: /usr/lib/sdk/rust-stable/bin
+      env:
+        # cargo-sources.json vendors every crate under <module build dir>/cargo/vendor and
+        # drops the matching config at cargo/config, so CARGO_HOME must point there.
+        CARGO_HOME: /run/build/beacon/cargo
+        CARGO_NET_OFFLINE: 'true'
+        # The sandbox has no network, so skia-bindings cannot fetch its prebuilt binaries
+        # from GitHub. It reads `file://` URLs directly, so point it at the archive
+        # flatpak-builder downloaded for us. `{key}` is substituted by skia-bindings from
+        # the enabled feature set: if those ever drift, this fails on a missing file
+        # rather than quietly linking the wrong binaries.
+        SKIA_BINARIES_URL: file:///run/build/beacon/skia-binaries-{key}.tar.gz
+    build-commands:
+      - |
+        cd gosub-beacon && cargo build --release --locked --offline \
+          -p gosub-beacon --no-default-features --features gtk --bin gosub-beacon-gtk
+      - install -Dm755 gosub-beacon/target/release/gosub-beacon-gtk /app/bin/gosub-beacon-gtk
+      - install -Dm644 gosub-beacon/packaging/flatpak/io.gosub.beacon.desktop
+          /app/share/applications/io.gosub.beacon.desktop
+      - install -Dm644 gosub-beacon/packaging/flatpak/io.gosub.beacon.metainfo.xml
+          /app/share/metainfo/io.gosub.beacon.metainfo.xml
+      - |
+        for size in 64 128 256 512; do
+          install -Dm644 "gosub-beacon/packaging/flatpak/icons/io.gosub.beacon-$size.png" \
+            "/app/share/icons/hicolor/${size}x${size}/apps/io.gosub.beacon.png"
+        done
+    sources:
+      # Beacon itself. `skip` keeps the multi-GB target/ out of the copy flatpak-builder
+      # makes on every run.
+      - type: dir
+        path: ../..
+        dest: gosub-beacon
+        skip:
+          - target
+          - .git
+
+      # The engine is a path dependency at ../gosub-engine, so it has to land beside
+      # Beacon in the build directory. A local directory by default, so the flatpak builds
+      # what you have checked out; for a reproducible/CI build swap in the git source
+      # below and make sure Cargo.lock was resolved against that same commit.
+      - type: dir
+        path: ../../../gosub-engine
+        dest: gosub-engine
+        skip:
+          - target
+          - .git
+      # - type: git
+      #   url: https://github.com/gosub-io/gosub-engine.git
+      #   commit: 002e197c2eeabf05ea28ed49a37f1e6b16ce4ec2  # tip of `beacon`, keep in step with Cargo.lock
+      #   dest: gosub-engine
+
+      # Prebuilt Skia, matching skia-bindings 0.99.0 and the feature set the GTK build
+      # resolves to. Regenerate with ./refresh-skia.sh when skia-safe is bumped.
+      - type: file
+        url: https://github.com/rust-skia/skia-binaries/releases/download/0.99.0/skia-binaries-a25a0fdb7d90429aa2d1-x86_64-unknown-linux-gnu-egl-gl-jpegd-jpege-pdf-svg-textlayout-wayland-x11.tar.gz
+        sha256: 8bbae5ae75610f126bca4433c17de480856163ea6baba84cab120e697d6f8a93
+        dest-filename: skia-binaries-a25a0fdb7d90429aa2d1-x86_64-unknown-linux-gnu-egl-gl-jpegd-jpege-pdf-svg-textlayout-wayland-x11.tar.gz
+        only-arches:
+          - x86_64
+
+      # ~760 vendored crates plus the vello git checkout the workspace [patch] pins.
+      - cargo-sources.json
