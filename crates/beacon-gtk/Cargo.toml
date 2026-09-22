@@ -11,6 +11,8 @@ beacon-core = { path = "../beacon-core" }
 
 gosub_engine.workspace = true
 gosub_render_pipeline.workspace = true
+# For the picker's colour model: the engine's own CSS named-colour table.
+gosub_shared.workspace = true
 gosub_renderer_skia.workspace = true
 
 skia-safe.workspace = true

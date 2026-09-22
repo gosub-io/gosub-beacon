@@ -9,5 +9,6 @@
         <file>submarine.svg</file>
         <file>about.png</file>
         <file>about-credits.png</file>
+        <file>picker-sidebar.png</file>
     </gresource>
 </gresources>

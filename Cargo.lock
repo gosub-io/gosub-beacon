@@ -737,6 +737,7 @@ dependencies = [
  "gosub_engine",
  "gosub_render_pipeline",
  "gosub_renderer_skia",
+ "gosub_shared",
  "gtk-macros",
  "gtk4",
  "lazy_static",

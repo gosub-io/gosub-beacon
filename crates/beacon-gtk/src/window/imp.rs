@@ -7,7 +7,7 @@ use beacon_core::address_parser::{GosubAddressParser, GosubRenderMode};
 use beacon_core::beacon::Beacon;
 use beacon_core::command::BeaconCommand;
 use beacon_core::download::DownloadState;
-use beacon_core::event::{BeaconEvent, Cursor};
+use beacon_core::event::{BeaconEvent, Cursor, PickerKind};
 use beacon_core::tab::{GosubTab, GosubTabManager, HistoryEntryId, TabCommand, TabId};
 use glib::subclass::InitializingObject;
 use gosub_engine::events::{EngineEvent, NavigationEvent, TabCommand as EngineTabCommand};
@@ -208,6 +208,9 @@ pub struct BrowserWindow {
     tab_zoom: RefCell<HashMap<TabId, Rc<Cell<f64>>>>,
     /// Whether this is a private-browsing window (ephemeral engine, no history recording).
     pub private: Cell<bool>,
+    /// The picker a form control asked for, while it is up. Held so a second request closes
+    /// the first rather than stacking windows over the page.
+    picker: RefCell<Option<crate::picker::PickerHandle>>,
 }
 
 /// Write a row property, but only when the value actually changed.
@@ -302,6 +305,7 @@ impl Default for BrowserWindow {
             completion: RefCell::new(None),
             tab_zoom: RefCell::new(HashMap::new()),
             private: Cell::new(false),
+            picker: RefCell::new(None),
         }
     }
 }
@@ -3165,6 +3169,52 @@ impl BrowserWindow {
 
     /// Ask the user where to save `url` (native save dialog, prefilled with
     /// `suggested_name`), then start the engine download on `tab_id`'s handle.
+    /// Open the picker a form control asked for, and report what is done with it.
+    ///
+    /// The control previews live, so every intermediate value goes straight back as
+    /// `PickerChanged`; a cancel answers with the value the control came in with, and
+    /// `PickerClosed` ends the exchange either way. A kind the shell cannot draw yet is
+    /// logged and left alone -- the engine draws no picker of its own, so nothing opens.
+    fn open_picker(&self, tab_id: TabId, kind: PickerKind, value: &str) {
+        let manager = self.tab_manager.lock().unwrap();
+        let handle = manager.get_tab(tab_id).and_then(|t| t.tab_handle());
+        drop(manager);
+        let Some(handle) = handle else {
+            return;
+        };
+
+        // A control that asks while another picker is up replaces it, and the old one is
+        // detached so it cannot answer for a control that has moved on.
+        if let Some(previous) = self.picker.borrow_mut().take() {
+            previous.close();
+        }
+
+        let send = move |command: EngineTabCommand| {
+            let handle = handle.clone();
+            runtime().spawn(async move {
+                let _ = handle.send(command).await;
+            });
+        };
+        let on_change = send.clone();
+        let on_finish = send;
+        let opened = crate::picker::open(
+            &*self.obj(),
+            kind,
+            value,
+            move |value| on_change(EngineTabCommand::PickerChanged { value }),
+            move |value| {
+                on_finish(EngineTabCommand::PickerChanged { value });
+                on_finish(EngineTabCommand::PickerClosed);
+            },
+        );
+        match opened {
+            Some(picker) => *self.picker.borrow_mut() = Some(picker),
+            None => self.log(&format!(
+                "{kind:?} picker requested (current {value:?}); not available in the GTK shell yet"
+            )),
+        }
+    }
+
     pub(crate) fn save_download_as(&self, tab_id: TabId, url: String, suggested_name: &str) {
         let handle = {
             let manager = self.tab_manager.lock().unwrap();
@@ -3867,13 +3917,7 @@ impl BrowserWindow {
                 ..
             } => self.save_download_as(tab_id, url, &suggested_filename),
             BeaconEvent::DownloadChanged(_) => self.refresh_downloads(),
-            // No pickers in this shell yet: the Mac one has them (`swift/.../ColorPicker/`);
-            // a GTK one would answer with `TabCommand::PickerChanged` the same way.
-            BeaconEvent::PickerRequested { kind, value, .. } => {
-                self.log(&format!(
-                    "{kind:?} picker requested (current {value:?}); not available in the GTK shell yet"
-                ));
-            }
+            BeaconEvent::PickerRequested { tab_id, kind, value, .. } => self.open_picker(tab_id, kind, &value),
             BeaconEvent::Log(message) => self.log(&message),
         }
     }

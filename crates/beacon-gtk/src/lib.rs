@@ -6,6 +6,7 @@
 
 mod application;
 mod dialog;
+mod picker;
 mod platform;
 pub mod render;
 mod theme;
@@ -87,7 +88,12 @@ pub fn run() {
 
 fn load_css() {
     let provider = CssProvider::new();
-    provider.load_from_string(include_str!("../resources/style.css"));
+    // One provider for both sheets: the pickers are part of the same chrome, and a second
+    // provider would only add a priority to get wrong.
+    provider.load_from_string(concat!(
+        include_str!("../resources/style.css"),
+        include_str!("../resources/picker.css")
+    ));
 
     gtk4::style_context_add_provider_for_display(
         &Display::default().expect("Could not connect to a display"),
