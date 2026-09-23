@@ -3724,6 +3724,33 @@ impl BrowserWindow {
                         .await;
                 });
             });
+
+            // ...and the release, which is what ends a drag. The engine answers `MouseUp`
+            // by clearing the pointer's grip on a range, a resize handle, a scrollbar thumb
+            // or a selection -- so a shell that only ever presses leaves every one of those
+            // grabbed for good.
+            //
+            // Sent unconditionally, including after a Ctrl+click that went to the hit test
+            // instead of the engine: an unpaired release only clears state that was never
+            // set, while a missing one is the bug this exists to avoid. The modifier can
+            // also be let go before the button is, so the press and the release cannot be
+            // relied on to agree about it.
+            let release_handle = handle.clone();
+            let release_zoom = zoom.clone();
+            click.connect_released(move |_g, _n, x, y| {
+                let handle = release_handle.clone();
+                let z = release_zoom.get();
+                let (x, y) = (x / z, y / z);
+                runtime().spawn(async move {
+                    let _ = handle
+                        .send(EngineTabCommand::MouseUp {
+                            x: x as f32,
+                            y: y as f32,
+                            button: gosub_engine::events::MouseButton::Left,
+                        })
+                        .await;
+                });
+            });
             area.add_controller(click);
 
             // Keyboard -> engine. Shortcuts with Control/Alt/Super are the shell's (Ctrl+T
