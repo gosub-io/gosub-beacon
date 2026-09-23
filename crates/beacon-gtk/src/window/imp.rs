@@ -11,6 +11,7 @@ use beacon_core::event::{BeaconEvent, Cursor, PickerKind};
 use beacon_core::tab::{GosubTab, GosubTabManager, HistoryEntryId, TabCommand, TabId};
 use glib::subclass::InitializingObject;
 use gosub_engine::events::{EngineEvent, NavigationEvent, TabCommand as EngineTabCommand};
+use gosub_engine::tab::TabHandle;
 use gtk4::gio::SimpleActionGroup;
 use gtk4::glib::subclass::Signal;
 use gtk4::glib::Quark;
@@ -208,6 +209,9 @@ pub struct BrowserWindow {
     tab_zoom: RefCell<HashMap<TabId, Rc<Cell<f64>>>>,
     /// Whether this is a private-browsing window (ephemeral engine, no history recording).
     pub private: Cell<bool>,
+    /// Whether the user wants the bookmarks bar. Per window, as on the Mac: fullscreen hides
+    /// the whole chrome, and this says whether the bar comes back with it.
+    pub bookmarks_bar_wanted: Cell<bool>,
     /// The picker a form control asked for, while it is up. Held so a second request closes
     /// the first rather than stacking windows over the page.
     picker: RefCell<Option<crate::picker::PickerHandle>>,
@@ -305,6 +309,7 @@ impl Default for BrowserWindow {
             completion: RefCell::new(None),
             tab_zoom: RefCell::new(HashMap::new()),
             private: Cell::new(false),
+            bookmarks_bar_wanted: Cell::new(true),
             picker: RefCell::new(None),
         }
     }
@@ -494,6 +499,34 @@ impl BrowserWindow {
             return;
         }
 
+        self.send_reload(tab_id, handle, false);
+    }
+
+    /// Reload `tab_id` past the cache: every subresource refetched, as Ctrl+Shift+R does in
+    /// every other browser. Unlike the button's reload this never stops a load in progress --
+    /// asking for a fresh copy of a page is not the same as asking it to stop arriving.
+    pub(crate) fn reload_ignoring_cache(&self, tab_id: TabId) {
+        let (url, handle) = {
+            let manager = self.tab_manager.lock().unwrap();
+            match manager.get_tab(tab_id) {
+                Some(tab) => (tab.url().clone(), tab.tab_handle()),
+                None => return,
+            }
+        };
+        // The same two pages the ordinary reload cannot refetch: one the shell drew, one the
+        // shell built.
+        if Self::is_shell_rendered(&url) {
+            return;
+        }
+        if matches!(url.scheme(), "view-source" | "raw") {
+            let _ = self.get_sender().send_blocking(Message::LoadUrl(tab_id, url.to_string()));
+            return;
+        }
+        self.send_reload(tab_id, handle, true);
+    }
+
+    /// Mark the tab loading and ask the engine for the page again.
+    fn send_reload(&self, tab_id: TabId, handle: Option<TabHandle>, ignore_cache: bool) {
         let mut manager = self.tab_manager.lock().unwrap();
         if let Some(mut tab) = manager.get_tab(tab_id) {
             tab.set_loading(true);
@@ -504,7 +537,7 @@ impl BrowserWindow {
 
         if let Some(handle) = handle {
             runtime().spawn(async move {
-                let _ = handle.send(EngineTabCommand::Reload { ignore_cache: false }).await;
+                let _ = handle.send(EngineTabCommand::Reload { ignore_cache }).await;
                 let _ = handle.send(EngineTabCommand::ResumeDrawing { fps: 30 }).await;
             });
         }
@@ -614,6 +647,33 @@ impl BrowserWindow {
             glib::ControlFlow::Continue
         });
         *self.devtools_tick.borrow_mut() = Some(source);
+    }
+
+    /// Show or hide the bookmarks bar, and answer whether it is now showing.
+    pub(crate) fn toggle_bookmarks_bar(&self) -> bool {
+        let wanted = !self.bookmarks_bar_wanted.get();
+        self.bookmarks_bar_wanted.set(wanted);
+        // Fullscreen owns the chrome while it lasts; this only decides what returns with it.
+        if !self.obj().is_fullscreen() {
+            self.bookmarks_bar.set_visible(wanted);
+        }
+        wanted
+    }
+
+    /// Open the developer pane on a particular tab, for the menu items named after them.
+    /// Shows the pane when it is closed: an item called "Network" should land on the network
+    /// tab, never close the panel.
+    pub(crate) fn show_devtools_page(&self, page: &str) {
+        if !self.devtools_pane.get_visible() {
+            self.toggle_devtools();
+        }
+        self.devtools_stack.set_visible_child_name(page);
+    }
+
+    /// Throw away the engine's timing statistics and redraw the table.
+    pub(crate) fn reset_timings(&self) {
+        beacon_core::devtools::reset_timings();
+        self.refresh_devtools();
     }
 
     /// Wire the pane's own controls. Called once, at construction.

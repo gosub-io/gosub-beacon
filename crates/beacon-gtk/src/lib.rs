@@ -9,6 +9,7 @@ mod dialog;
 mod picker;
 mod platform;
 pub mod render;
+mod shortcuts;
 mod theme;
 mod window;
 
