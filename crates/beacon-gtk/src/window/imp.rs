@@ -3757,23 +3757,112 @@ impl BrowserWindow {
             // and friends) and propagate to GTK; everything else is the page's: focus
             // traversal (Tab), link activation (Enter), and scrolling keys.
             let keys = gtk4::EventControllerKey::new();
+
+            // What the page receives for a press is one `KeyDown` carrying the character
+            // the input method made of it, with `TextInput` kept for commits that are not a
+            // single press -- a CJK composition, or a paste. That is the engine's contract
+            // (`edit_key` inserts from the key), and the Mac shell's `PageView.keyDown`
+            // follows the same one.
+            //
+            // Only the input method knows what a press produced: Compose then e is one "é",
+            // not an "e" and an "é", and a composition may commit several characters at once
+            // or none yet. So the press goes to it first and the named key -- Backspace,
+            // ArrowLeft, Enter -- is sent only when it made nothing of it.
+            let im = gtk4::IMMulticontext::new();
+            im.set_client_widget(Some(&area));
+
+            /// The press being interpreted: its `code` and modifiers, for the commit to
+            /// answer as.
+            type PressInFlight = Rc<RefCell<Option<(String, gosub_engine::events::Modifiers)>>>;
+            let press_in_flight: PressInFlight = Rc::new(RefCell::new(None));
+            let committed = Rc::new(Cell::new(false));
+
+            let im_handle = handle.clone();
+            let commit_press = press_in_flight.clone();
+            let commit_flag = committed.clone();
+            im.connect_commit(move |_, text| {
+                // Control characters arrive here too (Ctrl+A is U+0001). They are not text;
+                // the named-key path below is the one that reports those.
+                if text.is_empty() || text.chars().any(|c| (c as u32) < 0x20) {
+                    return;
+                }
+                let handle = im_handle.clone();
+                let press = commit_press.borrow().clone();
+                commit_flag.set(true);
+                match press {
+                    // A single character is the press itself, as the input method resolved
+                    // it: "a", " ", "é". Sent as the key so the engine can treat it as one --
+                    // typing into a field, but also space scrolling a page with nothing
+                    // focused -- and never as text on top.
+                    Some((code, modifiers)) if text.chars().count() == 1 => {
+                        let key = text.to_string();
+                        runtime().spawn(async move {
+                            let _ = handle.send(EngineTabCommand::KeyDown { key, code, modifiers }).await;
+                        });
+                    }
+                    // Several at once is a composition being committed, or a commit that
+                    // arrived on its own. Text, not a key.
+                    _ => {
+                        let text = text.to_string();
+                        runtime().spawn(async move {
+                            let _ = handle.send(EngineTabCommand::TextInput { text }).await;
+                        });
+                    }
+                }
+            });
+
+            // An input method only composes for the focused widget, and has to be told.
+            let focus = gtk4::EventControllerFocus::new();
+            focus.connect_enter({
+                let im = im.clone();
+                move |_| im.focus_in()
+            });
+            focus.connect_leave({
+                let im = im.clone();
+                move |_| im.focus_out()
+            });
+            area.add_controller(focus);
+
             let key_handle = handle.clone();
-            keys.connect_key_pressed(move |_c, keyval, _keycode, state| {
+            let press_im = im.clone();
+            keys.connect_key_pressed(move |c, keyval, _keycode, state| {
                 if state.intersects(gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::ALT_MASK | gdk::ModifierType::SUPER_MASK) {
                     return glib::Propagation::Proceed;
                 }
-                let Some(key) = web_key_name(keyval) else {
-                    return glib::Propagation::Proceed;
-                };
                 let modifiers = engine_modifiers(state);
-                let handle = key_handle.clone();
                 // Web `code` (physical key) is approximated with the logical name until a
                 // scancode map exists; the engine only reads `key` today.
+                let named = web_key_name(keyval);
+                *press_in_flight.borrow_mut() = Some((named.clone().unwrap_or_default(), modifiers));
+                committed.set(false);
+                if let Some(event) = c.current_event() {
+                    press_im.filter_keypress(&event);
+                }
+                let handled = committed.get();
+                *press_in_flight.borrow_mut() = None;
+                if !handled {
+                    if let Some(key) = named {
+                        let handle = key_handle.clone();
+                        let code = key.clone();
+                        runtime().spawn(async move {
+                            let _ = handle.send(EngineTabCommand::KeyDown { key, code, modifiers }).await;
+                        });
+                    }
+                }
+                glib::Propagation::Stop
+            });
+
+            // The release. Not offered to the input method: those compose on press, and
+            // `filter_keypress` reads any event it is handed as one.
+            let release_handle = handle.clone();
+            keys.connect_key_released(move |_c, keyval, _keycode, state| {
+                let Some(key) = web_key_name(keyval) else { return };
+                let modifiers = engine_modifiers(state);
+                let handle = release_handle.clone();
                 let code = key.clone();
                 runtime().spawn(async move {
-                    let _ = handle.send(EngineTabCommand::KeyDown { key, code, modifiers }).await;
+                    let _ = handle.send(EngineTabCommand::KeyUp { key, code, modifiers }).await;
                 });
-                glib::Propagation::Stop
             });
             area.add_controller(keys);
 
