@@ -3175,7 +3175,7 @@ impl BrowserWindow {
     /// `PickerChanged`; a cancel answers with the value the control came in with, and
     /// `PickerClosed` ends the exchange either way. A kind the shell cannot draw yet is
     /// logged and left alone -- the engine draws no picker of its own, so nothing opens.
-    fn open_picker(&self, tab_id: TabId, kind: PickerKind, value: &str) {
+    fn open_picker(&self, tab_id: TabId, kind: PickerKind, value: &str, min: Option<&str>, max: Option<&str>, step: Option<&str>) {
         let manager = self.tab_manager.lock().unwrap();
         let handle = manager.get_tab(tab_id).and_then(|t| t.tab_handle());
         drop(manager);
@@ -3201,6 +3201,9 @@ impl BrowserWindow {
             &*self.obj(),
             kind,
             value,
+            min,
+            max,
+            step,
             move |value| on_change(EngineTabCommand::PickerChanged { value }),
             move |value| {
                 on_finish(EngineTabCommand::PickerChanged { value });
@@ -3917,7 +3920,15 @@ impl BrowserWindow {
                 ..
             } => self.save_download_as(tab_id, url, &suggested_filename),
             BeaconEvent::DownloadChanged(_) => self.refresh_downloads(),
-            BeaconEvent::PickerRequested { tab_id, kind, value, .. } => self.open_picker(tab_id, kind, &value),
+            BeaconEvent::PickerRequested {
+                tab_id,
+                kind,
+                value,
+                min,
+                max,
+                step,
+                ..
+            } => self.open_picker(tab_id, kind, &value, min.as_deref(), max.as_deref(), step.as_deref()),
             BeaconEvent::Log(message) => self.log(&message),
         }
     }

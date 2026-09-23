@@ -15,7 +15,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use super::color::{named, system_colors, CssColor, Named};
-use super::shell::{PickerShell, Rect};
+use super::shell::{Metrics, NavIcon, NavItem, PickerShell, Rect, ShellConfig};
 use super::widgets::{row_swatch, swatch, ColorStrip, StripKind, SvPlane};
 
 /// A picker reports every intermediate colour, so the control on the page previews live.
@@ -52,7 +52,7 @@ struct Row {
 }
 
 pub struct ColorPicker {
-    shell: PickerShell,
+    shell: Rc<PickerShell>,
     plane: SvPlane,
     hue_strip: ColorStrip,
     alpha_strip: ColorStrip,
@@ -87,11 +87,19 @@ impl ColorPicker {
     pub fn new(parent: Option<&impl IsA<Window>>, initial: CssColor, allows_alpha: bool) -> Rc<Self> {
         let shell = PickerShell::new(
             parent,
-            "Select a color",
-            (960.0, 600.0),
-            Rect::new(154.0, 42.0, 520.0, 500.0),
-            Some(Rect::new(686.0, 42.0, 260.0, 500.0)),
-            "Color",
+            ShellConfig {
+                title: "Select a color",
+                size: (960.0, 600.0),
+                main_card: Rect::new(154.0, 42.0, 520.0, 500.0),
+                side_card: Some(Rect::new(686.0, 42.0, 260.0, 500.0)),
+                nav: vec![NavItem {
+                    icon: NavIcon::HueDisc,
+                    title: "Color",
+                }],
+                metrics: &Metrics::SMALL,
+                ok_label: "Select",
+                help_url: None,
+            },
         );
 
         let picker = Rc::new(Self {

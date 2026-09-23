@@ -353,3 +353,163 @@ window.picker.background {
 .picker.dark .picker-button.select {
     background-color: #2f7bff;
 }
+
+/* ── Date and time pickers ────────────────────────────────────────────────
+   The large shell's own parts. Everything here is placed by the design's
+   coordinates, so the toolkit's padding and minimum sizes have to get out of
+   the way: a button that quietly grows taller than the box it was given
+   overlaps whatever the design put beneath it. */
+
+.picker-tagline {
+    color: #6b7a90;
+}
+.picker.dark .picker-tagline {
+    color: #9aa5b5;
+}
+.picker-nav-icon {
+    color: #243a68;
+}
+.picker-nav.selected .picker-nav-icon {
+    color: #1b6dff;
+}
+.picker.dark .picker-nav-icon {
+    color: #c9d6f0;
+}
+.picker.dark .picker-nav.selected .picker-nav-icon {
+    color: #4c8dff;
+}
+
+/* A button that is only its label: no frame, no padding, no minimum. */
+.picker-flat {
+    background: none;
+    background-image: none;
+    border: none;
+    box-shadow: none;
+    outline: none;
+    padding: 0;
+    min-height: 0;
+    min-width: 0;
+}
+.picker-flat:hover {
+    background-color: rgba(27, 109, 255, 0.08);
+    border-radius: 8px;
+}
+.picker-chevron,
+.picker-chevron label {
+    color: #243a68;
+}
+.picker.dark .picker-chevron,
+.picker.dark .picker-chevron label {
+    color: #c9d6f0;
+}
+.picker-month-title {
+    color: #1b6dff;
+    font-weight: bold;
+}
+.picker.dark .picker-month-title {
+    color: #4c8dff;
+}
+
+/* "Today", the one tinted button on the calendar. */
+.picker-today {
+    background-color: #f3f7fe;
+    background-image: none;
+    border: 1px solid #bfd4f5;
+    border-radius: 10px;
+    box-shadow: none;
+    color: #1b6dff;
+    font-weight: bold;
+    padding: 0;
+    min-height: 0;
+}
+.picker-today:hover {
+    background-color: #e7effd;
+}
+.picker.dark .picker-today {
+    background-color: #2a2f38;
+    border-color: #3a414c;
+    color: #4c8dff;
+}
+
+/* The number fields: a rounded box holding an entry and a pair of arrows. */
+.picker-stepper {
+    background-color: #ffffff;
+    border: 1px solid #c7d4e8;
+    border-radius: 12px;
+    /* Tight on the arrow side: the month field has a whole word to fit. */
+    padding: 0 2px 0 10px;
+}
+.picker.dark .picker-stepper {
+    background-color: #2a2f38;
+    border-color: #3a414c;
+}
+.picker-stepper-entry,
+.picker-stepper-entry > text {
+    background: none;
+    background-image: none;
+    border: none;
+    box-shadow: none;
+    outline: none;
+    color: #243a68;
+    padding: 0;
+    min-height: 0;
+    min-width: 0;
+}
+.picker.dark .picker-stepper-entry,
+.picker.dark .picker-stepper-entry > text {
+    color: #c9d6f0;
+}
+.picker-stepper-arrow {
+    background: none;
+    background-image: none;
+    border: none;
+    box-shadow: none;
+    color: #6b7a90;
+    padding: 0;
+    min-height: 0;
+    min-width: 0;
+}
+.picker-stepper-arrow:hover {
+    color: #1b6dff;
+}
+.picker.dark .picker-stepper-arrow {
+    color: #9aa5b5;
+}
+
+.picker-field-label {
+    color: #243a68;
+}
+.picker.dark .picker-field-label {
+    color: #c9d6f0;
+}
+.picker-caption-title {
+    color: #6b7a90;
+}
+.picker-caption-value {
+    color: #243a68;
+    font-weight: bold;
+}
+.picker.dark .picker-caption-title {
+    color: #9aa5b5;
+}
+.picker.dark .picker-caption-value {
+    color: #c9d6f0;
+}
+
+/* The `?` at the foot of the large shell. */
+.picker-help {
+    background-color: #ffffff;
+    background-image: none;
+    border: 1px solid #c7cfdb;
+    border-radius: 17px;
+    box-shadow: none;
+    color: #243a68;
+    font-weight: bold;
+    padding: 0;
+    min-height: 0;
+}
+.picker.dark .picker-help {
+    background-color: #2a2f38;
+    border-color: #3a414c;
+    color: #c9d6f0;
+}
