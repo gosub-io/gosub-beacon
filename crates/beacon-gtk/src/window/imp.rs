@@ -2429,6 +2429,24 @@ impl BrowserWindow {
     }
 
     pub(crate) fn activate_tab(&self, tab_id: TabId) {
+        // A background tab that keeps drawing at 30 fps is a laptop-fan bug, and with one
+        // shared GPU context it competes with the tab the user is actually looking at. The
+        // tab keeps loading either way: suspending stops its rendering, nothing else.
+        //
+        // Read before `mark_active` below, which is what makes the new tab the active one.
+        let outgoing = self.active_tab_id().filter(|previous| *previous != tab_id);
+        if let Some(previous) = outgoing {
+            let handle = {
+                let manager = self.tab_manager.lock().unwrap();
+                manager.get_tab(previous).and_then(|tab| tab.tab_handle())
+            };
+            if let Some(handle) = handle {
+                runtime().spawn(async move {
+                    let _ = handle.send(EngineTabCommand::SuspendDrawing).await;
+                });
+            }
+        }
+
         // A cycle in progress is *previewing* tabs; reordering now would collapse the walk
         // into a two-tab ping-pong. `commit_cycle` promotes the landing tab instead.
         self.touch_mru(tab_id);
@@ -2440,6 +2458,19 @@ impl BrowserWindow {
         self.sync_viewport_for(tab_id);
         if let Some(page) = self.page_for_tab(tab_id) {
             self.content_stack.set_visible_child(&page);
+        }
+        // ...and only now start it drawing again, with the viewport it is about to be shown
+        // at rather than the one the last active tab left behind.
+        if outgoing.is_some() {
+            let handle = {
+                let manager = self.tab_manager.lock().unwrap();
+                manager.get_tab(tab_id).and_then(|tab| tab.tab_handle())
+            };
+            if let Some(handle) = handle {
+                runtime().spawn(async move {
+                    let _ = handle.send(EngineTabCommand::ResumeDrawing { fps: 30 }).await;
+                });
+            }
         }
 
         let mut manager = self.tab_manager.lock().unwrap();
