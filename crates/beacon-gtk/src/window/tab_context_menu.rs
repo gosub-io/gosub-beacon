@@ -116,13 +116,12 @@ pub(crate) fn setup_context_menu_actions(action_group: &SimpleActionGroup, windo
     let window_clone = window.clone();
     let duplicate_tab = SimpleAction::new("duplicate", None);
     duplicate_tab.connect_activate(move |_, _| {
-        // @todo: implement duplicate tab
         let sender = window_clone.imp().sender.clone();
         runtime().spawn(clone!(
             #[strong]
             sender,
             async move {
-                sender.send(Message::Log("Tab should be duplicated".into())).await.unwrap();
+                sender.send(Message::DuplicateTab(info.id)).await.unwrap();
             }
         ));
     });

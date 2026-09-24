@@ -3434,6 +3434,28 @@ impl BrowserWindow {
                 }
             }
 
+            Message::DuplicateTab(tab_id) => {
+                // The copy belongs beside its original and takes the focus -- what every
+                // browser's Duplicate Tab does, and what the Mac's `duplicateTab` does. It
+                // carries the address over, not the session history, so the duplicate opens
+                // with a single entry and a dead Back button.
+                //
+                // Taking the title too means the new tab reads as its original while it
+                // loads instead of flashing "New Tab"; `open_tab` re-parses the address, so
+                // a `view-source:` tab duplicates as another view-source tab and a
+                // shell-rendered one gets its own title back.
+                let origin = {
+                    let manager = self.tab_manager.lock().unwrap();
+                    manager.get_tab(tab_id).map(|tab| (tab.url().to_string(), tab.title().to_string()))
+                };
+                let (Some((url, title)), Some(pos)) = (origin, self.get_page_num_for_tab(tab_id)) else {
+                    return;
+                };
+                if let Some(new_tab_id) = self.open_tab(Some(pos as usize + 1), &url, &title) {
+                    self.activate_tab(new_tab_id);
+                }
+            }
+
             Message::LoadUrl(tab_id, url_str) => {
                 self.log(format!("Loading URL: {}", url_str).as_str());
 
