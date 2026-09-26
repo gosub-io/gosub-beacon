@@ -1,13 +1,14 @@
-# Gosub Beacon — GTK browser
+# Gosub Beacon
 
-Beacon is a GTK4 browser built on the [Gosub engine](https://github.com/gosub-io/gosub-engine).
+Beacon is a browser built on the [Gosub engine](https://github.com/gosub-io/gosub-engine).
 The engine does the actual work (networking, cookies, storage, history, rendering); Beacon
-is the native chrome around it. It exists to test the engine in a real application, so
+is the native chrome around it: a GTK4 shell on Linux and a Swift/AppKit shell on macOS,
+both over the same Rust core. It exists to test the engine in a real application, so
 don't expect a daily driver — but basic browsing works.
 
 ![Gosub Beacon with three tabs loaded](./docs/screenshots/beacon-2026-08.png)
 
-Currently working:
+Currently working in the GTK shell, the most complete one:
 
 - page loading and rendering (Skia rasterization, GPU compositing via GtkGLArea)
 - tabs, back/forward with a tree-shaped session history
@@ -63,10 +64,20 @@ cargo build                                    # both binaries
 cargo build --no-default-features --features egui   # just the egui one
 ```
 
-Linux is the only platform with a working browser today. macOS is being approached
-through the egui frontend rather than GTK-on-Quartz — CI builds it on `macos-14`, but
-nothing there has been run yet, so treat it as unproven rather than supported. Windows is
-untouched. Help with either is welcome.
+## Platforms
+
+- **Linux**: the GTK shell above, the most complete one. It is also packaged as a
+  Flatpak, which brings its own GTK and so runs on distributions whose GTK is too old;
+  see [packaging/flatpak](./packaging/flatpak/README.md).
+- **macOS**: a native Swift/AppKit shell in [swift/](./swift/README.md), over the C ABI in
+  `crates/beacon-ffi`. It is not built with the commands above: build `beacon-ffi` and
+  then the Swift package, as the swift README describes; `swift/package.sh` turns that
+  into a universal (arm64 and x86_64) app and DMG. Signed and notarized DMGs are
+  published at [gosub.io/build](https://gosub.io/build). CI builds the egui
+  frontend, the C ABI and the Swift app on `macos-14`, and runs a headless consumer of
+  the C ABI there.
+- **Windows**: on hold. A C#/WPF shell over the same C ABI exists on the unmerged
+  `windows` branch, but it is not being worked on, is behind `main` and is not built in CI.
 
 ## Running
 
@@ -80,7 +91,8 @@ cargo run --bin gosub-beacon-egui -- https://example.com  # the other frontend
 navigation and rendering and little else.
 
 Profile data (cookies, local storage, bookmarks/history, settings) ends up in
-`~/.local/share/gosub-beacon`.
+`~/.local/share/gosub-beacon` on Linux and `~/Library/Application Support/gosub-beacon`
+on macOS.
 
 ### Running in a container
 
