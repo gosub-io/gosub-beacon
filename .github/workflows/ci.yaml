@@ -139,6 +139,47 @@ jobs:
         working-directory: gosub-beacon/crates/beacon-ffi
         run: make run
 
+  # The Swift/AppKit shell in swift/. package.sh is the one build path the published DMGs
+  # go through, so CI runs that rather than a separate `swift build`: release beacon-ffi,
+  # the Swift package against it, the .app assembled with the dylib inside, its rpaths
+  # checked, and an ad-hoc signature verified. --app stops before the DMG (styling it
+  # needs Finder), --native builds the runner's arm64 only. No signing identity or notary
+  # credentials are set here, so nothing is signed with a real certificate.
+  #
+  # The Swift package has no test target, so there is nothing to run beyond the build.
+  # Its own cache for the same reason as macos-ffi: this is a release build, the others
+  # are debug, and sharing a key would thrash them.
+  macos-swift:
+    runs-on: macos-14
+    env:
+      # The image defaults to Xcode 15.4 (Swift 5.10); the app is developed with Swift 6.x,
+      # so use the newest Xcode the image carries rather than a compiler nobody builds with.
+      DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: gosub-beacon
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.ENGINE_REPO }}
+          ref: ${{ env.ENGINE_REF }}
+          path: gosub-engine
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: gosub-beacon
+          prefix-key: macos-swift
+      - name: Build the Swift app
+        working-directory: gosub-beacon
+        run: ./swift/package.sh --app --native
+      - name: Check the app bundle
+        working-directory: gosub-beacon/swift/build
+        run: |
+          test -x "Gosub Beacon.app/Contents/MacOS/BeaconMac"
+          test -f "Gosub Beacon.app/Contents/Frameworks/libbeacon.dylib"
+          test -d "Gosub Beacon.app/Contents/Resources/BeaconMac_BeaconMac.bundle"
+          codesign --verify --deep --strict "Gosub Beacon.app"
+
   clippy:
     runs-on: ubuntu-24.04
     steps:
