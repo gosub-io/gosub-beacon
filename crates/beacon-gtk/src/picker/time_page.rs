@@ -13,7 +13,7 @@ use std::rc::Rc;
 
 use super::date_page::{rounded_rect, text_centered, TextStyle};
 use super::datetime::{clock_string, uses_12_hour};
-use super::shell::font_size;
+use super::shell::{font_size, Dark};
 use super::stepper::StepperField;
 
 type TimeCallback = RefCell<Option<Box<dyn Fn(u32, u32)>>>;
@@ -130,7 +130,7 @@ pub struct ClockFace {
 }
 
 impl ClockFace {
-    pub fn new(size: f64, scale: f64, dark: bool) -> Rc<Self> {
+    pub fn new(size: f64, scale: f64, dark: Dark) -> Rc<Self> {
         let area = DrawingArea::new();
         area.set_size_request((size * scale) as i32, (size * scale) as i32);
 
@@ -148,7 +148,7 @@ impl ClockFace {
         let drawing = Rc::downgrade(&face);
         face.area.set_draw_func(move |_, cr, w, h| {
             if let Some(face) = drawing.upgrade() {
-                face.draw(cr, f64::from(w), f64::from(h), dark);
+                face.draw(cr, f64::from(w), f64::from(h), dark.get());
             }
         });
 
@@ -394,7 +394,7 @@ pub struct MeridiemToggle {
 }
 
 impl MeridiemToggle {
-    pub fn new(width: f64, height: f64, scale: f64, dark: bool) -> Rc<Self> {
+    pub fn new(width: f64, height: f64, scale: f64, dark: Dark) -> Rc<Self> {
         let area = DrawingArea::new();
         area.set_size_request((width * scale) as i32, (height * scale) as i32);
         let toggle = Rc::new(Self {
@@ -408,7 +408,7 @@ impl MeridiemToggle {
         let drawing = Rc::downgrade(&toggle);
         toggle.area.set_draw_func(move |_, cr, w, h| {
             if let Some(toggle) = drawing.upgrade() {
-                toggle.draw(cr, f64::from(w), f64::from(h), dark);
+                toggle.draw(cr, f64::from(w), f64::from(h), dark.get());
             }
         });
 
@@ -509,7 +509,7 @@ pub struct ClockFormatToggle {
 }
 
 impl ClockFormatToggle {
-    pub fn new(width: f64, height: f64, scale: f64, dark: bool) -> Rc<Self> {
+    pub fn new(width: f64, height: f64, scale: f64, dark: Dark) -> Rc<Self> {
         let area = DrawingArea::new();
         area.set_size_request((width * scale) as i32, (height * scale) as i32);
         let toggle = Rc::new(Self {
@@ -521,7 +521,7 @@ impl ClockFormatToggle {
         let drawing = Rc::downgrade(&toggle);
         toggle.area.set_draw_func(move |_, cr, w, h| {
             if let Some(toggle) = drawing.upgrade() {
-                toggle.draw(cr, f64::from(w), f64::from(h), dark);
+                toggle.draw(cr, f64::from(w), f64::from(h), dark.get());
             }
         });
 
@@ -608,12 +608,12 @@ pub struct TimePage {
 }
 
 impl TimePage {
-    pub fn new(shows_seconds: bool, scale: f64, dark: bool) -> Rc<Self> {
+    pub fn new(shows_seconds: bool, scale: f64, dark: Dark) -> Rc<Self> {
         let s = |v: f64| v * scale;
         let widget = Fixed::new();
         widget.set_size_request(s(690.0) as i32, s(807.0) as i32);
 
-        let clock = ClockFace::new(448.0, scale, dark);
+        let clock = ClockFace::new(448.0, scale, dark.clone());
         widget.put(&clock.area, s(71.0), s(127.0));
 
         let meridiem = MeridiemToggle::new(81.0, 258.0, scale, dark);

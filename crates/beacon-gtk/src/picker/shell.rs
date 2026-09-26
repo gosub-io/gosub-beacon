@@ -32,6 +32,8 @@ type NavCallback = Rc<RefCell<Option<Box<dyn Fn(usize)>>>>;
 /// Answers whether the picker dealt with the button itself, as the month & year drill-down
 /// does: there, OK and Cancel belong to that screen, not to the picker's own answer.
 type InterceptCallback = Rc<RefCell<Option<Box<dyn Fn(bool) -> bool>>>>;
+/// Everything to rerun when the theme flips; see `connect_theme_changed`.
+type ThemeCallbacks = RefCell<Vec<Box<dyn Fn()>>>;
 
 /// A rectangle in design coordinates, top-left origin.
 #[derive(Clone, Copy)]
@@ -156,12 +158,17 @@ pub struct ShellConfig<'a> {
     pub help_url: Option<&'a str>,
 }
 
+/// Whether a picker is drawn dark. One per picker, shared by everything in it and flipped
+/// when the desktop theme changes, so a draw function reads it as it draws rather than
+/// keeping the value it was built with.
+pub type Dark = Rc<Cell<bool>>;
+
 pub struct PickerShell {
     pub window: Window,
     /// Where a picker puts its content: the design's coordinates inside the card, scaled.
     pub main_card: Fixed,
     pub side_card: Option<Fixed>,
-    pub dark: bool,
+    pub dark: Dark,
     pub scale: f64,
     title_label: Label,
     nav_buttons: Vec<Button>,
@@ -170,6 +177,7 @@ pub struct PickerShell {
     on_finish: FinishCallback,
     on_nav: NavCallback,
     intercept: InterceptCallback,
+    on_theme: ThemeCallbacks,
 }
 
 impl PickerShell {
@@ -178,9 +186,7 @@ impl PickerShell {
         let scale = metrics.scale;
         let s = |v: f64| v * scale;
         let size = config.size;
-        let dark = Settings::default()
-            .map(|settings| settings.is_gtk_application_prefer_dark_theme())
-            .unwrap_or(false);
+        let dark: Dark = Rc::new(Cell::new(prefers_dark()));
 
         let window = Window::builder()
             .title(config.title)
@@ -196,7 +202,7 @@ impl PickerShell {
         window.set_titlebar(Some(&header));
         window.set_decorated(false);
         window.add_css_class("picker");
-        if dark {
+        if dark.get() {
             window.add_css_class("dark");
         }
         // Rounded corners need a compositor to put transparency outside them; without one
@@ -218,7 +224,7 @@ impl PickerShell {
         // ── sidebar ──────────────────────────────────────────────────────
         let sidebar = Fixed::new();
         sidebar.set_size_request(s(metrics.sidebar_width) as i32, s(size.1) as i32);
-        let art = sidebar_art(metrics, size, dark, composited);
+        let art = sidebar_art(metrics, size, dark.clone(), composited);
         sidebar.put(&art, 0.0, 0.0);
 
         let wordmark = Label::new(Some("gosub"));
@@ -310,7 +316,9 @@ impl PickerShell {
             on_finish: Rc::new(RefCell::new(None)),
             on_nav: Rc::new(RefCell::new(None)),
             intercept: Rc::new(RefCell::new(None)),
+            on_theme: RefCell::new(Vec::new()),
         });
+        shell.follow_theme();
 
         for (i, button) in shell.nav_buttons.iter().enumerate() {
             let shell_ref = Rc::downgrade(&shell);
@@ -396,6 +404,41 @@ impl PickerShell {
     #[allow(dead_code)]
     pub fn connect_nav(&self, callback: impl Fn(usize) + 'static) {
         *self.on_nav.borrow_mut() = Some(Box::new(callback));
+    }
+
+    /// The theme flipped while the picker was open. Drawing areas are redrawn by the shell;
+    /// this is for what a picker built from the theme, such as its list of system colours.
+    pub fn connect_theme_changed(&self, callback: impl Fn() + 'static) {
+        self.on_theme.borrow_mut().push(Box::new(callback));
+    }
+
+    /// Follow the chrome's theme while the picker is open, as the Mac's pickers do.
+    fn follow_theme(self: &Rc<Self>) {
+        let Some(settings) = Settings::default() else { return };
+        let shell = Rc::downgrade(self);
+        let handler = settings.connect_gtk_application_prefer_dark_theme_notify(move |settings| {
+            let Some(shell) = shell.upgrade() else { return };
+            let dark = settings.is_gtk_application_prefer_dark_theme();
+            if shell.dark.replace(dark) == dark {
+                return;
+            }
+            if dark {
+                shell.window.add_css_class("dark");
+            } else {
+                shell.window.remove_css_class("dark");
+            }
+            redraw_drawings(shell.window.upcast_ref());
+            for callback in shell.on_theme.borrow().iter() {
+                callback();
+            }
+        });
+        // Settings outlives every picker, so the handler has to go with the window.
+        let handler = Cell::new(Some(handler));
+        self.window.connect_destroy(move |_| {
+            if let Some(handler) = handler.take() {
+                settings.disconnect(handler);
+            }
+        });
     }
 
     #[allow(dead_code)] // as above
@@ -538,7 +581,28 @@ fn draw_bolt(cr: &gtk4::cairo::Context, w: f64, h: f64) {
 
 /// The sidebar's own drawing: its tint with the window's left corners rounded, the
 /// submarine, and the lighthouse fading in at the foot.
-fn sidebar_art(metrics: &Metrics, size: (f64, f64), dark: bool, composited: bool) -> DrawingArea {
+/// The theme the chrome is in: `theme.rs` mirrors the desktop's colour scheme into this
+/// property, and the manual toggle writes it too.
+fn prefers_dark() -> bool {
+    Settings::default()
+        .map(|settings| settings.is_gtk_application_prefer_dark_theme())
+        .unwrap_or(false)
+}
+
+/// Queue a redraw of every drawing area under `widget`: they paint from [`Dark`] and
+/// nothing else tells them it changed.
+fn redraw_drawings(widget: &gtk4::Widget) {
+    if let Some(area) = widget.downcast_ref::<DrawingArea>() {
+        area.queue_draw();
+    }
+    let mut child = widget.first_child();
+    while let Some(c) = child {
+        redraw_drawings(&c);
+        child = c.next_sibling();
+    }
+}
+
+fn sidebar_art(metrics: &Metrics, size: (f64, f64), dark: Dark, composited: bool) -> DrawingArea {
     let area = DrawingArea::new();
     let scale = metrics.scale;
     area.set_size_request((metrics.sidebar_width * scale) as i32, (size.1 * scale) as i32);
@@ -549,6 +613,7 @@ fn sidebar_art(metrics: &Metrics, size: (f64, f64), dark: bool, composited: bool
     area.set_draw_func(move |_, cr, w, h| {
         let (w, h) = (f64::from(w), f64::from(h));
         let radius = if composited { 12.0 } else { 0.0 };
+        let dark = dark.get();
         let (fill, brand) = if dark {
             ((0x23, 0x28, 0x30), (0xC9, 0xD6, 0xF0))
         } else {

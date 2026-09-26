@@ -12,6 +12,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use super::color::CssColor;
+use super::shell::Dark;
 
 /// The plane reports a saturation and a value; a strip reports one position.
 type PlaneCallback = Rc<RefCell<Option<Box<dyn Fn(f64, f64)>>>>;
@@ -357,10 +358,11 @@ impl ColorStrip {
 
 /// One quick swatch: filled with its colour, ringed when it is the current one, or drawn as
 /// a "+" when it is the button that adds one.
-pub fn swatch(size: i32, color: Option<CssColor>, current: Rc<Cell<bool>>, dark: bool) -> DrawingArea {
+pub fn swatch(size: i32, color: Option<CssColor>, current: Rc<Cell<bool>>, dark: Dark) -> DrawingArea {
     let area = DrawingArea::new();
     area.set_size_request(size, size);
     area.set_draw_func(move |_, cr, w, h| {
+        let dark = dark.get();
         let (w, h) = (f64::from(w), f64::from(h));
         let radius = (w.min(h) - 5.0) / 2.0;
         let (cx, cy) = (w / 2.0, h / 2.0);

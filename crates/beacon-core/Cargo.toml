@@ -18,6 +18,7 @@ lazy_static.workspace = true
 log.workspace = true
 # One-shot fetch for `view-source:`, which cannot go through the engine -- see src/fetch.rs.
 reqwest.workspace = true
+sys-locale.workspace = true
 tokio.workspace = true
 url.workspace = true
 uuid.workspace = true

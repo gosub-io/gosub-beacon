@@ -10,8 +10,9 @@ use gtk4::{Button, DrawingArea, Fixed, GestureClick, Label};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use super::date_page::{rounded_rect, short_month_name, text_centered, TextStyle};
-use super::shell::font_size;
+use super::date_page::{rounded_rect, text_centered, TextStyle};
+use super::locale::short_month_name;
+use super::shell::{font_size, Dark};
 use super::stepper::StepperField;
 
 type Callback = RefCell<Option<Box<dyn Fn(i32, u32, bool)>>>;
@@ -31,7 +32,7 @@ pub struct MonthYearPage {
 }
 
 impl MonthYearPage {
-    pub fn new(scale: f64, dark: bool) -> Rc<Self> {
+    pub fn new(scale: f64, dark: Dark) -> Rc<Self> {
         let s = |v: f64| v * scale;
         let widget = Fixed::new();
         widget.set_size_request(s(690.0) as i32, s(807.0) as i32);
@@ -115,7 +116,7 @@ impl MonthYearPage {
         let drawing = Rc::downgrade(&page);
         page.grid.set_draw_func(move |_, cr, _, _| {
             if let Some(page) = drawing.upgrade() {
-                page.draw(cr, dark);
+                page.draw(cr, dark.get());
             }
         });
 

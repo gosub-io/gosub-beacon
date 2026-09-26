@@ -140,9 +140,8 @@ impl<C: BeaconConfig> BrowserEngine<C> {
 
         let zone_cfg = ZoneConfig::builder()
             .do_not_track(true)
-            // Without this the engine sends no Accept-Language at all. TODO: derive
-            // from the desktop locale / a beacon setting instead of hardcoding.
-            .accept_languages("en-US,en;q=0.9")
+            // Without this the engine sends no Accept-Language at all.
+            .accept_languages(crate::locale::accept_language())
             .build()
             .map_err(|e| anyhow::anyhow!("ZoneConfig: {e:?}"))?;
 

@@ -13,9 +13,9 @@ use gtk4::{Box as GtkBox, Button, DrawingArea, Fixed, Label, Orientation};
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use super::date_page::month_name;
 use super::datetime::{clock_string, PickerValue};
-use super::shell::font_size;
+use super::locale::{self, month_name};
+use super::shell::{font_size, Dark};
 use super::time_page::{draw_glyph, Daypart, Glyph, MOON, SUN};
 
 /// What a row does to the value when it is chosen.
@@ -68,7 +68,7 @@ pub struct Group {
 }
 
 fn date_value(date: NaiveDate) -> String {
-    date.format("%a %-d %b %Y").to_string()
+    locale::format(date, "%a %-d %b %Y")
 }
 
 fn day_pick(date: NaiveDate, glyph: Glyph, tint: (f64, f64, f64), title: &str) -> QuickPick {
@@ -256,12 +256,12 @@ pub struct QuickSelectPage {
     subtitle: Label,
     caption: Label,
     scale: f64,
-    dark: bool,
+    dark: Dark,
     on_pick: PickCallback,
 }
 
 impl QuickSelectPage {
-    pub fn new(scale: f64, dark: bool) -> Rc<Self> {
+    pub fn new(scale: f64, dark: Dark) -> Rc<Self> {
         let s = |v: f64| v * scale;
         let widget = Fixed::new();
         widget.set_size_request(s(690.0) as i32, s(807.0) as i32);
@@ -344,9 +344,9 @@ impl QuickSelectPage {
         area.set_size_request(s(width) as i32, s(height) as i32);
         let (pie, glyph, tint) = (pick.pie, pick.glyph, pick.tint);
         let (title, value) = (pick.title.clone(), pick.value.clone());
-        let (scale, dark) = (self.scale, self.dark);
+        let (scale, dark) = (self.scale, self.dark.clone());
         area.set_draw_func(move |_, cr, w, h| {
-            draw_row(cr, f64::from(w), f64::from(h), scale, dark, pie, glyph, tint, &title, &value);
+            draw_row(cr, f64::from(w), f64::from(h), scale, dark.get(), pie, glyph, tint, &title, &value);
         });
 
         let button = Button::builder().child(&area).build();
