@@ -26,10 +26,10 @@ jobs:
       matrix:
         rust_version: [ stable ]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           path: gosub-beacon
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: ${{ env.ENGINE_REPO }}
           ref: ${{ env.ENGINE_REF }}
@@ -58,10 +58,10 @@ jobs:
       matrix:
         rust_version: [ stable ]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           path: gosub-beacon
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: ${{ env.ENGINE_REPO }}
           ref: ${{ env.ENGINE_REF }}
@@ -86,10 +86,10 @@ jobs:
   macos:
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           path: gosub-beacon
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: ${{ env.ENGINE_REPO }}
           ref: ${{ env.ENGINE_REF }}
@@ -117,10 +117,10 @@ jobs:
   macos-ffi:
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           path: gosub-beacon
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: ${{ env.ENGINE_REPO }}
           ref: ${{ env.ENGINE_REF }}
@@ -156,10 +156,10 @@ jobs:
       # so use the newest Xcode the image carries rather than a compiler nobody builds with.
       DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           path: gosub-beacon
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: ${{ env.ENGINE_REPO }}
           ref: ${{ env.ENGINE_REF }}
@@ -183,10 +183,10 @@ jobs:
   clippy:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           path: gosub-beacon
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: ${{ env.ENGINE_REPO }}
           ref: ${{ env.ENGINE_REF }}
@@ -214,10 +214,10 @@ jobs:
       # The engine has to be here even to check formatting: `cargo fmt --all` enumerates
       # workspace members through `cargo metadata`, which resolves every path dependency.
       # A single-package repo could skip this; a virtual workspace cannot.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           path: gosub-beacon
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: ${{ env.ENGINE_REPO }}
           ref: ${{ env.ENGINE_REF }}
