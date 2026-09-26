@@ -24,8 +24,9 @@ Then from this directory:
 swift run BeaconMac https://example.com
 ```
 
-`Package.swift` links `../target/debug/libbeacon.dylib` and records an rpath, so the binary
-finds it without `DYLD_LIBRARY_PATH`. `Sources/CBeacon/module.modulemap` points at
+`Package.swift` links `../target/debug/libbeacon.dylib` (or `../target/release/` for
+`swift run -c release`, after `cargo build -p beacon-ffi --release`) and records an rpath,
+so the binary finds it without `DYLD_LIBRARY_PATH`. `Sources/CBeacon/module.modulemap` points at
 `crates/beacon-ffi/include/beacon.h`, so Swift and C read the same declaration of the
 boundary.
 
@@ -34,13 +35,24 @@ boundary.
 ```bash
 ./package.sh          # release build -> build/Gosub Beacon.app and build/GosubBeacon-<version>-<build>-<commit>-engine-<engine commit>.dmg
 ./package.sh --app    # stop after the .app
+./package.sh --native # this Mac's architecture only; combines with --app
 ```
+
+The app is universal: it runs natively on Apple Silicon and on Intel Macs. Once per machine,
+the Intel Rust target has to be installed with `rustup target add x86_64-apple-darwin`; the
+script says so if it is missing. Both sides are built once per architecture and joined with
+`lipo`, because SwiftPM needs Xcode to build several architectures in one go and the Command
+Line Tools are enough this way. `--native` skips the second architecture, which halves the
+build for local testing. The Intel slice runs on an Apple Silicon Mac under Rosetta
+(`softwareupdate --install-rosetta`), started with `open --arch x86_64 "build/Gosub Beacon.app"`.
 
 `swift run` gives you a bare executable that finds `libbeacon.dylib` through an rpath into
 this working copy, so it runs on the machine that built it and nowhere else. `package.sh`
 produces something you can hand to someone: the dylib travels inside `Contents/Frameworks`,
 the binary is repointed at `@executable_path/../Frameworks`, the build-tree rpaths are
-deleted, and the bundle is signed ad hoc. The signing is not optional. `install_name_tool`
+deleted, and the bundle is signed ad hoc. The script then checks every slice of the
+executable for anything still pointing into `target/`, because such an app starts fine on
+the machine that built it and on no other, so no local test would catch it. The signing is not optional. `install_name_tool`
 invalidates the signature SwiftPM applied, and macOS kills an arm64 binary with a broken
 signature rather than warning about it.
 
@@ -109,9 +121,6 @@ refuses an unsigned app, so the script says so and carries on rather than implyi
 The certificate has to be a **Developer ID Application** one. An Apple Development or Mac
 Development certificate imports without complaint and then reports zero valid identities,
 which reads like a keychain problem and is not one.
-
-The DMG is Apple Silicon only. A universal build means compiling the Rust side for
-`x86_64-apple-darwin` as well and `lipo`-ing the two together.
 
 ## What it does
 

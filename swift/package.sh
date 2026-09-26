@@ -10,6 +10,10 @@
 #
 #     ./package.sh            release build, .app and .dmg into swift/build/
 #     ./package.sh --app      stop after the .app
+#     ./package.sh --native   this Mac's architecture only, instead of a universal build
+#
+# The default is universal (arm64 + x86_64), which needs the Intel Rust target once:
+# `rustup target add x86_64-apple-darwin`. --native halves the build for local testing.
 #
 # What comes out depends on how much of packaging/signing.env is filled in, which
 # packaging/setup-signing.sh writes:
@@ -32,8 +36,15 @@ root="$(cd "$here/.." && pwd)"
 out="$here/build"
 app="$out/Gosub Beacon.app"
 app_only=false
+universal=true
 volume="Gosub Beacon"
-[[ "${1:-}" == "--app" ]] && app_only=true
+for arg in "$@"; do
+    case "$arg" in
+        --app)    app_only=true ;;
+        --native) universal=false ;;
+        *)        echo "usage: $(basename "$0") [--app] [--native]" >&2; exit 2 ;;
+    esac
+done
 
 # The version the About window shows, taken from the workspace so there is one answer.
 version="$(sed -n 's/^version = "\(.*\)"/\1/p' "$root/Cargo.toml" | head -1)"
@@ -159,12 +170,71 @@ notarize() {
 # Release on both sides. A debug build works but ships an unoptimised browser engine, which
 # is a poor first impression of an engine.
 
-say "building the Rust side (release)"
-cargo build --manifest-path "$root/Cargo.toml" -p beacon-ffi --release
+if $universal; then
+    archs=(arm64 x86_64)
+else
+    archs=("$(uname -m)")
+fi
 
-say "building the Swift side (release)"
-swift build --package-path "$here" -c release
-bin="$(swift build --package-path "$here" -c release --show-bin-path)"
+rust_triple() {
+    case "$1" in
+        arm64)  echo aarch64-apple-darwin ;;
+        x86_64) echo x86_64-apple-darwin ;;
+    esac
+}
+
+# Both architectures build for the same floor as LSMinimumSystemVersion below.
+export MACOSX_DEPLOYMENT_TARGET=13.0
+
+say "building the Rust side (release, ${archs[*]})"
+if command -v rustup >/dev/null; then
+    installed="$(cd "$root" && rustup target list --installed)"
+    for arch in "${archs[@]}"; do
+        triple="$(rust_triple "$arch")"
+        if ! grep -qx "$triple" <<<"$installed"; then
+            echo "error: the Rust target $triple is not installed; run" >&2
+            echo "       rustup target add $triple   (or ./package.sh --native)" >&2
+            exit 1
+        fi
+    done
+fi
+dylibs=()
+for arch in "${archs[@]}"; do
+    triple="$(rust_triple "$arch")"
+    cargo build --manifest-path "$root/Cargo.toml" -p beacon-ffi --release --target "$triple"
+    dylibs+=("$root/target/$triple/release/libbeacon.dylib")
+done
+
+# One library holding every slice, at the path Package.swift links release builds against
+# and the one the app bundle is filled from. Removed first rather than overwritten: cargo's
+# copy there may be a hard link into target/release/deps, which must not be rewritten.
+# The install name is set here, before anything links against it, so every slice of the
+# executable records @rpath/libbeacon.dylib rather than a path into this working copy.
+dylib="$root/target/release/libbeacon.dylib"
+mkdir -p "$(dirname "$dylib")"
+rm -f "$dylib"
+lipo -create -output "$dylib" "${dylibs[@]}"
+install_name_tool -id "@rpath/libbeacon.dylib" "$dylib"
+
+say "building the Swift side (release, ${archs[*]})"
+# Without Xcode, SwiftPM builds one architecture at a time, so build each and merge. The
+# executable is deleted first because SwiftPM does not track the library it links against:
+# with no Swift change it would keep a binary linked against an older libbeacon.
+slices=()
+for arch in "${archs[@]}"; do
+    slice="$(swift build --package-path "$here" -c release --arch "$arch" --show-bin-path)"
+    rm -f "$slice/BeaconMac"
+    swift build --package-path "$here" -c release --arch "$arch"
+    slices+=("$slice")
+done
+bin="$here/.build/package"
+rm -rf "$bin"
+mkdir -p "$bin"
+lipo -create -output "$bin/BeaconMac" "${slices[@]/%//BeaconMac}"
+# The resource bundle holds no code, so any slice's copy will do.
+if [[ -d "${slices[0]}/BeaconMac_BeaconMac.bundle" ]]; then
+    cp -R "${slices[0]}/BeaconMac_BeaconMac.bundle" "$bin/"
+fi
 
 # ── assemble ──────────────────────────────────────────────────────────────────
 
@@ -232,24 +302,38 @@ fi
 
 # ── make it relocatable ───────────────────────────────────────────────────────
 #
-# As built, the executable names the dylib by its absolute path in this working copy and
-# carries rpaths pointing at target/debug. Both have to go, or the app runs only here.
+# The executable carries rpaths into this working copy's target/, and may name the dylib by
+# an absolute path there. Both have to go, or the app runs only here.
 
 say "pointing the binary at its own copy of the dylib"
 install_name_tool -id "@rpath/libbeacon.dylib" "$app/Contents/Frameworks/libbeacon.dylib"
 
-# Whatever the linker recorded -- an absolute path, or @rpath already.
-old="$(otool -L "$app/Contents/MacOS/BeaconMac" | awk '/libbeacon\.dylib/ {print $1; exit}')"
-if [[ -n "$old" && "$old" != "@rpath/libbeacon.dylib" ]]; then
+# Whatever the linker recorded -- an absolute path, or @rpath already. otool lists every
+# slice of a universal binary, and they need not agree, so fix each distinct name.
+while read -r old; do
+    [[ -n "$old" && "$old" != "@rpath/libbeacon.dylib" ]] || continue
     install_name_tool -change "$old" "@rpath/libbeacon.dylib" "$app/Contents/MacOS/BeaconMac"
-fi
+done < <(otool -L "$app/Contents/MacOS/BeaconMac" | awk '/libbeacon\.dylib/ {print $1}' | sort -u)
 
 install_name_tool -add_rpath "@executable_path/../Frameworks" "$app/Contents/MacOS/BeaconMac"
 # Drop the build-tree rpaths: they cannot resolve elsewhere, and they leak the path this was
 # built in to anyone who runs otool on it.
 while read -r stale; do
     [[ -n "$stale" ]] && install_name_tool -delete_rpath "$stale" "$app/Contents/MacOS/BeaconMac" 2>/dev/null || true
-done < <(otool -l "$app/Contents/MacOS/BeaconMac" | awk '/ path /{print $2}' | grep 'target/debug' || true)
+done < <(otool -l "$app/Contents/MacOS/BeaconMac" | awk '/ path /{print $2}' | grep '/target/' | sort -u || true)
+
+# A slice that still reaches into target/ starts on this Mac and nowhere else, which no
+# test here would notice. Check every slice before signing seals it in.
+for arch in "${archs[@]}"; do
+    if ! otool -arch "$arch" -L "$app/Contents/MacOS/BeaconMac" | grep -q '^[[:space:]]*@rpath/libbeacon\.dylib ' \
+        || otool -arch "$arch" -l "$app/Contents/MacOS/BeaconMac" | grep -q ' path .*/target/'; then
+        echo "error: the $arch slice of BeaconMac still refers to the build tree:" >&2
+        otool -arch "$arch" -L "$app/Contents/MacOS/BeaconMac" >&2
+        exit 1
+    fi
+done
+[[ "$(lipo -archs "$app/Contents/Frameworks/libbeacon.dylib")" == "$(lipo -archs "$app/Contents/MacOS/BeaconMac")" ]] \
+    || { echo "error: libbeacon.dylib and BeaconMac hold different architectures" >&2; exit 1; }
 
 # ── sign ──────────────────────────────────────────────────────────────────────
 #

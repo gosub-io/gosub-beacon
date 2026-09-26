@@ -8,6 +8,20 @@ import PackageDescription
 //     cargo build -p beacon-ffi
 // then, from this directory:
 //     swift run BeaconMac https://example.com
+// (or `cargo build -p beacon-ffi --release` and `swift run -c release ...`).
+
+// SwiftPM puts the binary at .build/<config> or .build/<triple>/<config> depending on
+// version, so record both depths rather than guess. If the library still is not found at
+// runtime, DYLD_LIBRARY_PATH=../target/<config> is the escape hatch.
+func linkFlags(for config: String) -> [String] {
+    [
+        "-L../target/\(config)",
+        "-lbeacon",
+        "-Xlinker", "-rpath", "-Xlinker", "@executable_path/../../../target/\(config)",
+        "-Xlinker", "-rpath", "-Xlinker", "@executable_path/../../../../target/\(config)",
+    ]
+}
+
 let package = Package(
     name: "BeaconMac",
     platforms: [.macOS(.v13)],
@@ -22,19 +36,12 @@ let package = Package(
             // SwiftPM will not reach outside the target directory, so these are copies:
             // if the art changes, both places need it.
             resources: [.process("Resources")],
+            // Link the cdylib cargo built for the same configuration -- target/debug for
+            // `swift run`, target/release for `-c release` and package.sh -- and record an
+            // rpath so the binary finds it at runtime without DYLD_LIBRARY_PATH.
             linkerSettings: [
-                // Link the cdylib cargo just built, and record an rpath so the binary finds
-                // it at runtime without DYLD_LIBRARY_PATH.
-                .unsafeFlags([
-                    "-L../target/debug",
-                    "-lbeacon",
-                    // SwiftPM puts the binary at .build/debug or .build/<triple>/debug
-                    // depending on version, so record both depths rather than guess. If the
-                    // library still is not found at runtime, DYLD_LIBRARY_PATH=../target/debug
-                    // is the escape hatch.
-                    "-Xlinker", "-rpath", "-Xlinker", "@executable_path/../../../target/debug",
-                    "-Xlinker", "-rpath", "-Xlinker", "@executable_path/../../../../target/debug",
-                ])
+                .unsafeFlags(linkFlags(for: "debug"), .when(configuration: .debug)),
+                .unsafeFlags(linkFlags(for: "release"), .when(configuration: .release)),
             ]
         ),
     ]
