@@ -12,8 +12,9 @@ use gtk4::Window;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use super::date_page::{month_name, DatePage};
+use super::date_page::DatePage;
 use super::datetime::{clock_string, PickerBounds, PickerValue};
+use super::locale::{self, month_name};
 use super::month_year_page::MonthYearPage;
 use super::quick_select::{self, QuickSelectPage};
 use super::shell::{Metrics, NavIcon, NavItem, PickerShell, Rect, ShellConfig};
@@ -181,19 +182,19 @@ impl DateTimePicker {
 
         let has_date = sections.contains(&Section::Date);
         let has_time = sections.contains(&Section::Time);
-        let date_page = has_date.then(|| DatePage::new(kind == PickerKind::Week, shell.scale, shell.dark));
+        let date_page = has_date.then(|| DatePage::new(kind == PickerKind::Week, shell.scale, shell.dark.clone()));
         if let Some(page) = &date_page {
             page.set_limits(PickerBounds::new(kind, min, max, step));
         }
-        let time_page = has_time.then(|| TimePage::new(shows_seconds, shell.scale, shell.dark));
+        let time_page = has_time.then(|| TimePage::new(shows_seconds, shell.scale, shell.dark.clone()));
         if let Some(page) = &time_page {
             // A step of a minute or more moves the minute field and the clock onto its grid.
             let minutes = limits.step.map(|step| if step >= 60 { (step / 60) as u32 } else { 1 }).unwrap_or(1);
             page.set_minute_step(minutes);
         }
-        let month_year_page = MonthYearPage::new(shell.scale, shell.dark);
-        let quick_page = QuickSelectPage::new(shell.scale, shell.dark);
-        let format_toggle = has_time.then(|| ClockFormatToggle::new(106.0, 27.0, shell.scale, shell.dark));
+        let month_year_page = MonthYearPage::new(shell.scale, shell.dark.clone());
+        let quick_page = QuickSelectPage::new(shell.scale, shell.dark.clone());
+        let format_toggle = has_time.then(|| ClockFormatToggle::new(106.0, 27.0, shell.scale, shell.dark.clone()));
 
         let picker = Rc::new(Self {
             shell,
@@ -460,7 +461,7 @@ impl DateTimePicker {
     /// "Tuesday 15 September 2026 at 10:30 PM", for the pages of a datetime-local picker.
     fn combined_caption(&self) -> String {
         let value = self.value.get();
-        let day = value.date().map(|date| date.format("%A %-d %B %Y").to_string()).unwrap_or_default();
+        let day = value.date().map(|date| locale::format(date, "%A %-d %B %Y")).unwrap_or_default();
         format!("Selected: {day} at {}", clock_string(value.hour, value.minute))
     }
 

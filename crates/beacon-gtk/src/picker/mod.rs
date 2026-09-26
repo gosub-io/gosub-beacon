@@ -14,6 +14,7 @@ pub mod date_page;
 pub mod datetime;
 pub mod datetime_picker;
 pub mod eyedropper;
+pub mod locale;
 pub mod month_year_page;
 pub mod quick_select;
 pub mod shell;

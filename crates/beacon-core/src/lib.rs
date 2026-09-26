@@ -15,6 +15,7 @@ pub mod engine;
 pub mod error_page;
 pub mod event;
 pub mod fetch;
+pub mod locale;
 pub mod paths;
 pub mod platform;
 pub mod session;

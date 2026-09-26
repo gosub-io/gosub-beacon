@@ -165,25 +165,14 @@ pub fn clock_string(hour: u32, minute: u32) -> String {
     format!("{hour:02}:{minute:02}")
 }
 
-/// Whether times are written with AM/PM.
-///
-/// The Mac asks the system for a locale's "j" skeleton; Rust has no such thing without an
-/// ICU dependency, so this is a heuristic over the time locale — the English-speaking
-/// countries that write 12-hour clocks — and the picker's own toggle overrides it either
-/// way once the user has touched it.
+/// Whether times are written with AM/PM: the picker's own toggle once the user has touched
+/// it, otherwise what the time locale's clock format says (see `locale.rs`).
 #[allow(dead_code)] // the time pickers, next pass
 pub fn uses_12_hour() -> bool {
     if let Some(stored) = stored_clock_format() {
         return stored == 12;
     }
-    let locale = std::env::var("LC_TIME")
-        .or_else(|_| std::env::var("LC_ALL"))
-        .or_else(|_| std::env::var("LANG"))
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    ["en_us", "en_au", "en_nz", "en_ca", "en_ph", "en_in", "en_pk"]
-        .iter()
-        .any(|tag| locale.starts_with(tag))
+    super::locale::uses_12_hour()
 }
 
 #[allow(dead_code)] // the time pickers, next pass

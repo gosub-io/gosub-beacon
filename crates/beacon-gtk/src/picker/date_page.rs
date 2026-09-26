@@ -16,7 +16,8 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use super::datetime::{PickerBounds, PickerValue};
-use super::shell::font_size;
+use super::locale::{self, month_name};
+use super::shell::{font_size, Dark};
 use super::stepper::StepperField;
 
 /// Grid geometry, in design units.
@@ -54,7 +55,7 @@ pub struct DatePage {
 }
 
 impl DatePage {
-    pub fn new(weeks: bool, scale: f64, dark: bool) -> Rc<Self> {
+    pub fn new(weeks: bool, scale: f64, dark: Dark) -> Rc<Self> {
         let s = |v: f64| v * scale;
         let widget = Fixed::new();
         widget.set_size_request(s(690.0) as i32, s(807.0) as i32);
@@ -175,14 +176,14 @@ impl DatePage {
             month.set_wraps(true);
             month.set_format(|m| month_name(m as u32).to_string());
             month.set_parse(|text| {
-                let text = text.trim().to_ascii_lowercase();
+                let text = text.trim().to_lowercase();
                 if text.is_empty() {
                     return None;
                 }
                 if let Ok(number) = text.parse::<i32>() {
                     return (1..=12).contains(&number).then_some(number);
                 }
-                (1..=12).find(|m| month_name(*m as u32).to_ascii_lowercase().starts_with(&text))
+                (1..=12).find(|m| month_name(*m as u32).to_lowercase().starts_with(&text))
             });
         }
         self.year_field.set_range(1, 9999);
@@ -203,7 +204,7 @@ impl DatePage {
         }
     }
 
-    fn wire(self: &Rc<Self>, today: &Button, prev: &Button, next: &Button, title: &Button, dark: bool) {
+    fn wire(self: &Rc<Self>, today: &Button, prev: &Button, next: &Button, title: &Button, dark: Dark) {
         let this = Rc::downgrade(self);
         today.connect_clicked({
             let this = this.clone();
@@ -253,7 +254,7 @@ impl DatePage {
         let scale = self.scale;
         self.grid.set_draw_func(move |_, cr, _, _| {
             let Some(page) = page.upgrade() else { return };
-            page.draw(cr, weeks, scale, dark);
+            page.draw(cr, weeks, scale, dark.get());
         });
     }
 
@@ -366,8 +367,8 @@ impl DatePage {
                     "Week {}, {} · {} – {}",
                     week.week(),
                     week.year(),
-                    monday.format("%-d %b"),
-                    sunday.format("%-d %b")
+                    locale::format(monday, "%-d %b"),
+                    locale::format(sunday, "%-d %b")
                 ));
             }
         } else {
@@ -377,7 +378,7 @@ impl DatePage {
                 month.set_value(value.month as i32);
             }
             self.year_field.set_value(value.year);
-            let spelled = value.date().map(|date| date.format("%A %-d %B %Y").to_string()).unwrap_or_default();
+            let spelled = value.date().map(|date| locale::format(date, "%A %-d %B %Y")).unwrap_or_default();
             self.caption.set_text(&format!("{spelled}{}", self.caption_suffix.borrow()));
         }
         let (year, month) = self.shown.get();
@@ -388,14 +389,23 @@ impl DatePage {
 
     // ── the grid ──────────────────────────────────────────────────────────
 
+    /// The column the grid starts with: the locale's first day, except in a week picker,
+    /// whose rows are ISO weeks and so run Monday to Sunday wherever it is used.
+    fn first_day(&self) -> chrono::Weekday {
+        if self.weeks {
+            chrono::Weekday::Mon
+        } else {
+            locale::first_weekday()
+        }
+    }
+
     /// Six rows of seven: the shown month's days plus the neighbours' that fill the grid.
-    /// Weeks start on Monday, as the design draws them.
     fn cells(&self) -> Vec<Cell42> {
         let (year, month) = self.shown.get();
         let Some(first) = NaiveDate::from_ymd_opt(year, month, 1) else {
             return Vec::new();
         };
-        let lead = u64::from(first.weekday().num_days_from_monday());
+        let lead = u64::from((first.weekday().num_days_from_sunday() + 7 - self.first_day().num_days_from_sunday()) % 7);
         let Some(start) = first.checked_sub_days(Days::new(lead)) else {
             return Vec::new();
         };
@@ -427,10 +437,13 @@ impl DatePage {
         let accent = if dark { (0.298, 0.553, 1.0) } else { (0.106, 0.427, 1.0) };
         let grid_left = self.grid_left();
 
-        for (col, name) in ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"].iter().enumerate() {
+        let mut day = self.first_day();
+        for col in 0..7 {
+            let name = locale::weekday_initials(day);
+            day = day.succ();
             text_centered(
                 cr,
-                name,
+                &name,
                 s(grid_left + col as f64 * CELL_PITCH),
                 s(WEEKDAY_Y),
                 TextStyle::new(s(16.0), false, muted),
@@ -565,28 +578,6 @@ fn weeks_in_year(year: i32) -> i32 {
     NaiveDate::from_ymd_opt(year, 12, 28)
         .map(|date| date.iso_week().week() as i32)
         .unwrap_or(52)
-}
-
-pub fn month_name(month: u32) -> &'static str {
-    const NAMES: [&str; 12] = [
-        "January",
-        "February",
-        "March",
-        "April",
-        "May",
-        "June",
-        "July",
-        "August",
-        "September",
-        "October",
-        "November",
-        "December",
-    ];
-    NAMES.get((month.max(1) as usize - 1).min(11)).copied().unwrap_or("January")
-}
-
-pub fn short_month_name(month: u32) -> &'static str {
-    &month_name(month)[..3]
 }
 
 /// Centre a numeral on a point. Cairo's own text API is enough here: these are digits and

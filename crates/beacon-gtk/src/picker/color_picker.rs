@@ -398,6 +398,16 @@ impl ColorPicker {
             });
         }
 
+        // The system colours are the theme's own (Canvas is white by day, near black at
+        // night), so a theme flip changes the list, not only how it is drawn.
+        self.shell.connect_theme_changed({
+            let this = this.clone();
+            move || {
+                if let Some(p) = this.upgrade() {
+                    p.rebuild_rows();
+                }
+            }
+        });
         self.search_field.connect_changed({
             let this = this.clone();
             move |entry| {
@@ -532,7 +542,7 @@ impl ColorPicker {
     /// blueviolet.
     fn rebuild_rows(&self) {
         let selected = self.chips.iter().position(|c| c.has_css_class("selected")).unwrap_or(0);
-        let system = system_colors(self.shell.dark);
+        let system = system_colors(self.shell.dark.get());
         let pool: Vec<&Named> = match selected {
             1 => named().iter().collect(),
             2 => system.iter().collect(),
@@ -643,7 +653,7 @@ impl ColorPicker {
         for (i, color) in swatches.iter().take(SWATCH_LIMIT).enumerate() {
             let is_current = Rc::new(Cell::new(color.hex_with_alpha() == current.hex_with_alpha()));
             self.swatch_flags.borrow_mut().push(is_current.clone());
-            let area = swatch(34, Some(*color), is_current, self.shell.dark);
+            let area = swatch(34, Some(*color), is_current, self.shell.dark.clone());
             area.set_tooltip_text(Some(&format!(
                 "{} · right-click to remove",
                 color.css_name().map(|n| n.name.clone()).unwrap_or_else(|| color.hex())
@@ -677,7 +687,7 @@ impl ColorPicker {
         }
 
         if swatches.len() < SWATCH_LIMIT {
-            let adder = swatch(34, None, Rc::new(Cell::new(false)), self.shell.dark);
+            let adder = swatch(34, None, Rc::new(Cell::new(false)), self.shell.dark.clone());
             adder.set_tooltip_text(Some(&format!(
                 "Keep this colour as a quick swatch ({} of {SWATCH_LIMIT}); right-click one to remove it",
                 swatches.len()
