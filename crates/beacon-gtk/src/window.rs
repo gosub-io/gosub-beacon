@@ -161,30 +161,9 @@ impl BrowserWindow {
     }
 
     fn connect_accelerators(app: &Application, _window: &Self) {
-        app.set_accels_for_action("app.open-new-tab", &["<Primary>T"]);
-        app.set_accels_for_action("app.close-tab", &["<Primary>W"]);
-        app.set_accels_for_action("app.reopen-closed-tab", &["<Primary><Shift>T"]);
-        // Ctrl+L is the address bar in every mainstream browser; the log console moves
-        // aside to Ctrl+Shift+L.
-        app.set_accels_for_action("app.focus-address-bar", &["<Primary>L", "<Alt>D", "F6"]);
-        app.set_accels_for_action("app.toggle-log", &["<Primary><Shift>I", "<Primary><Shift>L"]);
-        app.set_accels_for_action("app.reload", &["F5", "<Primary>R"]);
-        app.set_accels_for_action("app.navigate-back", &["<Alt>Left"]);
-        app.set_accels_for_action("app.navigate-forward", &["<Alt>Right"]);
-        app.set_accels_for_action("app.new-window", &["<Primary>N"]);
-        app.set_accels_for_action("app.bookmark-page", &["<Primary>D"]);
-        app.set_accels_for_action("app.zoom-in", &["<Primary>equal", "<Primary>plus", "<Primary>KP_Add"]);
-        app.set_accels_for_action("app.zoom-out", &["<Primary>minus", "<Primary>KP_Subtract"]);
-        app.set_accels_for_action("app.zoom-reset", &["<Primary>0", "<Primary>KP_0"]);
-        app.set_accels_for_action("app.new-private-window", &["<Primary><Shift>P"]);
-        app.set_accels_for_action("app.toggle-fullscreen", &["F11"]);
-        // MRU tab cycling. Ctrl+Tab arrives as ISO_Left_Tab when Shift is held, which is a
-        // separate keysym rather than a modifier on Tab -- both spellings are bound.
-        app.set_accels_for_action("app.cycle-tab-next", &["<Primary>Tab"]);
-        app.set_accels_for_action("app.cycle-tab-prev", &["<Primary><Shift>Tab", "<Primary><Shift>ISO_Left_Tab"]);
-        for n in 1..=9i32 {
-            app.set_accels_for_action(&format!("app.select-tab({n})"), &[&format!("<Primary>{n}")]);
-        }
+        // Every binding, its title and its group live in one table, which the shortcuts
+        // window is built from as well: see `crate::shortcuts`.
+        crate::shortcuts::register(app, crate::shortcuts::Scope::Window);
     }
 
     /// The window app actions should act on: the focused one (multi-window safe).
@@ -287,6 +266,57 @@ impl BrowserWindow {
 
         // Reload (F5 / Ctrl+R). Reuses the toolbar button's helper, which doubles as stop
         // while a page is still loading.
+        // Reload past the cache, as Ctrl+Shift+R does everywhere else.
+        let hard_reload_action = SimpleAction::new("reload-ignoring-cache", None);
+        hard_reload_action.connect_activate({
+            let app = app.clone();
+            move |_, _| {
+                let Some(window) = BrowserWindow::action_target(&app) else { return };
+                let imp = window.imp();
+                if let Some(tab_id) = imp.active_tab_id() {
+                    imp.reload_ignoring_cache(tab_id);
+                }
+            }
+        });
+        app.add_action(&hard_reload_action);
+
+        // The bookmarks bar is the user's to hide. Stateful so the menu can carry a tick,
+        // and seeded from the window the menu is about rather than from a global default.
+        let bookmarks_bar_action = SimpleAction::new_stateful("toggle-bookmarks-bar", None, &true.to_variant());
+        bookmarks_bar_action.connect_activate({
+            let app = app.clone();
+            move |action, _| {
+                let Some(window) = BrowserWindow::action_target(&app) else { return };
+                action.set_state(&window.imp().toggle_bookmarks_bar().to_variant());
+            }
+        });
+        app.add_action(&bookmarks_bar_action);
+
+        // One parameterised action for the four developer-pane tabs, so the menu can name
+        // them the way the Mac's View menu does.
+        let devtools_page_action = SimpleAction::new("devtools-page", Some(&String::static_variant_type()));
+        devtools_page_action.connect_activate({
+            let app = app.clone();
+            move |_, parameter| {
+                let Some(window) = BrowserWindow::action_target(&app) else { return };
+                let Some(page) = parameter.and_then(|p| p.get::<String>()) else {
+                    return;
+                };
+                window.imp().show_devtools_page(&page);
+            }
+        });
+        app.add_action(&devtools_page_action);
+
+        let reset_timings_action = SimpleAction::new("reset-timings", None);
+        reset_timings_action.connect_activate({
+            let app = app.clone();
+            move |_, _| {
+                let Some(window) = BrowserWindow::action_target(&app) else { return };
+                window.imp().reset_timings();
+            }
+        });
+        app.add_action(&reset_timings_action);
+
         let reload_action = SimpleAction::new("reload", None);
         reload_action.connect_activate({
             let app = app.clone();

@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Gosub Beacon
+GenericName=Web Browser
+Comment=A web browser built on the Gosub engine
+Exec=gosub-beacon-gtk %U
+Icon=io.gosub.beacon
+Terminal=false
+StartupNotify=true
+StartupWMClass=gosub-beacon-gtk
+Categories=Network;WebBrowser;
+MimeType=text/html;text/xml;application/xhtml+xml;x-scheme-handler/http;x-scheme-handler/https;
+Keywords=web;browser;internet;gosub;

@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.gosub.beacon</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+
+  <name>Gosub Beacon</name>
+  <summary>Web browser built on the Gosub engine</summary>
+
+  <developer id="io.gosub">
+    <name>Gosub Community</name>
+  </developer>
+
+  <description>
+    <p>
+      Beacon is a GTK4 browser built on the Gosub engine. The engine does the actual work
+      — networking, cookies, storage, history, rendering — and Beacon is the native chrome
+      around it. It exists to test the engine in a real application, so it is not a daily
+      driver yet, but basic browsing works.
+    </p>
+    <p>Working today:</p>
+    <ul>
+      <li>Page loading and rendering, with Skia rasterization and GPU compositing</li>
+      <li>Tabs, and back/forward over a tree-shaped session history</li>
+      <li>Session restore, bookmarks and visited history, with URL-bar completion</li>
+      <li>Downloads, favicons, error pages, a JSON viewer and syntax-highlighted view-source</li>
+      <li>Private windows, page zoom, and local file browsing over file://</li>
+    </ul>
+    <p>
+      Not working yet: JavaScript, forms and text input, and text selection.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">io.gosub.beacon.desktop</launchable>
+
+  <url type="homepage">https://gosub.io</url>
+  <url type="bugtracker">https://github.com/gosub-io/gosub-beacon/issues</url>
+  <url type="vcs-browser">https://github.com/gosub-io/gosub-beacon</url>
+
+  <screenshots>
+    <screenshot type="default">
+      <caption>Beacon with three tabs loaded</caption>
+      <image>https://raw.githubusercontent.com/gosub-io/gosub-beacon/main/docs/screenshots/beacon-2026-08.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Reading Hacker News</caption>
+      <image>https://raw.githubusercontent.com/gosub-io/gosub-beacon/main/docs/screenshots/hacker-news.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>The built-in JSON viewer</caption>
+      <image>https://raw.githubusercontent.com/gosub-io/gosub-beacon/main/docs/screenshots/json-viewer.png</image>
+    </screenshot>
+  </screenshots>
+
+  <categories>
+    <category>Network</category>
+    <category>WebBrowser</category>
+  </categories>
+
+  <content_rating type="oars-1.1">
+    <content_attribute id="social-info">intense</content_attribute>
+  </content_rating>
+
+  <releases>
+    <release version="0.1.0" date="2026-09-22">
+      <description>
+        <p>First packaged build of the GTK frontend.</p>
+      </description>
+    </release>
+  </releases>
+</component>

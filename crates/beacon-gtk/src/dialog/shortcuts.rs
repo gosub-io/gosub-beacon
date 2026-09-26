@@ -1,82 +1,49 @@
+//! The keyboard shortcuts window, built from the table the bindings come from.
+//!
+//! Nothing here is written by hand: the rows are `crate::shortcuts::SHORTCUTS`, grouped in
+//! the order they appear there. A shortcut cannot be listed here without being bound, and
+//! cannot be bound without appearing here.
+
 use crate::application::Application;
-use gtk4::prelude::{BoxExt, GtkWindowExt};
+use crate::shortcuts::{Shortcut, SHORTCUTS};
+use gtk4::prelude::BoxExt;
 use gtk4::{ShortcutsGroup, ShortcutsSection, ShortcutsShortcut, ShortcutsWindow};
 
 pub struct ShortcutsDialog;
 
 impl ShortcutsDialog {
     pub fn create_dialog(app: &Application) -> ShortcutsWindow {
-        let shortcuts_window = ShortcutsWindow::builder().application(app).title("Keyboard Shortcuts").build();
-
-        shortcuts_window.set_modal(true);
-
-        let section = Self::general_section();
-        shortcuts_window.add_section(&section);
-
-        let section = Self::fkeys_section();
-        shortcuts_window.add_section(&section);
-
-        shortcuts_window
-    }
-
-    fn general_section() -> ShortcutsSection {
-        let section = ShortcutsSection::builder().title("General").max_height(4).build();
-
-        let group = Self::general_file_group();
-        section.append(&group);
-        let group = Self::general_developer_group("Developer");
-        section.append(&group);
-
-        section
-    }
-
-    fn general_file_group() -> ShortcutsGroup {
-        let group = ShortcutsGroup::builder().title("File operations").build();
-
-        let new_tab = ShortcutsShortcut::builder().title("New Tab").accelerator("<Ctrl>T").build();
-
-        let open_shortcut = ShortcutsShortcut::builder().title("Open File").accelerator("<Ctrl>O").build();
-
-        let toggle_darkmode = ShortcutsShortcut::builder()
-            .title("Toggle dark mode")
-            .accelerator("<Ctrl>D")
+        let window = ShortcutsWindow::builder()
+            .application(app)
+            .title("Keyboard Shortcuts")
+            .modal(true)
             .build();
 
-        group.append(&new_tab);
-        group.append(&open_shortcut);
-        group.append(&toggle_darkmode);
-
-        group
-    }
-
-    fn general_developer_group(title: &str) -> ShortcutsGroup {
-        let group = ShortcutsGroup::builder().title(title).build();
-
-        let toggle_log_window = ShortcutsShortcut::builder()
-            .title("Toggle log window")
-            .accelerator("<Ctrl>L")
-            .build();
-        group.append(&toggle_log_window);
-
-        group
-    }
-
-    fn fkeys_section() -> ShortcutsSection {
-        let section = ShortcutsSection::builder().title("Function Keys").max_height(4).build();
-
-        let group = ShortcutsGroup::builder().title("Function Keys").build();
-
-        let fkeys = ["Help Dialog", "Shortcut Dialog", "", "", "", "", "", "", "", "Developer Toolbar"];
-        for (i, key) in fkeys.iter().enumerate() {
-            let shortcut = ShortcutsShortcut::builder()
-                .title(key.to_string())
-                .accelerator(format!("F{}", i + 1))
-                .build();
-            group.append(&shortcut);
+        let section = ShortcutsSection::builder().title("Shortcuts").max_height(8).build();
+        for (title, rows) in groups() {
+            let group = ShortcutsGroup::builder().title(title).build();
+            for row in rows {
+                let mut builder = ShortcutsShortcut::builder().title(row.title).accelerator(row.accels);
+                if let Some(subtitle) = row.subtitle {
+                    builder = builder.subtitle(subtitle);
+                }
+                group.append(&builder.build());
+            }
+            section.append(&group);
         }
-
-        section.append(&group);
-
-        section
+        window.add_section(&section);
+        window
     }
+}
+
+/// The table's rows, gathered by group, keeping the table's order.
+fn groups() -> Vec<(&'static str, Vec<&'static Shortcut>)> {
+    let mut groups: Vec<(&'static str, Vec<&'static Shortcut>)> = Vec::new();
+    for shortcut in SHORTCUTS {
+        match groups.iter_mut().find(|(title, _)| *title == shortcut.group) {
+            Some((_, rows)) => rows.push(shortcut),
+            None => groups.push((shortcut.group, vec![shortcut])),
+        }
+    }
+    groups
 }

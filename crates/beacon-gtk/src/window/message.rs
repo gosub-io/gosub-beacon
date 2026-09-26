@@ -11,6 +11,9 @@ pub enum Message {
     OpenTabForeground(String, String),
     /// Opens a new tab on the right side of the given TabID
     OpenTabRight(TabId, String, String),
+    /// Open the given tab's address again beside it, and switch to the copy. Its *address*,
+    /// not its history: the duplicate starts with one entry, as it does on the Mac.
+    DuplicateTab(TabId),
     /// Sent when we need to load a new url into a tab
     LoadUrl(TabId, String),
 
@@ -39,6 +42,7 @@ impl Debug for Message {
             Message::OpenTab(url, title) => write!(f, "OpenTab({} {})", url, title),
             Message::OpenTabForeground(url, title) => write!(f, "OpenTabForeground({} {})", url, title),
             Message::OpenTabRight(tab_id, url, title) => write!(f, "OpenTabRight({:?}, {} {})", tab_id, url, title),
+            Message::DuplicateTab(tab_id) => write!(f, "DuplicateTab({:?})", tab_id),
             Message::LoadUrl(tab_id, url) => write!(f, "LoadUrl({:?}, {})", tab_id, url),
             Message::RefreshTabs() => write!(f, "RefreshTabs()"),
             Message::RestoreSession { pinned, active } => {

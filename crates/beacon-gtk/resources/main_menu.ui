@@ -51,14 +51,28 @@
 
         <submenu>
             <attribute name="label">View</attribute>
-            <item>
-                <attribute name="label">Reload</attribute>
-                <attribute name="action">app.reload</attribute>
-            </item>
-            <item>
-                <attribute name="label">Developer Tools</attribute>
-                <attribute name="action">app.dev_tools</attribute>
-            </item>
+            <section>
+                <item>
+                    <attribute name="label">Reload</attribute>
+                    <attribute name="action">app.reload</attribute>
+                </item>
+                <item>
+                    <attribute name="label">Reload Ignoring Cache</attribute>
+                    <attribute name="action">app.reload-ignoring-cache</attribute>
+                </item>
+            </section>
+            <section>
+                <item>
+                    <attribute name="label">Show Bookmarks Bar</attribute>
+                    <attribute name="action">app.toggle-bookmarks-bar</attribute>
+                </item>
+            </section>
+            <section>
+                <item>
+                    <attribute name="label">Developer Tools</attribute>
+                    <attribute name="action">app.dev_tools</attribute>
+                </item>
+            </section>
         </submenu>
 
         <submenu>
@@ -92,6 +106,37 @@
                     <attribute name="label">Developer tools</attribute>
                     <attribute name="action">app.toggle-log</attribute>
                 </item>
+                <submenu>
+                    <attribute name="label">Developer pane</attribute>
+                    <section>
+                        <item>
+                            <attribute name="label">Log</attribute>
+                            <attribute name="action">app.devtools-page</attribute>
+                            <attribute name="target">log</attribute>
+                        </item>
+                        <item>
+                            <attribute name="label">Console</attribute>
+                            <attribute name="action">app.devtools-page</attribute>
+                            <attribute name="target">console</attribute>
+                        </item>
+                        <item>
+                            <attribute name="label">Network</attribute>
+                            <attribute name="action">app.devtools-page</attribute>
+                            <attribute name="target">network</attribute>
+                        </item>
+                        <item>
+                            <attribute name="label">Timings</attribute>
+                            <attribute name="action">app.devtools-page</attribute>
+                            <attribute name="target">timings</attribute>
+                        </item>
+                    </section>
+                    <section>
+                        <item>
+                            <attribute name="label">Reset Timings</attribute>
+                            <attribute name="action">app.reset-timings</attribute>
+                        </item>
+                    </section>
+                </submenu>
             </section>
 
             <section>

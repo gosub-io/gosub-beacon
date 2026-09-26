@@ -60,22 +60,6 @@ pub(crate) fn setup_context_menu_actions(action_group: &SimpleActionGroup, windo
     });
     action_group.add_action(&reload_tab);
 
-    // Mute Tab
-    let window_clone = window.clone();
-    let mute_tab = SimpleAction::new("mute", None);
-    mute_tab.connect_activate(move |_, _| {
-        // @todo: implement mute tab
-        let sender = window_clone.imp().sender.clone();
-        runtime().spawn(clone!(
-            #[strong]
-            sender,
-            async move {
-                sender.send(Message::Log("Tab should be muted".into())).await.unwrap();
-            }
-        ));
-    });
-    action_group.add_action(&mute_tab);
-
     // Pin Tab
     let pin_tab = SimpleAction::new("pin", None);
     if info.is_pinned {
@@ -116,13 +100,12 @@ pub(crate) fn setup_context_menu_actions(action_group: &SimpleActionGroup, windo
     let window_clone = window.clone();
     let duplicate_tab = SimpleAction::new("duplicate", None);
     duplicate_tab.connect_activate(move |_, _| {
-        // @todo: implement duplicate tab
         let sender = window_clone.imp().sender.clone();
         runtime().spawn(clone!(
             #[strong]
             sender,
             async move {
-                sender.send(Message::Log("Tab should be duplicated".into())).await.unwrap();
+                sender.send(Message::DuplicateTab(info.id)).await.unwrap();
             }
         ));
     });
@@ -223,6 +206,12 @@ pub(crate) fn setup_context_menu_actions(action_group: &SimpleActionGroup, windo
     action_group.add_action(&close_other_tabs);
 }
 
+/// The tab's right-click menu.
+///
+/// It had a "Mute Tab" item, which only ever wrote "Tab should be muted" to the log pane:
+/// the engine's `PauseMedia`/`PlayMedia` are not handled yet (the tab worker logs and drops
+/// them), so there was nothing for the shell to send. A menu item that does nothing is
+/// worse than a missing one, so it is gone until the engine can answer it.
 pub(crate) fn build_context_menu(tab_info: TabInfo) -> Menu {
     let menu = Menu::new();
 
@@ -232,7 +221,6 @@ pub(crate) fn build_context_menu(tab_info: TabInfo) -> Menu {
 
     let section = Menu::new();
     section.append(Some("Reload Tab"), Some("tab.reload"));
-    section.append(Some("Mute Tab"), Some("tab.mute"));
     if tab_info.is_pinned {
         section.append(Some("Unpin Tab"), Some("tab.unpin"));
     } else {

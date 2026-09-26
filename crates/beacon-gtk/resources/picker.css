@@ -1,0 +1,515 @@
+/* ── Pickers ──────────────────────────────────────────────────────────────
+   The colours of the Figma design (`Picker – Full Design.svg`), transcribed the
+   same way the Mac shell's `PickerStyle.swift` transcribes them. The design was
+   drawn for the light appearance; every colour carries a dark counterpart so the
+   windows are not blinding at night, chosen to keep the same contrast rather than
+   to match anything.
+
+   GTK CSS has no media queries, so the dark set hangs off a `.dark` class the
+   window puts on itself from `gtk-application-prefer-dark-theme`. */
+
+window.picker,
+window.picker.background {
+    background-color: transparent;
+    background-image: none;
+}
+/* Without a compositor there is nothing to show through a rounded corner, so the window
+   is square there rather than notched white. */
+.picker.square .picker-root {
+    border-radius: 0;
+}
+.picker-root {
+    background-color: #eff2f8;
+    border: 1px solid #d8e0ea;
+    border-radius: 12px;
+}
+.picker.dark .picker-root {
+    background-color: #1e2229;
+    border-color: #2e333c;
+}
+
+/* The sidebar: the mark, the section list, and the lighthouse at its foot. */
+.picker-sidebar {
+    background-color: #e4e9f3;
+    border-radius: 12px 0 0 12px;
+}
+.picker.dark .picker-sidebar {
+    background-color: #232830;
+}
+.picker-wordmark {
+    color: #243a68;
+    font-weight: bold;
+}
+.picker.dark .picker-wordmark {
+    color: #c9d6f0;
+}
+.picker-nav {
+    background-image: none;
+    box-shadow: none;
+    text-shadow: none;
+    background: transparent;
+    border: none;
+    border-radius: 9px;
+    padding: 0 8px;
+}
+.picker-nav label {
+    color: #243a68;
+}
+.picker-nav:hover {
+    background-color: rgba(27, 109, 255, 0.08);
+}
+.picker-nav.selected {
+    background-image: none;
+    background-color: #dce7f8;
+}
+.picker-nav.selected label {
+    color: #1b6dff;
+    font-weight: bold;
+}
+.picker.dark .picker-nav label {
+    color: #c9d6f0;
+}
+.picker.dark .picker-nav.selected {
+    background-color: #2c3a55;
+}
+.picker.dark .picker-nav.selected label {
+    color: #4c8dff;
+}
+
+.picker-title {
+    color: #243a68;
+    font-size: 20px;
+    font-weight: bold;
+}
+.picker.dark .picker-title {
+    color: #c9d6f0;
+}
+
+/* The cards the content sits on: a soft white over the window. */
+.picker-card {
+    background-color: rgba(255, 255, 255, 0.6);
+    border: 1px solid #e1e6ee;
+    border-radius: 12px;
+}
+.picker.dark .picker-card {
+    background-color: rgba(255, 255, 255, 0.06);
+    border-color: #2e333c;
+}
+
+.picker-label {
+    color: #1a2233;
+    font-size: 13px;
+    font-weight: bold;
+}
+.picker-caption,
+.picker-unit {
+    color: #6b7a90;
+    font-size: 11px;
+}
+.picker-section {
+    color: #1a2233;
+    font-size: 12px;
+    font-weight: bold;
+}
+.picker-side-heading {
+    color: #1a2233;
+    font-size: 16px;
+    font-weight: bold;
+}
+.picker.dark .picker-label,
+.picker.dark .picker-section,
+.picker.dark .picker-side-heading {
+    color: #e6eaf0;
+}
+.picker.dark .picker-caption,
+.picker.dark .picker-unit {
+    color: #9aa5b5;
+}
+
+/* Fields are hairline boxes, not the toolkit's bezels. */
+.picker-field {
+    background-image: none;
+    box-shadow: none;
+    text-shadow: none;
+    background-color: #ffffff;
+    border: 1px solid #c9d1dd;
+    border-radius: 8.5px;
+    color: #1a2233;
+    font-size: 13px;
+    padding: 0 12px;
+    min-height: 30px;
+}
+.picker-field.numeric {
+    border-radius: 7px;
+    padding: 0 4px;
+    font-family: monospace;
+}
+.picker-field.hex {
+    font-family: monospace;
+}
+.picker-field:focus {
+    border-color: #1b6dff;
+}
+.picker-field > text > placeholder {
+    color: #9aa5b5;
+}
+.picker.dark .picker-field {
+    background-color: #2a2f38;
+    border-color: #3a414c;
+    color: #e6eaf0;
+}
+.picker.dark .picker-field:focus {
+    border-color: #4c8dff;
+}
+
+/* Search: the same box with a round end and room for the glass. */
+.picker-search {
+    border-radius: 15px;
+    padding: 0 6px;
+}
+
+/* The entry inside the search box is not a box of its own: the rounded border around it
+   belongs to `.picker-search`, so the toolkit's own frame and focus ring have to go. */
+.picker-search entry,
+.picker-search entry > text,
+.picker-search entry:focus {
+    background: none;
+    background-image: none;
+    border: none;
+    box-shadow: none;
+    outline: none;
+    min-height: 0;
+    padding: 0;
+}
+
+/* The search field's clear button: flat, it lives inside the field's own box. */
+.picker-clear {
+    background: none;
+    background-image: none;
+    border: none;
+    box-shadow: none;
+    color: #9aa5b5;
+    min-height: 16px;
+    min-width: 16px;
+    padding: 0;
+}
+.picker-clear:hover {
+    color: #6b7a90;
+}
+
+/* Filter chips: accent when on, grey when off. */
+.picker-chip {
+    background-image: none;
+    box-shadow: none;
+    text-shadow: none;
+    background-color: #eef1f6;
+    border: none;
+    border-radius: 13px;
+    color: #6b7a90;
+    font-size: 12px;
+    min-height: 26px;
+    padding: 0 12px;
+}
+.picker-chip:hover {
+    background-color: #e2e7f0;
+}
+.picker-chip.selected {
+    background-image: none;
+    background-color: #1b6dff;
+    color: #ffffff;
+    font-weight: bold;
+}
+.picker.dark .picker-chip {
+    background-color: #2e343e;
+    color: #9aa5b5;
+}
+.picker.dark .picker-chip.selected {
+    background-color: #4c8dff;
+    color: #ffffff;
+}
+
+/* A row in the CSS-colour list. */
+.picker-row {
+    background-image: none;
+    box-shadow: none;
+    text-shadow: none;
+    background-color: rgba(255, 255, 255, 0.55);
+    border: 1px solid #dce1e9;
+    border-radius: 10px;
+    padding: 0;
+}
+.picker-row:hover {
+    background-color: rgba(255, 255, 255, 0.85);
+}
+.picker-row.selected {
+    background-image: none;
+    border-color: #1b6dff;
+    border-width: 2px;
+    background-color: #ffffff;
+}
+.picker-row-name {
+    color: #1a2233;
+    font-size: 14px;
+}
+.picker-row-hex {
+    color: #6b7a90;
+    font-size: 12px;
+    font-family: monospace;
+}
+.picker.dark .picker-row {
+    background-color: rgba(255, 255, 255, 0.04);
+    border-color: #363c47;
+}
+.picker.dark .picker-row:hover {
+    background-color: rgba(255, 255, 255, 0.08);
+}
+.picker.dark .picker-row.selected {
+    border-color: #4c8dff;
+    background-color: rgba(76, 141, 255, 0.12);
+}
+.picker.dark .picker-row-name {
+    color: #e6eaf0;
+}
+.picker.dark .picker-row-hex {
+    color: #9aa5b5;
+}
+/* The list scrolls over the card, so it must not paint a background of its own. */
+.picker-list,
+.picker-list > viewport,
+.picker-list list {
+    background: transparent;
+}
+.picker-list list > row {
+    padding: 0;
+    background: transparent;
+}
+
+.picker-divider {
+    background-color: #d5dce6;
+}
+.picker.dark .picker-divider {
+    background-color: #343a44;
+}
+
+/* The small square buttons beside the hex field. */
+.picker-icon-button {
+    background-image: none;
+    box-shadow: none;
+    text-shadow: none;
+    background-color: #f5f7fa;
+    border: 1px solid #c9d1dd;
+    border-radius: 8.5px;
+    color: #6b7a90;
+    min-height: 30px;
+    min-width: 32px;
+    padding: 0;
+}
+.picker-icon-button:hover {
+    background-color: #e9edf4;
+}
+.picker-icon-button:disabled {
+    opacity: 0.45;
+}
+.picker.dark .picker-icon-button {
+    background-color: #2e343e;
+    border-color: #3a414c;
+    color: #9aa5b5;
+}
+
+/* Cancel and Select. */
+.picker-button {
+    background-image: none;
+    box-shadow: none;
+    text-shadow: none;
+    border-radius: 8px;
+    font-size: 15px;
+    min-height: 35px;
+    padding: 0 12px;
+}
+.picker-button.cancel {
+    background-image: none;
+    background-color: #e4e9f1;
+    border: 1px solid #d0d7e2;
+    color: #1a2233;
+}
+.picker-button.cancel:hover {
+    background-color: #d9e0ec;
+}
+.picker-button.select {
+    background-image: none;
+    background-color: #0d6fff;
+    border: none;
+    color: #ffffff;
+    font-weight: bold;
+}
+.picker-button.select:hover {
+    background-color: #0a5fe0;
+}
+.picker.dark .picker-button.cancel {
+    background-color: #343a45;
+    border-color: #3a414c;
+    color: #e6eaf0;
+}
+.picker.dark .picker-button.select {
+    background-color: #2f7bff;
+}
+
+/* ── Date and time pickers ────────────────────────────────────────────────
+   The large shell's own parts. Everything here is placed by the design's
+   coordinates, so the toolkit's padding and minimum sizes have to get out of
+   the way: a button that quietly grows taller than the box it was given
+   overlaps whatever the design put beneath it. */
+
+.picker-tagline {
+    color: #6b7a90;
+}
+.picker.dark .picker-tagline {
+    color: #9aa5b5;
+}
+.picker-nav-icon {
+    color: #243a68;
+}
+.picker-nav.selected .picker-nav-icon {
+    color: #1b6dff;
+}
+.picker.dark .picker-nav-icon {
+    color: #c9d6f0;
+}
+.picker.dark .picker-nav.selected .picker-nav-icon {
+    color: #4c8dff;
+}
+
+/* A button that is only its label: no frame, no padding, no minimum. */
+.picker-flat {
+    background: none;
+    background-image: none;
+    border: none;
+    box-shadow: none;
+    outline: none;
+    padding: 0;
+    min-height: 0;
+    min-width: 0;
+}
+.picker-flat:hover {
+    background-color: rgba(27, 109, 255, 0.08);
+    border-radius: 8px;
+}
+.picker-chevron,
+.picker-chevron label {
+    color: #243a68;
+}
+.picker.dark .picker-chevron,
+.picker.dark .picker-chevron label {
+    color: #c9d6f0;
+}
+.picker-month-title {
+    color: #1b6dff;
+    font-weight: bold;
+}
+.picker.dark .picker-month-title {
+    color: #4c8dff;
+}
+
+/* "Today", the one tinted button on the calendar. */
+.picker-today {
+    background-color: #f3f7fe;
+    background-image: none;
+    border: 1px solid #bfd4f5;
+    border-radius: 10px;
+    box-shadow: none;
+    color: #1b6dff;
+    font-weight: bold;
+    padding: 0;
+    min-height: 0;
+}
+.picker-today:hover {
+    background-color: #e7effd;
+}
+.picker.dark .picker-today {
+    background-color: #2a2f38;
+    border-color: #3a414c;
+    color: #4c8dff;
+}
+
+/* The number fields: a rounded box holding an entry and a pair of arrows. */
+.picker-stepper {
+    background-color: #ffffff;
+    border: 1px solid #c7d4e8;
+    border-radius: 12px;
+    /* Tight on the arrow side: the month field has a whole word to fit. */
+    padding: 0 2px 0 10px;
+}
+.picker.dark .picker-stepper {
+    background-color: #2a2f38;
+    border-color: #3a414c;
+}
+.picker-stepper-entry,
+.picker-stepper-entry > text {
+    background: none;
+    background-image: none;
+    border: none;
+    box-shadow: none;
+    outline: none;
+    color: #243a68;
+    padding: 0;
+    min-height: 0;
+    min-width: 0;
+}
+.picker.dark .picker-stepper-entry,
+.picker.dark .picker-stepper-entry > text {
+    color: #c9d6f0;
+}
+.picker-stepper-arrow {
+    background: none;
+    background-image: none;
+    border: none;
+    box-shadow: none;
+    color: #6b7a90;
+    padding: 0;
+    min-height: 0;
+    min-width: 0;
+}
+.picker-stepper-arrow:hover {
+    color: #1b6dff;
+}
+.picker.dark .picker-stepper-arrow {
+    color: #9aa5b5;
+}
+
+.picker-field-label {
+    color: #243a68;
+}
+.picker.dark .picker-field-label {
+    color: #c9d6f0;
+}
+.picker-caption-title {
+    color: #6b7a90;
+}
+.picker-caption-value {
+    color: #243a68;
+    font-weight: bold;
+}
+.picker.dark .picker-caption-title {
+    color: #9aa5b5;
+}
+.picker.dark .picker-caption-value {
+    color: #c9d6f0;
+}
+
+/* The `?` at the foot of the large shell. */
+.picker-help {
+    background-color: #ffffff;
+    background-image: none;
+    border: 1px solid #c7cfdb;
+    border-radius: 17px;
+    box-shadow: none;
+    color: #243a68;
+    font-weight: bold;
+    padding: 0;
+    min-height: 0;
+}
+.picker.dark .picker-help {
+    background-color: #2a2f38;
+    border-color: #3a414c;
+    color: #c9d6f0;
+}

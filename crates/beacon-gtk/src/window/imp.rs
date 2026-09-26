@@ -7,10 +7,11 @@ use beacon_core::address_parser::{GosubAddressParser, GosubRenderMode};
 use beacon_core::beacon::Beacon;
 use beacon_core::command::BeaconCommand;
 use beacon_core::download::DownloadState;
-use beacon_core::event::{BeaconEvent, Cursor};
+use beacon_core::event::{BeaconEvent, Cursor, PickerKind};
 use beacon_core::tab::{GosubTab, GosubTabManager, HistoryEntryId, TabCommand, TabId};
 use glib::subclass::InitializingObject;
 use gosub_engine::events::{EngineEvent, NavigationEvent, TabCommand as EngineTabCommand};
+use gosub_engine::tab::TabHandle;
 use gtk4::gio::SimpleActionGroup;
 use gtk4::glib::subclass::Signal;
 use gtk4::glib::Quark;
@@ -208,6 +209,12 @@ pub struct BrowserWindow {
     tab_zoom: RefCell<HashMap<TabId, Rc<Cell<f64>>>>,
     /// Whether this is a private-browsing window (ephemeral engine, no history recording).
     pub private: Cell<bool>,
+    /// Whether the user wants the bookmarks bar. Per window, as on the Mac: fullscreen hides
+    /// the whole chrome, and this says whether the bar comes back with it.
+    pub bookmarks_bar_wanted: Cell<bool>,
+    /// The picker a form control asked for, while it is up. Held so a second request closes
+    /// the first rather than stacking windows over the page.
+    picker: RefCell<Option<crate::picker::PickerHandle>>,
 }
 
 /// Write a row property, but only when the value actually changed.
@@ -302,6 +309,8 @@ impl Default for BrowserWindow {
             completion: RefCell::new(None),
             tab_zoom: RefCell::new(HashMap::new()),
             private: Cell::new(false),
+            bookmarks_bar_wanted: Cell::new(true),
+            picker: RefCell::new(None),
         }
     }
 }
@@ -490,6 +499,34 @@ impl BrowserWindow {
             return;
         }
 
+        self.send_reload(tab_id, handle, false);
+    }
+
+    /// Reload `tab_id` past the cache: every subresource refetched, as Ctrl+Shift+R does in
+    /// every other browser. Unlike the button's reload this never stops a load in progress --
+    /// asking for a fresh copy of a page is not the same as asking it to stop arriving.
+    pub(crate) fn reload_ignoring_cache(&self, tab_id: TabId) {
+        let (url, handle) = {
+            let manager = self.tab_manager.lock().unwrap();
+            match manager.get_tab(tab_id) {
+                Some(tab) => (tab.url().clone(), tab.tab_handle()),
+                None => return,
+            }
+        };
+        // The same two pages the ordinary reload cannot refetch: one the shell drew, one the
+        // shell built.
+        if Self::is_shell_rendered(&url) {
+            return;
+        }
+        if matches!(url.scheme(), "view-source" | "raw") {
+            let _ = self.get_sender().send_blocking(Message::LoadUrl(tab_id, url.to_string()));
+            return;
+        }
+        self.send_reload(tab_id, handle, true);
+    }
+
+    /// Mark the tab loading and ask the engine for the page again.
+    fn send_reload(&self, tab_id: TabId, handle: Option<TabHandle>, ignore_cache: bool) {
         let mut manager = self.tab_manager.lock().unwrap();
         if let Some(mut tab) = manager.get_tab(tab_id) {
             tab.set_loading(true);
@@ -500,7 +537,7 @@ impl BrowserWindow {
 
         if let Some(handle) = handle {
             runtime().spawn(async move {
-                let _ = handle.send(EngineTabCommand::Reload { ignore_cache: false }).await;
+                let _ = handle.send(EngineTabCommand::Reload { ignore_cache }).await;
                 let _ = handle.send(EngineTabCommand::ResumeDrawing { fps: 30 }).await;
             });
         }
@@ -610,6 +647,33 @@ impl BrowserWindow {
             glib::ControlFlow::Continue
         });
         *self.devtools_tick.borrow_mut() = Some(source);
+    }
+
+    /// Show or hide the bookmarks bar, and answer whether it is now showing.
+    pub(crate) fn toggle_bookmarks_bar(&self) -> bool {
+        let wanted = !self.bookmarks_bar_wanted.get();
+        self.bookmarks_bar_wanted.set(wanted);
+        // Fullscreen owns the chrome while it lasts; this only decides what returns with it.
+        if !self.obj().is_fullscreen() {
+            self.bookmarks_bar.set_visible(wanted);
+        }
+        wanted
+    }
+
+    /// Open the developer pane on a particular tab, for the menu items named after them.
+    /// Shows the pane when it is closed: an item called "Network" should land on the network
+    /// tab, never close the panel.
+    pub(crate) fn show_devtools_page(&self, page: &str) {
+        if !self.devtools_pane.get_visible() {
+            self.toggle_devtools();
+        }
+        self.devtools_stack.set_visible_child_name(page);
+    }
+
+    /// Throw away the engine's timing statistics and redraw the table.
+    pub(crate) fn reset_timings(&self) {
+        beacon_core::devtools::reset_timings();
+        self.refresh_devtools();
     }
 
     /// Wire the pane's own controls. Called once, at construction.
@@ -2365,6 +2429,24 @@ impl BrowserWindow {
     }
 
     pub(crate) fn activate_tab(&self, tab_id: TabId) {
+        // A background tab that keeps drawing at 30 fps is a laptop-fan bug, and with one
+        // shared GPU context it competes with the tab the user is actually looking at. The
+        // tab keeps loading either way: suspending stops its rendering, nothing else.
+        //
+        // Read before `mark_active` below, which is what makes the new tab the active one.
+        let outgoing = self.active_tab_id().filter(|previous| *previous != tab_id);
+        if let Some(previous) = outgoing {
+            let handle = {
+                let manager = self.tab_manager.lock().unwrap();
+                manager.get_tab(previous).and_then(|tab| tab.tab_handle())
+            };
+            if let Some(handle) = handle {
+                runtime().spawn(async move {
+                    let _ = handle.send(EngineTabCommand::SuspendDrawing).await;
+                });
+            }
+        }
+
         // A cycle in progress is *previewing* tabs; reordering now would collapse the walk
         // into a two-tab ping-pong. `commit_cycle` promotes the landing tab instead.
         self.touch_mru(tab_id);
@@ -2376,6 +2458,19 @@ impl BrowserWindow {
         self.sync_viewport_for(tab_id);
         if let Some(page) = self.page_for_tab(tab_id) {
             self.content_stack.set_visible_child(&page);
+        }
+        // ...and only now start it drawing again, with the viewport it is about to be shown
+        // at rather than the one the last active tab left behind.
+        if outgoing.is_some() {
+            let handle = {
+                let manager = self.tab_manager.lock().unwrap();
+                manager.get_tab(tab_id).and_then(|tab| tab.tab_handle())
+            };
+            if let Some(handle) = handle {
+                runtime().spawn(async move {
+                    let _ = handle.send(EngineTabCommand::ResumeDrawing { fps: 30 }).await;
+                });
+            }
         }
 
         let mut manager = self.tab_manager.lock().unwrap();
@@ -3165,6 +3260,55 @@ impl BrowserWindow {
 
     /// Ask the user where to save `url` (native save dialog, prefilled with
     /// `suggested_name`), then start the engine download on `tab_id`'s handle.
+    /// Open the picker a form control asked for, and report what is done with it.
+    ///
+    /// The control previews live, so every intermediate value goes straight back as
+    /// `PickerChanged`; a cancel answers with the value the control came in with, and
+    /// `PickerClosed` ends the exchange either way. A kind the shell cannot draw yet is
+    /// logged and left alone -- the engine draws no picker of its own, so nothing opens.
+    fn open_picker(&self, tab_id: TabId, kind: PickerKind, value: &str, min: Option<&str>, max: Option<&str>, step: Option<&str>) {
+        let manager = self.tab_manager.lock().unwrap();
+        let handle = manager.get_tab(tab_id).and_then(|t| t.tab_handle());
+        drop(manager);
+        let Some(handle) = handle else {
+            return;
+        };
+
+        // A control that asks while another picker is up replaces it, and the old one is
+        // detached so it cannot answer for a control that has moved on.
+        if let Some(previous) = self.picker.borrow_mut().take() {
+            previous.close();
+        }
+
+        let send = move |command: EngineTabCommand| {
+            let handle = handle.clone();
+            runtime().spawn(async move {
+                let _ = handle.send(command).await;
+            });
+        };
+        let on_change = send.clone();
+        let on_finish = send;
+        let opened = crate::picker::open(
+            &*self.obj(),
+            kind,
+            value,
+            min,
+            max,
+            step,
+            move |value| on_change(EngineTabCommand::PickerChanged { value }),
+            move |value| {
+                on_finish(EngineTabCommand::PickerChanged { value });
+                on_finish(EngineTabCommand::PickerClosed);
+            },
+        );
+        match opened {
+            Some(picker) => *self.picker.borrow_mut() = Some(picker),
+            None => self.log(&format!(
+                "{kind:?} picker requested (current {value:?}); not available in the GTK shell yet"
+            )),
+        }
+    }
+
     pub(crate) fn save_download_as(&self, tab_id: TabId, url: String, suggested_name: &str) {
         let handle = {
             let manager = self.tab_manager.lock().unwrap();
@@ -3287,6 +3431,28 @@ impl BrowserWindow {
             Message::OpenTabRight(target_tab_id, url, title) => {
                 if let Some(pos) = self.get_page_num_for_tab(target_tab_id) {
                     self.open_tab(Some(pos as usize + 1), &url, &title);
+                }
+            }
+
+            Message::DuplicateTab(tab_id) => {
+                // The copy belongs beside its original and takes the focus -- what every
+                // browser's Duplicate Tab does, and what the Mac's `duplicateTab` does. It
+                // carries the address over, not the session history, so the duplicate opens
+                // with a single entry and a dead Back button.
+                //
+                // Taking the title too means the new tab reads as its original while it
+                // loads instead of flashing "New Tab"; `open_tab` re-parses the address, so
+                // a `view-source:` tab duplicates as another view-source tab and a
+                // shell-rendered one gets its own title back.
+                let origin = {
+                    let manager = self.tab_manager.lock().unwrap();
+                    manager.get_tab(tab_id).map(|tab| (tab.url().to_string(), tab.title().to_string()))
+                };
+                let (Some((url, title)), Some(pos)) = (origin, self.get_page_num_for_tab(tab_id)) else {
+                    return;
+                };
+                if let Some(new_tab_id) = self.open_tab(Some(pos as usize + 1), &url, &title) {
+                    self.activate_tab(new_tab_id);
                 }
             }
 
@@ -3611,29 +3777,145 @@ impl BrowserWindow {
                         .await;
                 });
             });
+
+            // ...and the release, which is what ends a drag. The engine answers `MouseUp`
+            // by clearing the pointer's grip on a range, a resize handle, a scrollbar thumb
+            // or a selection -- so a shell that only ever presses leaves every one of those
+            // grabbed for good.
+            //
+            // Sent unconditionally, including after a Ctrl+click that went to the hit test
+            // instead of the engine: an unpaired release only clears state that was never
+            // set, while a missing one is the bug this exists to avoid. The modifier can
+            // also be let go before the button is, so the press and the release cannot be
+            // relied on to agree about it.
+            let release_handle = handle.clone();
+            let release_zoom = zoom.clone();
+            click.connect_released(move |_g, _n, x, y| {
+                let handle = release_handle.clone();
+                let z = release_zoom.get();
+                let (x, y) = (x / z, y / z);
+                runtime().spawn(async move {
+                    let _ = handle
+                        .send(EngineTabCommand::MouseUp {
+                            x: x as f32,
+                            y: y as f32,
+                            button: gosub_engine::events::MouseButton::Left,
+                        })
+                        .await;
+                });
+            });
             area.add_controller(click);
 
             // Keyboard -> engine. Shortcuts with Control/Alt/Super are the shell's (Ctrl+T
             // and friends) and propagate to GTK; everything else is the page's: focus
             // traversal (Tab), link activation (Enter), and scrolling keys.
             let keys = gtk4::EventControllerKey::new();
+
+            // What the page receives for a press is one `KeyDown` carrying the character
+            // the input method made of it, with `TextInput` kept for commits that are not a
+            // single press -- a CJK composition, or a paste. That is the engine's contract
+            // (`edit_key` inserts from the key), and the Mac shell's `PageView.keyDown`
+            // follows the same one.
+            //
+            // Only the input method knows what a press produced: Compose then e is one "é",
+            // not an "e" and an "é", and a composition may commit several characters at once
+            // or none yet. So the press goes to it first and the named key -- Backspace,
+            // ArrowLeft, Enter -- is sent only when it made nothing of it.
+            let im = gtk4::IMMulticontext::new();
+            im.set_client_widget(Some(&area));
+
+            /// The press being interpreted: its `code` and modifiers, for the commit to
+            /// answer as.
+            type PressInFlight = Rc<RefCell<Option<(String, gosub_engine::events::Modifiers)>>>;
+            let press_in_flight: PressInFlight = Rc::new(RefCell::new(None));
+            let committed = Rc::new(Cell::new(false));
+
+            let im_handle = handle.clone();
+            let commit_press = press_in_flight.clone();
+            let commit_flag = committed.clone();
+            im.connect_commit(move |_, text| {
+                // Control characters arrive here too (Ctrl+A is U+0001). They are not text;
+                // the named-key path below is the one that reports those.
+                if text.is_empty() || text.chars().any(|c| (c as u32) < 0x20) {
+                    return;
+                }
+                let handle = im_handle.clone();
+                let press = commit_press.borrow().clone();
+                commit_flag.set(true);
+                match press {
+                    // A single character is the press itself, as the input method resolved
+                    // it: "a", " ", "é". Sent as the key so the engine can treat it as one --
+                    // typing into a field, but also space scrolling a page with nothing
+                    // focused -- and never as text on top.
+                    Some((code, modifiers)) if text.chars().count() == 1 => {
+                        let key = text.to_string();
+                        runtime().spawn(async move {
+                            let _ = handle.send(EngineTabCommand::KeyDown { key, code, modifiers }).await;
+                        });
+                    }
+                    // Several at once is a composition being committed, or a commit that
+                    // arrived on its own. Text, not a key.
+                    _ => {
+                        let text = text.to_string();
+                        runtime().spawn(async move {
+                            let _ = handle.send(EngineTabCommand::TextInput { text }).await;
+                        });
+                    }
+                }
+            });
+
+            // An input method only composes for the focused widget, and has to be told.
+            let focus = gtk4::EventControllerFocus::new();
+            focus.connect_enter({
+                let im = im.clone();
+                move |_| im.focus_in()
+            });
+            focus.connect_leave({
+                let im = im.clone();
+                move |_| im.focus_out()
+            });
+            area.add_controller(focus);
+
             let key_handle = handle.clone();
-            keys.connect_key_pressed(move |_c, keyval, _keycode, state| {
+            let press_im = im.clone();
+            keys.connect_key_pressed(move |c, keyval, _keycode, state| {
                 if state.intersects(gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::ALT_MASK | gdk::ModifierType::SUPER_MASK) {
                     return glib::Propagation::Proceed;
                 }
-                let Some(key) = web_key_name(keyval) else {
-                    return glib::Propagation::Proceed;
-                };
                 let modifiers = engine_modifiers(state);
-                let handle = key_handle.clone();
                 // Web `code` (physical key) is approximated with the logical name until a
                 // scancode map exists; the engine only reads `key` today.
+                let named = web_key_name(keyval);
+                *press_in_flight.borrow_mut() = Some((named.clone().unwrap_or_default(), modifiers));
+                committed.set(false);
+                if let Some(event) = c.current_event() {
+                    press_im.filter_keypress(&event);
+                }
+                let handled = committed.get();
+                *press_in_flight.borrow_mut() = None;
+                if !handled {
+                    if let Some(key) = named {
+                        let handle = key_handle.clone();
+                        let code = key.clone();
+                        runtime().spawn(async move {
+                            let _ = handle.send(EngineTabCommand::KeyDown { key, code, modifiers }).await;
+                        });
+                    }
+                }
+                glib::Propagation::Stop
+            });
+
+            // The release. Not offered to the input method: those compose on press, and
+            // `filter_keypress` reads any event it is handed as one.
+            let release_handle = handle.clone();
+            keys.connect_key_released(move |_c, keyval, _keycode, state| {
+                let Some(key) = web_key_name(keyval) else { return };
+                let modifiers = engine_modifiers(state);
+                let handle = release_handle.clone();
                 let code = key.clone();
                 runtime().spawn(async move {
-                    let _ = handle.send(EngineTabCommand::KeyDown { key, code, modifiers }).await;
+                    let _ = handle.send(EngineTabCommand::KeyUp { key, code, modifiers }).await;
                 });
-                glib::Propagation::Stop
             });
             area.add_controller(keys);
 
@@ -3867,13 +4149,15 @@ impl BrowserWindow {
                 ..
             } => self.save_download_as(tab_id, url, &suggested_filename),
             BeaconEvent::DownloadChanged(_) => self.refresh_downloads(),
-            // No pickers in this shell yet: the Mac one has them (`swift/.../ColorPicker/`);
-            // a GTK one would answer with `TabCommand::PickerChanged` the same way.
-            BeaconEvent::PickerRequested { kind, value, .. } => {
-                self.log(&format!(
-                    "{kind:?} picker requested (current {value:?}); not available in the GTK shell yet"
-                ));
-            }
+            BeaconEvent::PickerRequested {
+                tab_id,
+                kind,
+                value,
+                min,
+                max,
+                step,
+                ..
+            } => self.open_picker(tab_id, kind, &value, min.as_deref(), max.as_deref(), step.as_deref()),
             BeaconEvent::Log(message) => self.log(&message),
         }
     }
