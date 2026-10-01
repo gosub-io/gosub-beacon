@@ -1150,10 +1150,10 @@ pub unsafe extern "C" fn beacon_mouse_up(browser: *mut BeaconBrowser, tab: u64, 
 /// # Safety
 /// `browser` must be a live handle from [`beacon_new`].
 #[no_mangle]
-pub unsafe extern "C" fn beacon_scroll(browser: *mut BeaconBrowser, tab: u64, delta_x: f32, delta_y: f32) {
+pub unsafe extern "C" fn beacon_scroll(browser: *mut BeaconBrowser, tab: u64, delta_x: f32, delta_y: f32, precise: bool) {
     let b = browser!(browser);
     let Some(tab_id) = b.tab(tab) else { return };
-    b.send(tab_id, TabCommand::MouseScroll { delta_x, delta_y });
+    b.send(tab_id, TabCommand::MouseScroll { delta_x, delta_y, precise });
 }
 
 // ── keyboard ─────────────────────────────────────────────────────────────────

@@ -3710,12 +3710,16 @@ impl BrowserWindow {
                     return glib::Propagation::Stop;
                 }
                 let handle = scroll_handle.clone();
+                // A touchpad reports surface pixels, already smooth, which the engine applies
+                // as they come; a wheel reports notches, which are scaled and animated.
+                let precise = c.unit() == gdk::ScrollUnit::Surface;
+                let step = if precise { 1.0 } else { 40.0 };
                 // The engine scrolls in CSS px, which cover more screen when zoomed in.
                 let z = scroll_zoom.get() as f32;
-                let delta_x = dx as f32 * 40.0 / z;
-                let delta_y = dy as f32 * 40.0 / z;
+                let delta_x = dx as f32 * step / z;
+                let delta_y = dy as f32 * step / z;
                 runtime().spawn(async move {
-                    let _ = handle.send(EngineTabCommand::MouseScroll { delta_x, delta_y }).await;
+                    let _ = handle.send(EngineTabCommand::MouseScroll { delta_x, delta_y, precise }).await;
                 });
                 glib::Propagation::Stop
             });

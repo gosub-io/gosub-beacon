@@ -3362,19 +3362,6 @@
     {
         "type": "archive",
         "archive-type": "tar-gzip",
-        "url": "https://static.crates.io/crates/grid/grid-1.0.1.crate",
-        "sha256": "b40ca9252762c466af32d0b1002e91e4e1bc5398f77455e55474deb466355ff5",
-        "dest": "cargo/vendor/grid-1.0.1"
-    },
-    {
-        "type": "inline",
-        "contents": "{\"package\": \"b40ca9252762c466af32d0b1002e91e4e1bc5398f77455e55474deb466355ff5\", \"files\": {}}",
-        "dest": "cargo/vendor/grid-1.0.1",
-        "dest-filename": ".cargo-checksum.json"
-    },
-    {
-        "type": "archive",
-        "archive-type": "tar-gzip",
         "url": "https://static.crates.io/crates/gsk4/gsk4-0.11.4.crate",
         "sha256": "b867be1c5f14dcb8f552c0eff6e9a9b1da5f8b43943e8efc3a63c889d84952ff",
         "dest": "cargo/vendor/gsk4-0.11.4"
@@ -7756,14 +7743,14 @@
     {
         "type": "archive",
         "archive-type": "tar-gzip",
-        "url": "https://static.crates.io/crates/taffy/taffy-0.12.2.crate",
-        "sha256": "340a09581f29809fc0df82a3955501dc7f2a21f887e5d1c13dbe288fe1c0bef4",
-        "dest": "cargo/vendor/taffy-0.12.2"
+        "url": "https://static.crates.io/crates/taffy/taffy-0.14.0.crate",
+        "sha256": "639627c87f43b9181c811f40a6296409e093a17bc761214cba3c15df74f86b99",
+        "dest": "cargo/vendor/taffy-0.14.0"
     },
     {
         "type": "inline",
-        "contents": "{\"package\": \"340a09581f29809fc0df82a3955501dc7f2a21f887e5d1c13dbe288fe1c0bef4\", \"files\": {}}",
-        "dest": "cargo/vendor/taffy-0.12.2",
+        "contents": "{\"package\": \"639627c87f43b9181c811f40a6296409e093a17bc761214cba3c15df74f86b99\", \"files\": {}}",
+        "dest": "cargo/vendor/taffy-0.14.0",
         "dest-filename": ".cargo-checksum.json"
     },
     {

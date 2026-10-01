@@ -393,8 +393,10 @@ impl eframe::App for BeaconApp {
         // ── scroll ────────────────────────────────────────────────────────
         // Raw wheel events, not egui's smoothed delta: the engine smooths scrolling itself,
         // and forwarding an already-smoothed value double-smooths it into a slow ramp.
-        let scroll = ctx.input(|i| {
+        // Trackpad deltas are already smooth and go to the engine as precise, unanimated.
+        let (scroll, precise) = ctx.input(|i| {
             let mut acc = egui::Vec2::ZERO;
+            let mut precise = true;
             for event in &i.events {
                 if let egui::Event::MouseWheel { unit, delta, .. } = event {
                     let scale = match unit {
@@ -410,10 +412,11 @@ impl eframe::App for BeaconApp {
                         }
                         egui::MouseWheelUnit::Page => 800.0,
                     };
+                    precise &= scale == 1.0;
                     acc += *delta * scale;
                 }
             }
-            acc
+            (acc, precise)
         });
         if scroll != egui::Vec2::ZERO {
             let (dx, dy) = (-scroll.x, -scroll.y);
@@ -422,7 +425,11 @@ impl eframe::App for BeaconApp {
                 view.scroll_x = (view.scroll_x + dx).max(0.0);
                 view.scroll_y = (view.scroll_y + dy).clamp(0.0, max_y);
             }
-            self.send_active(TabCommand::MouseScroll { delta_x: dx, delta_y: dy });
+            self.send_active(TabCommand::MouseScroll {
+                delta_x: dx,
+                delta_y: dy,
+                precise,
+            });
         }
 
         self.refresh_texture(active, &ctx, frame);

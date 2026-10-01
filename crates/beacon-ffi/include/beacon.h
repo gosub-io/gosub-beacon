@@ -196,7 +196,10 @@ void beacon_set_viewport(BeaconBrowser *browser, BeaconTabId tab, uint32_t width
 void beacon_mouse_move(BeaconBrowser *browser, BeaconTabId tab, float x, float y);
 void beacon_mouse_down(BeaconBrowser *browser, BeaconTabId tab, float x, float y, BeaconButton button);
 void beacon_mouse_up(BeaconBrowser *browser, BeaconTabId tab, float x, float y, BeaconButton button);
-void beacon_scroll(BeaconBrowser *browser, BeaconTabId tab, float delta_x, float delta_y);
+/* Deltas are in CSS pixels. Set `precise` for a device that already reports smooth,
+ * pixel-exact motion (a trackpad): those deltas are applied at once. Wheel notches pass
+ * false and the engine animates them. */
+void beacon_scroll(BeaconBrowser *browser, BeaconTabId tab, float delta_x, float delta_y, bool precise);
 
 /* Page zoom, 1.0 = 100%, clamped to 0.25..5.0. Keep sending the view's UNZOOMED size to
  * beacon_set_viewport; zoom is applied on this side, so the two never drift apart. */

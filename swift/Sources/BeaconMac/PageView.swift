@@ -256,12 +256,16 @@ final class PageView: NSView, NSTextInputClient {
         // AppKit reports a wheel notch as ±1 lines and a trackpad as precise deltas; the
         // engine scrolls in CSS pixels, so lines are scaled and precise deltas passed
         // through. Signs are inverted: scrolling down moves the page up.
-        let step: Float = event.hasPreciseScrollingDeltas ? 1.0 : 40.0
+        //
+        // Precise deltas, momentum phase included, are already smooth, so the engine
+        // applies them as they come. Easing them again leaves the page trailing the fingers.
+        let precise = event.hasPreciseScrollingDeltas
+        let step: Float = precise ? 1.0 : 40.0
         let zoom = Float(browser.zoom(of: tab))
         let dx = -Float(event.scrollingDeltaX) * step / zoom
         let dy = -Float(event.scrollingDeltaY) * step / zoom
         guard dx != 0 || dy != 0 else { return }
-        browser.scroll(tab, dx: dx, dy: dy)
+        browser.scroll(tab, dx: dx, dy: dy, precise: precise)
     }
 
     /// Pinch to zoom, which on a Mac is how people expect to resize a page.

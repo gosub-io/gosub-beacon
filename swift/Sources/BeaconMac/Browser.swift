@@ -117,7 +117,9 @@ final class Browser {
     func mouseUp(_ tab: BeaconTabId, x: Float, y: Float, button: BeaconButton = BEACON_BUTTON_LEFT) {
         beacon_mouse_up(handle, tab, x, y, button)
     }
-    func scroll(_ tab: BeaconTabId, dx: Float, dy: Float) { beacon_scroll(handle, tab, dx, dy) }
+    func scroll(_ tab: BeaconTabId, dx: Float, dy: Float, precise: Bool) {
+        beacon_scroll(handle, tab, dx, dy, precise)
+    }
 
     // ── keyboard ──────────────────────────────────────────────────────────
 

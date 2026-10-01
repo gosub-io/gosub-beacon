@@ -317,7 +317,7 @@ int main(void) {
 
     /* Several notches, then let the engine re-render. */
     for (int i = 0; i < 12; i++) {
-        beacon_scroll(browser, tab, 0.0f, 120.0f);
+        beacon_scroll(browser, tab, 0.0f, 120.0f, false);
         sleep_ms(40);
         pump(browser);
     }
