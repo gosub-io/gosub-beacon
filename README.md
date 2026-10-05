@@ -105,6 +105,22 @@ Profile data (cookies, local storage, bookmarks/history, settings) ends up in
 `~/.local/share/gosub-beacon` on Linux and `~/Library/Application Support/gosub-beacon`
 on macOS.
 
+### Testing the renderer tier
+
+`scripts/isolation-smoke.sh` runs an `isolation` build twice under Xvfb against the
+fixture page in `tests/fixtures/isolation`, plain and `--isolated`, and checks the
+component processes, the log, the recorded page title (it comes back from the renderer
+process, so it proves the remote render) and that the two screenshots agree within a
+small antialiasing margin. CI runs it as the `isolation-smoke` job. Locally:
+
+```bash
+cargo build --bin gosub-beacon-gtk --no-default-features --features gtk,isolation
+xvfb-run -a -s "-screen 0 1400x900x24" scripts/isolation-smoke.sh
+```
+
+It needs `xvfb`, `xdotool`, ImageMagick and `python3`; artefacts (logs, screenshots, a
+diff image) land in the directory it prints.
+
 ### Running in a container
 
 To (re-)create a docker/podman image, you can use the supplied [Dockerfile](./Dockerfile) to build a local image with dependencies installed.

@@ -1,0 +1,10 @@
+body { margin: 0; font-family: sans-serif; color: #222; background: #fafafa; }
+.band { display: flex; align-items: center; gap: 16px; padding: 24px 32px; background: #2b3a67; color: #fff; }
+.band h1 { margin: 0; font-size: 28px; font-weight: normal; }
+main { padding: 24px 32px; max-width: 640px; }
+.lead { font-size: 18px; line-height: 1.5; }
+a { color: #a0306a; }
+ul { columns: 3; }
+form { margin-top: 24px; padding: 16px; border: 2px solid #2b3a67; border-radius: 6px; background: #fff; }
+input { font-size: 16px; padding: 4px 8px; }
+button { font-size: 16px; padding: 4px 16px; background: #a0306a; color: #fff; border: 0; }

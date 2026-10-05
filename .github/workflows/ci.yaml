@@ -83,6 +83,46 @@ jobs:
         working-directory: gosub-beacon
         run: cargo test --verbose --all --no-fail-fast --all-targets
 
+  # The renderer tier end to end: a plain and an `--isolated` run of the GTK binary under
+  # Xvfb against a fixture page, then the component processes, the log, the recorded
+  # title and a screenshot comparison. See scripts/isolation-smoke.sh.
+  isolation-smoke:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: gosub-beacon
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ env.ENGINE_REPO }}
+          ref: ${{ env.ENGINE_REF }}
+          path: gosub-engine
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install dependencies
+        run: |
+          sudo apt update -y
+          sudo apt install -y \
+            libgtk-4-dev libglib2.0-dev libcairo2-dev libgdk-pixbuf-2.0-dev libpango1.0-dev \
+            libsqlite3-dev libssl-dev pkg-config \
+            clang libclang-dev libgl-dev libegl-dev libfontconfig-dev libfreetype-dev \
+            xvfb xdotool imagemagick dbus
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: gosub-beacon
+          key: isolation
+      - name: Build (isolation feature)
+        working-directory: gosub-beacon
+        run: cargo build --verbose --bin gosub-beacon-gtk --no-default-features --features gtk,isolation
+      - name: Smoke test
+        working-directory: gosub-beacon
+        run: SMOKE_OUT=/tmp/smoke xvfb-run -a -s "-screen 0 1400x900x24" scripts/isolation-smoke.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: isolation-smoke
+          path: /tmp/smoke
+          if-no-files-found: ignore
+
   macos:
     runs-on: macos-14
     steps:

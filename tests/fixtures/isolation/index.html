@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Isolation smoke</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="band">
+    <img src="mark.png" alt="mark" width="48" height="48">
+    <h1>Isolation smoke</h1>
+  </header>
+  <main>
+    <p class="lead">This page exists so a script can tell whether a page renders the same
+      in Beacon's own process and in a sandboxed renderer process: a stylesheet, an image,
+      a link and a form, nothing that depends on the network beyond this origin.</p>
+    <p>Text in a <strong>bold</strong> run, an <em>italic</em> one, and a
+      <a href="second.html">link to a second page</a> that a later test can follow.</p>
+    <ul>
+      <li>one</li>
+      <li>two</li>
+      <li>three</li>
+    </ul>
+    <form action="second.html" method="get">
+      <label for="q">Field</label>
+      <input id="q" name="q" type="text" value="typed here">
+      <button type="submit">Go</button>
+    </form>
+  </main>
+</body>
+</html>
