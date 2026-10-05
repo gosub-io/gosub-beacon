@@ -86,9 +86,12 @@ pub enum BeaconEvent {
         step: Option<String>,
     },
 
-    /// A download was offered; the frontend should ask the user where to put it.
+    /// A download was offered; the frontend should ask the user where to put it. `offer`
+    /// goes back in `StartDownload` so the engine places the body it already spooled
+    /// instead of fetching the URL again.
     DownloadOffered {
         tab_id: TabId,
+        offer: gosub_engine::events::DownloadOfferId,
         url: String,
         suggested_filename: String,
         total_bytes: Option<u64>,

@@ -52,6 +52,7 @@ pub struct BeaconApp {
     beacon: Beacon,
     tabs: Arc<Mutex<GosubTabManager>>,
     event_rx: tokio::sync::broadcast::Receiver<EngineEvent>,
+    resource_rx: tokio::sync::broadcast::Receiver<gosub_engine::events::ResourceUpdate>,
 
     views: HashMap<TabId, TabView>,
     address_bar: String,
@@ -81,6 +82,9 @@ impl BeaconApp {
         let event_rx = engine
             .take_event_rx()
             .ok_or_else(|| anyhow::anyhow!("engine event stream already taken"))?;
+        let resource_rx = engine
+            .take_resource_rx()
+            .ok_or_else(|| anyhow::anyhow!("engine resource stream already taken"))?;
 
         // Repaint whenever a frame is composited. The compositor's notification is the only
         // thing that knows a page changed, so without this egui would idle and the page
@@ -104,6 +108,7 @@ impl BeaconApp {
             beacon,
             tabs,
             event_rx,
+            resource_rx,
             views: HashMap::new(),
             address_bar: String::new(),
             address_bar_focused: false,
@@ -226,6 +231,13 @@ impl BeaconApp {
 
     /// Drain everything the engine has said since the last frame.
     fn pump_engine(&mut self) {
+        loop {
+            match self.resource_rx.try_recv() {
+                Ok(update) => self.beacon.on_resource_update(update),
+                Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => continue,
+                Err(_) => break,
+            }
+        }
         loop {
             match self.event_rx.try_recv() {
                 Ok(event) => {

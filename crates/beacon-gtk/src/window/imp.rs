@@ -3309,7 +3309,15 @@ impl BrowserWindow {
         }
     }
 
-    pub(crate) fn save_download_as(&self, tab_id: TabId, url: String, suggested_name: &str) {
+    /// Ask where to save a download. With `offer` set (the engine offered it) the body it
+    /// already spooled is placed; without one (save link as) the URL is fetched.
+    pub(crate) fn save_download_as(
+        &self,
+        tab_id: TabId,
+        offer: Option<gosub_engine::events::DownloadOfferId>,
+        url: String,
+        suggested_name: &str,
+    ) {
         let handle = {
             let manager = self.tab_manager.lock().unwrap();
             manager.get_tab(tab_id).and_then(|t| t.tab_handle())
@@ -3335,6 +3343,7 @@ impl BrowserWindow {
                         id: gosub_engine::events::DownloadId(id),
                         url,
                         target_path: path,
+                        offer,
                     })
                     .await;
             });
@@ -3966,6 +3975,7 @@ impl BrowserWindow {
 
         let redraw_rx = engine.take_redraw_rx();
         let event_rx = engine.take_event_rx();
+        let resource_rx = engine.take_resource_rx();
         *self.engine.borrow_mut() = Some(engine);
 
         // Repaint all render areas whenever a new frame is composited.
@@ -3982,6 +3992,27 @@ impl BrowserWindow {
 
         // The bookmarks bar renders from the store as soon as the engine exists.
         self.rebuild_bookmarks_bar();
+
+        // Per-resource fetch detail feeds the developer panel's request log and nothing
+        // else, so it is drained straight into core without a window round trip.
+        if let Some(mut resource_rx) = resource_rx {
+            let weak = self.obj().downgrade();
+            glib::spawn_future_local(async move {
+                loop {
+                    match resource_rx.recv().await {
+                        Ok(update) => {
+                            if let Some(win) = weak.upgrade() {
+                                win.imp().beacon.borrow_mut().on_resource_update(update);
+                            } else {
+                                break;
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+            });
+        }
 
         // Route engine events (navigation, redraw, …) to the window.
         if let Some(mut event_rx) = event_rx {
@@ -4148,10 +4179,11 @@ impl BrowserWindow {
             }
             BeaconEvent::DownloadOffered {
                 tab_id,
+                offer,
                 url,
                 suggested_filename,
                 ..
-            } => self.save_download_as(tab_id, url, &suggested_filename),
+            } => self.save_download_as(tab_id, Some(offer), url, &suggested_filename),
             BeaconEvent::DownloadChanged(_) => self.refresh_downloads(),
             BeaconEvent::PickerRequested {
                 tab_id,
