@@ -14,6 +14,9 @@ gosub_render_pipeline.workspace = true
 # For the picker's colour model: the engine's own CSS named-colour table.
 gosub_shared.workspace = true
 gosub_renderer_skia.workspace = true
+# For `CosmicFontSystem` (the `isolation` feature): a font system the engine can confine
+# fully, so isolated renderers get a warmed fork server instead of a fresh process per render.
+gosub_fontmanager.workspace = true
 
 skia-safe.workspace = true
 gtk4.workspace = true
@@ -31,6 +34,15 @@ pure-rust-locales.workspace = true
 tokio.workspace = true
 url.workspace = true
 uuid.workspace = true
+
+[features]
+# The engine's renderer tier for `--isolated` (Linux). Switches the font system to
+# cosmic-text, which the engine can confine fully, and compiles in the Cairo tile
+# rasterizer that isolated renderers draw with. Off by default: cosmic shapes and
+# justifies text differently from Skia's own font system, and the default build must
+# render as it always has. Without it `--isolated` still runs the network, vault and
+# decoder processes; pages render in-process.
+isolation = ["gosub_engine/cairo-tiles"]
 
 # EGL is how Skia binds the GL context on Wayland/X11; macOS uses CGL natively.
 [target.'cfg(not(target_os = "macos"))'.dependencies]

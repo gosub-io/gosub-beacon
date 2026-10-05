@@ -29,6 +29,22 @@ fn runtime() -> &'static Runtime {
 
 /// Start Beacon under GTK. Blocks until the last window closes.
 pub fn run() {
+    // Must come first: the engine starts each component process by re-executing this
+    // binary with a role argument, and a child must reach its role before any of Beacon's
+    // startup runs. In Beacon itself this returns at once.
+    gosub_engine::child_process::dispatch_with::<crate::render::GtkConfig>();
+
+    // Parse argv next: `--help` / `--version` must answer cleanly, without a display, and
+    // the lockdown below needs `--user-data-dir`. Everything downstream reads the parsed
+    // result rather than re-scanning argv.
+    let cli = beacon_core::cli::Cli::init();
+
+    // Before any thread, the logger or the engine exist: confine this process to what it
+    // writes. Behind the same flag as the component processes, for now.
+    if cli.isolated {
+        beacon_core::isolation::lock_down_broker();
+    }
+
     // `build()` rather than `init()`: the logger is handed to beacon-core, which installs
     // it wrapped so every record it accepts is also kept for the developer pane. colog still
     // decides what the terminal sees; the pane just gets a copy.
@@ -64,10 +80,6 @@ pub fn run() {
     // be at least as permissive as colog's own filtering -- which is what `filter()` reports.
     let max_level = logger.filter();
     beacon_core::devtools::install_logger(Box::new(logger), max_level);
-
-    // Parse argv first: `--help` / `--version` must answer cleanly, without a display.
-    // Everything downstream reads the parsed result rather than re-scanning argv.
-    let cli = beacon_core::cli::Cli::init();
 
     gtk4::init().unwrap();
 

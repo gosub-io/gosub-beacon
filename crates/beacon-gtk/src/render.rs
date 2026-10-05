@@ -17,7 +17,21 @@ use gosub_render_pipeline::render::backend::{anchored_tile_pos, ExternalHandle};
 use gosub_render_pipeline::render::DefaultCompositor;
 
 /// The render configuration this frontend runs: Skia rasterization, Skia font system.
+#[cfg(not(feature = "isolation"))]
 pub type GtkConfig = gosub_engine::DefaultRenderConfig<gosub_renderer_skia::SkiaBackend, gosub_renderer_skia::SkiaFontSystem>;
+
+/// The render configuration of an `isolation` build: Skia rasterization, cosmic-text fonts.
+///
+/// Cosmic rather than Skia's own font system because of the renderer tier (`--isolated`):
+/// the engine confines a renderer process fully only for a font system that never touches
+/// font files while it works (`Confinement::Full`: cosmic-text, Parley). Skia's is
+/// fontconfig-backed and would get the exec-per-render tier instead: a fresh process that
+/// re-parses the page for every scroll and keystroke. Layout measures with cosmic in both
+/// modes; in-process Skia still draws text through its own text layout, isolated
+/// renderers draw with Cairo and cosmic. That is why this is a build feature and not the
+/// default: cosmic shapes and justifies text differently, visible in every render.
+#[cfg(feature = "isolation")]
+pub type GtkConfig = gosub_engine::DefaultRenderConfig<gosub_renderer_skia::SkiaBackend, gosub_fontmanager::CosmicFontSystem>;
 
 /// The engine, specialised for this frontend.
 pub type BrowserEngine = beacon_core::engine::BrowserEngine<GtkConfig>;

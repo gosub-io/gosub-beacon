@@ -25,6 +25,13 @@ pub struct Cli {
     /// session). Useful for a scratch profile that leaves the real one alone.
     #[arg(long, value_name = "DIR")]
     pub user_data_dir: Option<PathBuf>,
+
+    /// Run the engine's component processes (network stack, cookie vault, image decoders,
+    /// per-site page renderers) and confine this process to its profile directory. Linux
+    /// only; elsewhere the engine says what cannot apply and runs in-process. For this run
+    /// only: the stored `security.process_isolation` setting is left alone.
+    #[arg(long)]
+    pub isolated: bool,
 }
 
 static CLI: OnceLock<Cli> = OnceLock::new();

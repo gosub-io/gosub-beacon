@@ -21,6 +21,16 @@ fn runtime() -> &'static Runtime {
 
 /// Start Beacon under egui. Blocks until the window closes.
 pub fn run() {
+    // Must come first: the engine starts each component process by re-executing this
+    // binary with a role argument, and a child must reach its role before any of Beacon's
+    // startup runs. In Beacon itself this returns at once. `--isolated` gets this frontend
+    // the network, vault and decoder processes; the renderer tier does not apply, because
+    // Vello presents a GPU texture and isolated renderers produce CPU tiles.
+    gosub_engine::child_process::dispatch_with::<app::EguiConfig>();
+    if beacon_core::cli::Cli::init().isolated {
+        beacon_core::isolation::lock_down_broker();
+    }
+
     // RUST_LOG wins when it is set, so a diagnostic run needs no rebuild:
     //   RUST_LOG=beacon_egui=debug ./gosub-beacon-egui https://example.org
     let mut builder = colog::basic_builder();

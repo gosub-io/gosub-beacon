@@ -745,6 +745,7 @@ dependencies = [
  "colog",
  "glib-build-tools",
  "gosub_engine",
+ "gosub_fontmanager",
  "gosub_render_pipeline",
  "gosub_renderer_skia",
  "gosub_shared",
@@ -965,6 +966,7 @@ checksum = "5cc8d9aa793480744cd9a0524fef1a2e197d9eaa0f739cde19d16aba530dcb95"
 dependencies = [
  "bitflags 2.13.1",
  "cairo-sys-rs",
+ "freetype-rs",
  "glib 0.22.8",
  "libc",
 ]
@@ -2205,6 +2207,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "freetype-rs"
+version = "0.38.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6d228d6de56c90dd7585341f341849441b3490180c62d27133e525eb726809b4"
+dependencies = [
+ "bitflags 2.13.1",
+ "freetype-sys",
+ "libc",
+]
+
+[[package]]
+name = "freetype-sys"
+version = "0.23.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eab537ce43cab850c64b4cdc390ce7e4f47f877485ddc323208e268280c308ae"
+dependencies = [
+ "cc",
+ "libz-sys",
+ "pkg-config",
+]
+
+[[package]]
 name = "fs_extra"
 version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2829,6 +2853,7 @@ dependencies = [
  "gosub_interface",
  "gosub_ipc",
  "gosub_render_pipeline",
+ "gosub_renderer_cairo",
  "gosub_sandbox",
  "gosub_shared",
  "http",
@@ -2946,6 +2971,20 @@ dependencies = [
  "stacker",
  "taffy",
  "url",
+]
+
+[[package]]
+name = "gosub_renderer_cairo"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "cairo-rs",
+ "freetype-rs",
+ "gosub_interface",
+ "gosub_render_pipeline",
+ "log",
+ "parking_lot",
+ "resvg",
 ]
 
 [[package]]
@@ -3944,6 +3983,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "85bc9657773828b90eeb625adff10eeac83cc21bbfd8e23a03eaa8a33c9e28d9"
 dependencies = [
  "cc",
+ "libc",
  "pkg-config",
  "vcpkg",
 ]

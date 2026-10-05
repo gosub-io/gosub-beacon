@@ -297,6 +297,17 @@ impl Beacon {
                 ]
             }
 
+            // A renderer process (one per site) died or could not start. The engine replaces
+            // it on the tabs' next render, so they recover on their own; until then they are
+            // blank by design. When the error names the fork server the tab could not be
+            // rendered at all, which is the engine's "no fallback for page content" rule.
+            EngineEvent::RendererCrashed { site, tabs, error, .. } => {
+                vec![BeaconEvent::Log(format!(
+                    "Renderer for {site} crashed ({} tab(s), replaced on the next render): {error}",
+                    tabs.len()
+                ))]
+            }
+
             EngineEvent::DownloadRequested {
                 tab_id,
                 offer,

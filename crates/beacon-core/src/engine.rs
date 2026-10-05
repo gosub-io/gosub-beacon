@@ -132,6 +132,19 @@ impl<C: BeaconConfig> BrowserEngine<C> {
             }
         }
 
+        // The process tier is behind `--isolated` for now, so a plain run stays the
+        // single-process engine it always was. Set for this run rather than stored: the
+        // engine's own defaults (and the user's `security.process_isolation` choice in
+        // gosub://config) only take effect once this gating comes off. Must land before
+        // start(), which reads the process settings once.
+        // The renderer tier needs more than the switch: a forked rasterizer and a font
+        // system the engine can confine fully, both of which only the GTK frontend's
+        // `isolation` build feature provides. Without them the engine says so at start
+        // and keeps page rendering in-process; the switch still gets the other processes.
+        engine
+            .set_process_isolation_for_this_run(crate::cli::Cli::global().isolated)
+            .map_err(|e| anyhow::anyhow!("security.process_isolation: {e:?}"))?;
+
         // start() hands back the engine main-loop future; it only runs once spawned.
         let engine_loop = engine.start().map_err(|e| anyhow::anyhow!("engine start: {e:?}"))?;
         tokio::spawn(engine_loop);
