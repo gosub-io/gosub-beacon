@@ -11,21 +11,44 @@
     <h1>Isolation smoke</h1>
   </header>
   <main>
-    <p class="lead">This page exists so a script can tell whether a page renders the same
-      in Beacon's own process and in a sandboxed renderer process: a stylesheet, an image,
-      a link and a form, nothing that depends on the network beyond this origin.</p>
-    <p>Text in a <strong>bold</strong> run, an <em>italic</em> one, and a
-      <a href="second.html">link to a second page</a> that a later test can follow.</p>
+    <!-- The targets are large and sit at fixed CSS offsets below the band, so the test
+         script can click them by position: the input spans 120..200 px below the band's
+         top edge, the link 224..424. Keep the geometry if you edit this page. -->
+    <input id="q" name="q" type="text" class="target" placeholder="type here">
+    <a href="second.html" class="target link">Link to a second page</a>
+    <p class="lead">This page exists so a script can tell whether a page renders and reacts
+      the same in Beacon's own process and in a sandboxed renderer process: a stylesheet, an
+      image, a field, a link, and enough text below to scroll.</p>
+    <p>Text in a <strong>bold</strong> run and an <em>italic</em> one.</p>
     <ul>
       <li>one</li>
       <li>two</li>
       <li>three</li>
     </ul>
-    <form action="second.html" method="get">
-      <label for="q">Field</label>
-      <input id="q" name="q" type="text" value="typed here">
-      <button type="submit">Go</button>
-    </form>
+    <p class="filler">Filler paragraph 1 of 24, here so the page is taller than the window.</p>
+    <p class="filler">Filler paragraph 2 of 24, here so the page is taller than the window.</p>
+    <p class="filler">Filler paragraph 3 of 24, here so the page is taller than the window.</p>
+    <p class="filler">Filler paragraph 4 of 24, here so the page is taller than the window.</p>
+    <p class="filler">Filler paragraph 5 of 24, here so the page is taller than the window.</p>
+    <p class="filler">Filler paragraph 6 of 24, here so the page is taller than the window.</p>
+    <p class="filler">Filler paragraph 7 of 24, here so the page is taller than the window.</p>
+    <p class="filler">Filler paragraph 8 of 24, here so the page is taller than the window.</p>
+    <p class="filler">Filler paragraph 9 of 24, here so the page is taller than the window.</p>
+    <p class="filler">Filler paragraph 10 of 24, here so the page is taller than the window.</p>
+    <p class="filler">Filler paragraph 11 of 24, here so the page is taller than the window.</p>
+    <p class="filler">Filler paragraph 12 of 24, here so the page is taller than the window.</p>
+    <p class="filler">Filler paragraph 13 of 24, here so the page is taller than the window.</p>
+    <p class="filler">Filler paragraph 14 of 24, here so the page is taller than the window.</p>
+    <p class="filler">Filler paragraph 15 of 24, here so the page is taller than the window.</p>
+    <p class="filler">Filler paragraph 16 of 24, here so the page is taller than the window.</p>
+    <p class="filler">Filler paragraph 17 of 24, here so the page is taller than the window.</p>
+    <p class="filler">Filler paragraph 18 of 24, here so the page is taller than the window.</p>
+    <p class="filler">Filler paragraph 19 of 24, here so the page is taller than the window.</p>
+    <p class="filler">Filler paragraph 20 of 24, here so the page is taller than the window.</p>
+    <p class="filler">Filler paragraph 21 of 24, here so the page is taller than the window.</p>
+    <p class="filler">Filler paragraph 22 of 24, here so the page is taller than the window.</p>
+    <p class="filler">Filler paragraph 23 of 24, here so the page is taller than the window.</p>
+    <p class="filler">Filler paragraph 24 of 24, the last one.</p>
   </main>
 </body>
 </html>

@@ -196,6 +196,14 @@ pub const SHORTCUTS: &[Shortcut] = &[
         subtitle: None,
     },
     Shortcut {
+        action: "app.toggle-activity",
+        title: "Show what the engine is doing",
+        group: "Window",
+        accels: "<Primary><Shift>A",
+        scope: Scope::Window,
+        subtitle: Some("Four status lines over the page with a running clock"),
+    },
+    Shortcut {
         action: "app.toggle-dark-mode",
         title: "Toggle dark mode",
         group: "Window",

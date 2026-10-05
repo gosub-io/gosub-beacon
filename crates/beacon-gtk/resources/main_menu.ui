@@ -66,6 +66,10 @@
                     <attribute name="label">Show Bookmarks Bar</attribute>
                     <attribute name="action">app.toggle-bookmarks-bar</attribute>
                 </item>
+                <item>
+                    <attribute name="label">Show Activity</attribute>
+                    <attribute name="action">app.toggle-activity</attribute>
+                </item>
             </section>
             <section>
                 <item>

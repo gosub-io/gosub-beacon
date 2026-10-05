@@ -1,10 +1,10 @@
 body { margin: 0; font-family: sans-serif; color: #222; background: #fafafa; }
-.band { display: flex; align-items: center; gap: 16px; padding: 24px 32px; background: #2b3a67; color: #fff; }
+.band { display: flex; align-items: center; gap: 16px; padding: 24px 32px; height: 48px; background: #2b3a67; color: #fff; }
 .band h1 { margin: 0; font-size: 28px; font-weight: normal; }
 main { padding: 24px 32px; max-width: 640px; }
+.target { display: block; box-sizing: border-box; width: 100%; height: 80px; margin: 0 0 24px 0; font-size: 20px; }
+input.target { padding: 0 16px; border: 2px solid #2b3a67; background: #fff; }
+.link { height: 200px; line-height: 200px; text-align: center; background: #a0306a; color: #fff; text-decoration: none; }
 .lead { font-size: 18px; line-height: 1.5; }
-a { color: #a0306a; }
 ul { columns: 3; }
-form { margin-top: 24px; padding: 16px; border: 2px solid #2b3a67; border-radius: 6px; background: #fff; }
-input { font-size: 16px; padding: 4px 8px; }
-button { font-size: 16px; padding: 4px 16px; background: #a0306a; color: #fff; border: 0; }
+.filler { line-height: 1.6; }

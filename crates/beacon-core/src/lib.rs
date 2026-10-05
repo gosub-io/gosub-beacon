@@ -5,6 +5,7 @@
 //! decide *what* to show, with no opinion about *how*. Nothing in this crate may depend
 //! on GTK, egui, winit or any other toolkit; that constraint is the whole point.
 
+pub mod activity;
 pub mod address_parser;
 pub mod beacon;
 pub mod cli;

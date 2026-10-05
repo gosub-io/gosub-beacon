@@ -4,13 +4,14 @@
 # in-process path paints?
 #
 # Two runs of the same binary against a fixture page served from 127.0.0.1, both under
-# Xvfb: a plain run and an `--isolated` run. The plain run must stay single-process. The
+# Xvfb: a plain run and an `--isolated` run. Each run also types into a field, scrolls
+# down and back, and follows a link, with a capture after every step. The plain run must stay single-process. The
 # isolated run must show the network, vault, fork server and a renderer process, log the
 # fork server as ready at the Full tier, record the page title (it comes back from the
 # renderer, so it proves the remote render completed) and crash nothing. Then the two
-# screenshots are compared: the remote renderer rasterizes with Cairo where the in-process
-# path uses Skia, so antialiasing differs by a few pixels per glyph edge and the check is
-# a share of differing pixels under a colour fuzz, not an exact match.
+# screenshots of every step are compared: the remote renderer rasterizes with Cairo where
+# the in-process path uses Skia, so antialiasing differs by a few pixels per glyph edge
+# and the check is a share of differing pixels under a colour fuzz, not an exact match.
 #
 # Needs: a binary built with `--features isolation` (Linux), Xvfb (or a DISPLAY to use),
 # xdotool, ImageMagick (`import`, `compare`), python3. Run it under `xvfb-run -a` in CI.
@@ -27,6 +28,13 @@ FIXTURE_DIR=$(cd "$(dirname "$0")/.." && pwd)/tests/fixtures/isolation
 OUT=${SMOKE_OUT:-$(mktemp -d /tmp/beacon-smoke.XXXXXX)}
 MAX_DIFF=${SMOKE_MAX_DIFF:-0.02}
 EXPECTED_TITLE="Isolation smoke"
+SECOND_TITLE="Isolation smoke, page two"
+# The fixture's targets, in CSS px below the band's top edge and right of its left edge
+# (see tests/fixtures/isolation/index.html). Xvfb renders at DPR 1, so CSS px are pixels.
+FIELD_Y=160
+LINK_Y=324
+TARGET_X=200
+STEPS="initial typed scrolled restored page2"
 mkdir -p "$OUT"
 
 failures=0
@@ -120,14 +128,60 @@ print(f"{ae / (w * h):.5f}")
 EOF
 }
 
-# Run the binary in one mode until the page has rendered and the screen has settled,
-# capture it, and stop it. Sets $log, $shot, $profile for the caller.
+# Capture the root window once the screen has settled: two captures a second apart
+# that differ in almost nothing (a caret may blink between them).
+settle_capture() {
+    local out=$1 prev="$1.prev.png" i
+    import -window root "$prev"
+    for i in $(seq 1 30); do
+        sleep 1
+        import -window root "$out"
+        if python3 -c "import sys; sys.exit(0 if float('$(diff_share "$prev" "$out")') <= 0.0005 else 1)"; then
+            break
+        fi
+        mv "$out" "$prev"
+    done
+    [ -f "$out" ] || mv "$prev" "$out"
+    rm -f "$prev"
+    note "settled after ${i} s: $(basename "$out")"
+}
+
+# Where the page's band starts in the capture: its first row and column with the band
+# colour, which is where the fixture's CSS offsets are measured from.
+page_origin() {
+    local capture=$1
+    PAGE_TOP=$(convert "$capture" -crop 1x900+700+0 +repage txt:- | grep -m1 -n '#2B3A67' | cut -d: -f1)
+    PAGE_TOP=$((PAGE_TOP - 2))
+    PAGE_LEFT=$(convert "$capture" -crop 1400x1+0+$((PAGE_TOP + 10)) +repage txt:- | grep -m1 -n '#2B3A67' | cut -d: -f1)
+    PAGE_LEFT=$((PAGE_LEFT - 2))
+}
+
+# Wait until the profile records `title` and the window shows it.
+wait_for_title() {
+    local title=$1 i found=""
+    for i in $(seq 1 90); do
+        [ "$(recorded_title "$profile")" = "$title" ] && found=1 && break
+        sleep 1
+    done
+    [ -n "$found" ] || return 1
+    local wid
+    wid=$(xdotool search --name 'Gosub Beacon' 2>/dev/null | tail -1)
+    for i in $(seq 1 30); do
+        case $(xdotool getwindowname "$wid" 2>/dev/null) in
+            *"$title"*) break ;;
+        esac
+        sleep 1
+    done
+    return 0
+}
+
+# Run the binary in one mode through every step, capturing each, and stop it. Sets $log
+# and $profile for the caller; captures land at $OUT/$mode-$step.png.
 run_mode() {
     local mode=$1
     shift
     profile="$OUT/profile-$mode"
     log="$OUT/$mode.log"
-    shot="$OUT/$mode.png"
     rm -rf "$profile"
     mkdir -p "$profile"
 
@@ -137,7 +191,7 @@ run_mode() {
     local launcher=()
     command -v dbus-run-session >/dev/null && launcher=(dbus-run-session --)
     BEACON_LOG=info GDK_BACKEND=x11 setsid "${launcher[@]}" "$BIN" "$@" --user-data-dir "$profile" "$URL" >"$log" 2>&1 &
-    local pgid=$!
+    pgid=$!
     cleanup_pids+=("$pgid")
 
     local i
@@ -149,28 +203,11 @@ run_mode() {
         fail "$mode: no window after 60 s"
     fi
 
-    local title=""
-    for i in $(seq 1 90); do
-        title=$(recorded_title "$profile")
-        [ "$title" = "$EXPECTED_TITLE" ] && break
-        sleep 1
-    done
-    if [ "$title" = "$EXPECTED_TITLE" ]; then
-        pass "$mode: page title recorded after ${i} s (the render completed)"
+    if wait_for_title "$EXPECTED_TITLE"; then
+        pass "$mode: page title recorded (the render completed)"
     else
-        fail "$mode: title not recorded within 90 s (got '${title}')"
+        fail "$mode: title not recorded within 90 s (got '$(recorded_title "$profile")')"
     fi
-
-    # The chrome shows the title a moment after it is recorded; wait for it so the two
-    # captures compare the same window state.
-    local wid
-    wid=$(xdotool search --name 'Gosub Beacon' 2>/dev/null | tail -1)
-    for i in $(seq 1 30); do
-        case $(xdotool getwindowname "$wid" 2>/dev/null) in
-            *"$EXPECTED_TITLE"*) break ;;
-        esac
-        sleep 1
-    done
 
     # The caller's checks on the live process tree.
     if [ "$mode" = isolated ]; then
@@ -179,20 +216,54 @@ run_mode() {
         check_plain_tree
     fi
 
-    # Settled: two consecutive captures a second apart agree exactly.
-    local prev="$OUT/$mode-prev.png"
-    import -window root "$prev"
-    for i in $(seq 1 30); do
-        sleep 1
-        import -window root "$shot"
-        if [ "$(compare -metric AE "$prev" "$shot" /dev/null 2>&1 | tr -d '\n')" = "0" ]; then
-            break
-        fi
-        mv "$shot" "$prev"
-    done
-    [ -f "$shot" ] || mv "$prev" "$shot"
-    rm -f "$prev"
-    note "$mode: screen settled after ${i} s"
+    settle_capture "$OUT/$mode-initial.png"
+    page_origin "$OUT/$mode-initial.png"
+    if [ "$PAGE_TOP" -le 0 ] || [ "$PAGE_LEFT" -lt 0 ]; then
+        fail "$mode: the page band was not found in the capture; skipping interaction"
+        kill -TERM -- "-$pgid" 2>/dev/null
+        return
+    fi
+    note "$mode: page at $PAGE_LEFT,$PAGE_TOP"
+
+    # Type into the field.
+    xdotool mousemove $((PAGE_LEFT + TARGET_X)) $((PAGE_TOP + FIELD_Y)) click 1
+    sleep 0.5
+    xdotool type --delay 80 "hello"
+    settle_capture "$OUT/$mode-typed.png"
+    if [ "$(diff_share "$OUT/$mode-initial.png" "$OUT/$mode-typed.png")" = "0.00000" ]; then
+        fail "$mode: typing changed nothing on screen"
+    else
+        pass "$mode: typing into the field repainted"
+    fi
+
+    # Scroll down three notches, then back up.
+    xdotool mousemove $((PAGE_LEFT + 700)) $((PAGE_TOP + 600)) click --repeat 3 --delay 150 5
+    settle_capture "$OUT/$mode-scrolled.png"
+    local moved
+    moved=$(diff_share "$OUT/$mode-typed.png" "$OUT/$mode-scrolled.png")
+    if python3 -c "import sys; sys.exit(0 if float('$moved') >= 0.02 else 1)"; then
+        pass "$mode: the page scrolled (differing pixels: $moved)"
+    else
+        fail "$mode: the page did not scroll (differing pixels: $moved)"
+    fi
+    xdotool click --repeat 3 --delay 150 4
+    settle_capture "$OUT/$mode-restored.png"
+    local back
+    back=$(diff_share "$OUT/$mode-typed.png" "$OUT/$mode-restored.png")
+    if python3 -c "import sys; sys.exit(0 if float('$back') <= float('$MAX_DIFF') else 1)"; then
+        pass "$mode: scrolling back restored the page (differing pixels: $back)"
+    else
+        fail "$mode: scrolling back did not restore the page (differing pixels: $back)"
+    fi
+
+    # Follow the link.
+    xdotool mousemove $((PAGE_LEFT + TARGET_X)) $((PAGE_TOP + LINK_Y)) click 1
+    if wait_for_title "$SECOND_TITLE"; then
+        pass "$mode: the link navigated to the second page"
+    else
+        fail "$mode: the second page's title was not recorded within 90 s"
+    fi
+    settle_capture "$OUT/$mode-page2.png"
 
     kill -TERM -- "-$pgid" 2>/dev/null
     for i in $(seq 1 20); do
@@ -202,7 +273,10 @@ run_mode() {
     kill -KILL -- "-$pgid" 2>/dev/null
 }
 
-procs() { ps -eo comm= ; }
+# The processes of the run under test only: everything in its session (it was started
+# with setsid, and the engine's children inherit the session), so a Beacon running on
+# the desktop at the same time does not count.
+procs() { ps -o comm= -s "$pgid" 2>/dev/null; }
 
 check_plain_tree() {
     if procs | grep -qE '^(gosub-net|gosub-vault|gosub-forksrv|renderer-)'; then
@@ -253,7 +327,6 @@ check_log() {
 
 echo "== plain run"
 run_mode plain
-plain_shot=$shot
 check_log plain "$log" \
     "security.process_isolation is off" \
     '!network stack running in a separate' \
@@ -262,7 +335,6 @@ check_log plain "$log" \
 
 echo "== isolated run"
 run_mode isolated --isolated
-iso_shot=$shot
 check_log isolated "$log" \
     "network stack running in a separate, sandboxed process" \
     "renderer fork server ready (confinement tier: Full)" \
@@ -276,14 +348,20 @@ if grep -q 'no forked_tile_rasterizer' "$log"; then
 fi
 
 echo "== compare"
-if [ -f "$plain_shot" ] && [ -f "$iso_shot" ]; then
-    share=$(diff_share "$plain_shot" "$iso_shot" "$OUT/diff.png")
-    if python3 -c "import sys; sys.exit(0 if float('$share') <= float('$MAX_DIFF') else 1)"; then
-        pass "isolated render matches the in-process one (differing pixels: $share, limit $MAX_DIFF)"
-    else
-        fail "isolated render differs from the in-process one (differing pixels: $share, limit $MAX_DIFF); see $OUT/diff.png"
+for step in $STEPS; do
+    plain_shot="$OUT/plain-$step.png"
+    iso_shot="$OUT/isolated-$step.png"
+    if [ ! -f "$plain_shot" ] || [ ! -f "$iso_shot" ]; then
+        fail "$step: a capture is missing"
+        continue
     fi
-fi
+    share=$(diff_share "$plain_shot" "$iso_shot" "$OUT/diff-$step.png")
+    if python3 -c "import sys; sys.exit(0 if float('$share') <= float('$MAX_DIFF') else 1)"; then
+        pass "$step: isolated matches in-process (differing pixels: $share, limit $MAX_DIFF)"
+    else
+        fail "$step: isolated differs from in-process (differing pixels: $share, limit $MAX_DIFF); see $OUT/diff-$step.png"
+    fi
+done
 
 if [ "$failures" -eq 0 ]; then
     echo "== OK (artefacts in $OUT)"

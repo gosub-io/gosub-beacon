@@ -292,6 +292,16 @@ impl BrowserWindow {
         });
         app.add_action(&bookmarks_bar_action);
 
+        let activity_action = SimpleAction::new_stateful("toggle-activity", None, &false.to_variant());
+        activity_action.connect_activate({
+            let app = app.clone();
+            move |action, _| {
+                let Some(window) = BrowserWindow::action_target(&app) else { return };
+                action.set_state(&window.imp().toggle_activity().to_variant());
+            }
+        });
+        app.add_action(&activity_action);
+
         // One parameterised action for the four developer-pane tabs, so the menu can name
         // them the way the Mac's View menu does.
         let devtools_page_action = SimpleAction::new("devtools-page", Some(&String::static_variant_type()));

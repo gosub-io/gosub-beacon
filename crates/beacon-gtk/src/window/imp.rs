@@ -161,6 +161,13 @@ pub struct BrowserWindow {
     pub devtools_height: Cell<i32>,
     #[template_child]
     pub statusbar: TemplateChild<gtk4::Label>,
+    /// The activity strip over the page (View > Show Activity), its model, the telemetry
+    /// subscription that feeds it while it shows, and the tick that redraws it.
+    #[template_child]
+    pub activity_strip: TemplateChild<gtk4::Label>,
+    pub activity: RefCell<beacon_core::activity::Activity>,
+    pub activity_rx: RefCell<Option<tokio::sync::broadcast::Receiver<Arc<gosub_engine::telemetry::Event>>>>,
+    pub activity_tick: RefCell<Option<glib::SourceId>>,
     #[template_child]
     pub btn_downloads: TemplateChild<gtk4::MenuButton>,
     #[template_child]
@@ -284,6 +291,10 @@ impl Default for BrowserWindow {
             devtools_height: Cell::new(260),
             log_list: TemplateChild::default(),
             statusbar: TemplateChild::default(),
+            activity_strip: TemplateChild::default(),
+            activity: RefCell::new(beacon_core::activity::Activity::default()),
+            activity_rx: RefCell::new(None),
+            activity_tick: RefCell::new(None),
             btn_downloads: TemplateChild::default(),
             btn_bookmark: TemplateChild::default(),
             bookmark_icon: TemplateChild::default(),
@@ -647,6 +658,56 @@ impl BrowserWindow {
             glib::ControlFlow::Continue
         });
         *self.devtools_tick.borrow_mut() = Some(source);
+    }
+
+    /// Show or hide the activity strip, and answer whether it is now showing.
+    ///
+    /// Showing it subscribes to the engine's telemetry bus, which is what makes the
+    /// engine announce its stages at all; hiding drops the subscription, so a page
+    /// browsed without the strip costs nothing extra.
+    pub(crate) fn toggle_activity(&self) -> bool {
+        let showing = !self.activity_strip.get_visible();
+        if let Some(source) = self.activity_tick.borrow_mut().take() {
+            source.remove();
+        }
+        if !showing {
+            self.activity_strip.set_visible(false);
+            *self.activity_rx.borrow_mut() = None;
+            *self.activity.borrow_mut() = beacon_core::activity::Activity::default();
+            return false;
+        }
+        *self.activity_rx.borrow_mut() = Some(gosub_engine::telemetry::subscribe());
+        self.activity_strip.set_text("");
+        self.activity_strip.set_visible(true);
+        self.refresh_activity();
+        let window = self.obj().clone();
+        // Ten times a second: the clocks read in tenths, and a stage shorter than that is
+        // not what anyone is watching for.
+        let source = glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
+            window.imp().refresh_activity();
+            glib::ControlFlow::Continue
+        });
+        *self.activity_tick.borrow_mut() = Some(source);
+        true
+    }
+
+    /// One tick of the activity strip: drain what the engine said since the last one,
+    /// bring the network lines in step with the request log, and redraw.
+    fn refresh_activity(&self) {
+        let now = std::time::Instant::now();
+        let mut activity = self.activity.borrow_mut();
+        if let Some(rx) = self.activity_rx.borrow_mut().as_mut() {
+            loop {
+                match rx.try_recv() {
+                    Ok(event) => activity.on_telemetry(&event.kind, &event.data, now),
+                    Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => continue,
+                    Err(_) => break,
+                }
+            }
+        }
+        let tab = self.beacon.borrow().active();
+        activity.sync_requests(&beacon_core::devtools::requests(tab), now);
+        self.activity_strip.set_text(&activity.lines(now).join("\n"));
     }
 
     /// Show or hide the bookmarks bar, and answer whether it is now showing.

@@ -105,13 +105,28 @@ Profile data (cookies, local storage, bookmarks/history, settings) ends up in
 `~/.local/share/gosub-beacon` on Linux and `~/Library/Application Support/gosub-beacon`
 on macOS.
 
+### Watching what the engine is doing
+
+View > Show Activity (Ctrl+Shift+A) puts up to four status lines over the page, each with
+a running clock: the document request as it resolves, connects, waits and receives; the
+page's other fetches folded into one line; and the engine's stages as they run (parsing,
+the render tree, layout, tiling, raster, paint) or, under `--isolated`, the render pass in
+the site's process with the renderer's own lap times when it answers. Finished lines stay
+a moment with their total, then go. The strip always has four lines; a line keeps its place until it is done, and when
+more is going on than fits, the oldest keep their lines and the last says how many more.
+It costs nothing while hidden: showing it is what makes the engine announce its stages.
+Under `--isolated` the network lines are missing for now, because requests through the
+network process do not report back to the request log yet.
+
 ### Testing the renderer tier
 
 `scripts/isolation-smoke.sh` runs an `isolation` build twice under Xvfb against the
 fixture page in `tests/fixtures/isolation`, plain and `--isolated`, and checks the
-component processes, the log, the recorded page title (it comes back from the renderer
-process, so it proves the remote render) and that the two screenshots agree within a
-small antialiasing margin. CI runs it as the `isolation-smoke` job. Locally:
+component processes, the log and the recorded page title (it comes back from the
+renderer process, so it proves the remote render). Each run then types into the page's
+field, scrolls down and back, and follows its link; after every step the two runs'
+screenshots must agree within a small antialiasing margin, and scrolling back must
+restore the page exactly. CI runs it as the `isolation-smoke` job. Locally:
 
 ```bash
 cargo build --bin gosub-beacon-gtk --no-default-features --features gtk,isolation

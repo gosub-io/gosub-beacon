@@ -48,6 +48,8 @@ pure-rust-locales = "0.8.2"
 reqwest = { version = "0.12.11", features = ["gzip", "brotli", "deflate", "http2", "rustls-tls"] }
 tokio = { version = "1.42.0", features = ["rt-multi-thread", "macros", "sync", "time"] }
 url = "2.5.2"
+# The engine's telemetry events carry their payload as JSON.
+serde_json = "1.0"
 uuid = { version = "1.11.0", features = ["v4", "v7"] }
 
 [patch.crates-io]

@@ -688,6 +688,7 @@ dependencies = [
  "lazy_static",
  "log",
  "reqwest 0.12.28",
+ "serde_json",
  "sys-locale",
  "tokio",
  "url",

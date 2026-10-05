@@ -296,6 +296,22 @@ label.status-bubble {
     font-size: 12px;
 }
 
+/* The activity strip: monospace so the clocks line up, translucent so the page shows
+   through, no pointer interaction. */
+label.activity-strip {
+    font-family: monospace;
+    font-size: 12px;
+    /* Room above the ascenders: at the default line height the tops of tall glyphs
+       were clipped on a scaled desktop. */
+    line-height: 1.6;
+    background: alpha(@theme_bg_color, 0.85);
+    color: @theme_fg_color;
+    border-top: 1px solid alpha(@theme_fg_color, 0.15);
+    border-left: 1px solid alpha(@theme_fg_color, 0.15);
+    border-radius: 6px 0 0 0;
+    padding: 4px 10px;
+}
+
 /* Private windows carry a purple-tinted chrome so they are unmistakable. */
 window.private-window headerbar {
     background: #3d2a55;
