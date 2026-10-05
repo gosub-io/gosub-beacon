@@ -49,7 +49,7 @@ pub(crate) fn show(window: &super::BrowserWindow, tab_id: TabId, point: Point, h
             let link = link.clone();
             move || {
                 let name = link.rsplit('/').next().filter(|s| !s.is_empty()).unwrap_or("download");
-                window.imp().save_download_as(tab_id, link.clone(), name);
+                window.imp().save_download_as(tab_id, None, link.clone(), name);
             }
         });
         add_action(&actions, "open-link-new-tab", {

@@ -252,7 +252,7 @@ pub struct NetRequest {
     pub error: Option<String>,
     /// What kind of failure it was, when the engine could tell. A message alone leaves a
     /// panel guessing; this is what lets it say "certificate" rather than "error".
-    pub failure: Option<gosub_engine::events::FailureKind>,
+    pub failure: Option<gosub_engine::events::LoadError>,
     /// The method actually sent. `None` until the request line is reported.
     pub method: Option<String>,
     /// The headers the net stack set on the way out.
@@ -310,31 +310,40 @@ impl NetRequest {
 
     /// A short name for why it failed, for a status column.
     pub fn failure_label(&self) -> Option<&'static str> {
-        use gosub_engine::events::FailureKind;
-        Some(match self.failure? {
-            FailureKind::Blocked => "blocked",
-            FailureKind::Tls => "TLS",
-            FailureKind::Timeout => "timeout",
-            FailureKind::Connect => "no connection",
-            FailureKind::Transfer => "transfer broke",
-            FailureKind::Redirect => "bad redirect",
-            FailureKind::Cancelled => "cancelled",
-            FailureKind::Other => "failed",
+        use gosub_engine::events::LoadError;
+        Some(match self.failure.as_ref()? {
+            LoadError::Blocked { .. } => "blocked",
+            LoadError::InvalidUrl { .. } => "bad URL",
+            LoadError::Tls { .. } => "TLS",
+            LoadError::Timeout { .. } => "timeout",
+            LoadError::Connect { .. } => "no connection",
+            LoadError::Transfer { .. } => "transfer broke",
+            LoadError::Redirect { .. } => "bad redirect",
+            LoadError::Io { .. } => "I/O",
+            LoadError::Cancelled { .. } => "cancelled",
+            LoadError::Content { .. } => "bad content",
+            LoadError::Other { .. } => "failed",
+            // The engine adds kinds as its network stack learns to tell them apart.
+            _ => "failed",
         })
     }
 
     /// What that failure means, in the words someone debugging a dead page needs.
     pub fn failure_hint(&self) -> Option<&'static str> {
-        use gosub_engine::events::FailureKind;
-        Some(match self.failure? {
-            FailureKind::Blocked => "refused by policy before it was sent -- mixed content, or a URL the embedder disallows",
-            FailureKind::Tls => "the TLS handshake failed: an expired, untrusted or mismatched certificate",
-            FailureKind::Timeout => "no answer within the time limit",
-            FailureKind::Connect => "no connection was established: the name did not resolve, or nothing accepted it",
-            FailureKind::Transfer => "the connection worked and then broke part way through",
-            FailureKind::Redirect => "a redirect could not be followed: too many hops, or an invalid target",
-            FailureKind::Cancelled => "something gave up on the request",
-            FailureKind::Other => "the network stack did not say what went wrong",
+        use gosub_engine::events::LoadError;
+        Some(match self.failure.as_ref()? {
+            LoadError::Blocked { .. } => "refused by policy before it was sent -- mixed content, CORS, or a URL the embedder disallows",
+            LoadError::InvalidUrl { .. } => "the URL did not parse",
+            LoadError::Tls { .. } => "the TLS handshake failed: an expired, untrusted or mismatched certificate",
+            LoadError::Timeout { .. } => "no answer within the time limit",
+            LoadError::Connect { .. } => "no connection was established: the name did not resolve, or nothing accepted it",
+            LoadError::Transfer { .. } => "the connection worked and then broke part way through",
+            LoadError::Redirect { .. } => "a redirect could not be followed: too many hops, or an invalid target",
+            LoadError::Io { .. } => "a local read or write failed",
+            LoadError::Cancelled { .. } => "something gave up on the request",
+            LoadError::Content { .. } => "the bytes arrived but could not be made into a document",
+            LoadError::Other { .. } => "the network stack did not say what went wrong",
+            _ => "the engine reported a kind of failure this build does not know",
         })
     }
 }
@@ -400,18 +409,6 @@ pub fn record_resource(tab: Option<crate::tab::TabId>, event: &gosub_engine::eve
     }
 
     match event {
-        ResourceEvent::Queued {
-            request_id,
-            url,
-            kind,
-            initiator,
-            ..
-        } => {
-            let entry = row(&mut requests, request_id.0, url, tab);
-            entry.kind = kind_label(kind);
-            entry.initiator = initiator_label(initiator);
-            entry.state = RequestState::Queued;
-        }
         ResourceEvent::Started {
             request_id,
             url,
@@ -509,15 +506,11 @@ pub fn record_resource(tab: Option<crate::tab::TabId>, event: &gosub_engine::eve
             entry.state = RequestState::Finished;
         }
         ResourceEvent::Failed {
-            request_id,
-            url,
-            kind,
-            error,
-            ..
+            request_id, url, error, ..
         } => {
             let entry = row(&mut requests, request_id.0, url, tab);
             entry.error = Some(error.to_string());
-            entry.failure = Some(*kind);
+            entry.failure = Some(error.clone());
             entry.state = RequestState::Failed;
         }
         ResourceEvent::Cancelled {
@@ -527,6 +520,9 @@ pub fn record_resource(tab: Option<crate::tab::TabId>, event: &gosub_engine::eve
             entry.error = Some(format!("{reason:?}"));
             entry.state = RequestState::Cancelled;
         }
+        // The engine adds events as its network stack learns to report more; the panel
+        // shows what it knows about.
+        _ => {}
     }
 }
 
@@ -868,7 +864,9 @@ mod tests {
         row.state = RequestState::Failed;
         assert_eq!(row.failure_label(), None);
 
-        row.failure = Some(gosub_engine::events::FailureKind::Tls);
+        row.failure = Some(gosub_engine::events::LoadError::Tls {
+            message: "certificate expired".into(),
+        });
         assert_eq!(row.failure_label(), Some("TLS"));
         assert!(row.failure_hint().is_some());
     }

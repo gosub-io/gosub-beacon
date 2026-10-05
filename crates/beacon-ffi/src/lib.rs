@@ -102,6 +102,8 @@ pub struct BeaconBrowser {
     beacon: Beacon,
     tabs: Arc<Mutex<GosubTabManager>>,
     events: tokio::sync::broadcast::Receiver<EngineEvent>,
+    /// Per-resource fetch detail, on its own stream; drained into the developer panel.
+    resources: tokio::sync::broadcast::Receiver<gosub_engine::events::ResourceUpdate>,
     /// Fires whenever the compositor has a new frame. This -- not
     /// `EngineEvent::Redraw`, which nothing emits -- is how a frontend learns there is
     /// something to draw; the GTK and egui frontends both repaint from it.
@@ -209,6 +211,8 @@ struct PickerDetails {
 /// A download the engine offered, waiting for the shell to name a file or decline.
 struct PendingOffer {
     tab_id: TabId,
+    /// The engine's offer id: accepting with it places the spooled body, no refetch.
+    offer: gosub_engine::events::DownloadOfferId,
     url: String,
     suggested_filename: String,
 }
@@ -370,6 +374,15 @@ impl BeaconBrowser {
             }
             if any {
                 self.pending.push(Outgoing::Core(BeaconEvent::Redraw));
+            }
+        }
+
+        // Resource detail never produces a shell event; it only feeds the request log.
+        loop {
+            match self.resources.try_recv() {
+                Ok(update) => self.beacon.on_resource_update(update),
+                Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => continue,
+                Err(_) => break,
             }
         }
 
@@ -702,6 +715,9 @@ pub unsafe extern "C" fn beacon_new(config: *const BeaconConfig) -> *mut BeaconB
     let Some(events) = engine.take_event_rx() else {
         return std::ptr::null_mut();
     };
+    let Some(resources) = engine.take_resource_rx() else {
+        return std::ptr::null_mut();
+    };
     let redraw = engine.take_redraw_rx();
 
     let tabs = Arc::new(Mutex::new(GosubTabManager::new()));
@@ -716,6 +732,7 @@ pub unsafe extern "C" fn beacon_new(config: *const BeaconConfig) -> *mut BeaconB
         beacon,
         tabs,
         events,
+        resources,
         redraw,
         handles: HashMap::new(),
         next_handle: 1,
@@ -1710,6 +1727,7 @@ pub unsafe extern "C" fn beacon_download_accept(browser: *mut BeaconBrowser, off
             id: DownloadId(id),
             url: pending.url,
             target_path: target,
+            offer: Some(pending.offer),
         },
     );
     id
@@ -1893,6 +1911,7 @@ pub unsafe extern "C" fn beacon_poll_events(browser: *mut BeaconBrowser, out: *m
             // an answer attached to the offer it answers.
             BeaconEvent::DownloadOffered {
                 tab_id,
+                offer: engine_offer,
                 url,
                 suggested_filename,
                 ..
@@ -1903,6 +1922,7 @@ pub unsafe extern "C" fn beacon_poll_events(browser: *mut BeaconBrowser, out: *m
                     offer,
                     PendingOffer {
                         tab_id,
+                        offer: engine_offer,
                         url,
                         suggested_filename: suggested_filename.clone(),
                     },

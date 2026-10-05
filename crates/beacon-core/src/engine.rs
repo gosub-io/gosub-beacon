@@ -17,7 +17,7 @@ use gosub_engine::events::EngineEvent;
 use gosub_engine::html::RenderConfiguration;
 use gosub_engine::places::SqlitePlaces;
 use gosub_engine::storage::{InMemorySessionStore, PartitionPolicy, SqliteLocalStore, StorageService};
-use gosub_engine::tab::{TabDefaults, TabHandle};
+use gosub_engine::tab::TabHandle;
 use gosub_engine::zone::{Zone, ZoneConfig, ZoneId, ZoneServices};
 use gosub_engine::GosubEngine;
 use gosub_render_pipeline::render::DefaultCompositor;
@@ -55,6 +55,8 @@ pub struct BrowserEngine<C: BeaconConfig> {
     /// Engine event stream. Subscribed before the zone is created (the engine emits
     /// `ZoneCreated` immediately, which fails if no receiver is alive yet).
     event_rx: Option<broadcast::Receiver<EngineEvent>>,
+    /// Per-resource fetch events, on their own stream so they cannot crowd the control bus.
+    resource_rx: Option<broadcast::Receiver<gosub_engine::events::ResourceUpdate>>,
 }
 
 impl<C: BeaconConfig> BrowserEngine<C> {
@@ -137,6 +139,7 @@ impl<C: BeaconConfig> BrowserEngine<C> {
         // Subscribe before creating the zone: `create_zone` emits `ZoneCreated` on the
         // event channel, which errors out ("channel closed") if there is no live receiver.
         let event_rx = engine.subscribe_events();
+        let resource_rx = engine.subscribe_resource_events();
 
         let zone_cfg = ZoneConfig::builder()
             .do_not_track(true)
@@ -216,7 +219,11 @@ impl<C: BeaconConfig> BrowserEngine<C> {
         };
 
         let zone = engine
-            .create_zone(Some(zone_cfg), zone_services, Some(ZoneId::from(DEFAULT_ZONE)))
+            .zone_builder()
+            .config(zone_cfg)
+            .id(ZoneId::from(DEFAULT_ZONE))
+            .services(zone_services)
+            .create()
             .map_err(|e| anyhow::anyhow!("create_zone: {e:?}"))?;
 
         Ok(Self {
@@ -226,6 +233,7 @@ impl<C: BeaconConfig> BrowserEngine<C> {
             compositor,
             redraw_rx: Some(rx_redraw),
             event_rx: Some(event_rx),
+            resource_rx: Some(resource_rx),
         })
     }
 
@@ -245,6 +253,12 @@ impl<C: BeaconConfig> BrowserEngine<C> {
         self.event_rx.take()
     }
 
+    /// Take the resource event stream (per-request fetch detail for the developer panel).
+    /// Only the first caller receives it.
+    pub fn take_resource_rx(&mut self) -> Option<broadcast::Receiver<gosub_engine::events::ResourceUpdate>> {
+        self.resource_rx.take()
+    }
+
     /// Take the redraw notification receiver (drains compositor frame notifications).
     /// Only the first caller receives it.
     pub fn take_redraw_rx(&mut self) -> Option<mpsc::UnboundedReceiver<()>> {
@@ -261,16 +275,13 @@ impl<C: BeaconConfig> BrowserEngine<C> {
     /// but prefer a real size, since a viewport that differs when the tab is first shown
     /// costs a full cache drop and re-layout.
     pub fn create_tab(&mut self, rt: &Runtime, title: &str, viewport: Option<(u32, u32)>) -> anyhow::Result<TabHandle> {
-        let defaults = TabDefaults {
-            url: None,
-            title: Some(title.to_string()),
-            // Falls back to the first GTK resize when the window has no allocation yet.
-            viewport: viewport.map(|(w, h)| gosub_render_pipeline::render::Viewport::new(0, 0, w, h)),
-        };
+        let mut builder = self.zone.tab_builder().title(title);
+        // Falls back to the first GTK resize when the window has no allocation yet.
+        if let Some((w, h)) = viewport {
+            builder = builder.viewport(gosub_render_pipeline::render::Viewport::new(0, 0, w, h));
+        }
 
-        let tab = rt
-            .block_on(self.zone.create_tab(defaults, None))
-            .map_err(|e| anyhow::anyhow!("create_tab: {e:?}"))?;
+        let tab = rt.block_on(builder.create()).map_err(|e| anyhow::anyhow!("create_tab: {e:?}"))?;
         Ok(tab)
     }
 }

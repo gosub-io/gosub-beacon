@@ -189,17 +189,21 @@ impl Beacon {
     /// Translate one engine event into what the frontend should reflect, applying any tab
     /// state changes on the way.
     pub fn on_engine_event(&mut self, evt: EngineEvent) -> Vec<BeaconEvent> {
+        self.on_engine_event_inner(evt)
+    }
+
+    /// One per-resource event from the engine's resource stream. Folded into the
+    /// developer panel's request log and otherwise dropped: a frontend has nothing to
+    /// redraw for a subresource fetch, and a `BeaconEvent` per request would mean a repaint
+    /// per request on a page with two hundred of them. The panel reads the log when it
+    /// feels like it.
+    pub fn on_resource_update(&mut self, update: gosub_engine::events::ResourceUpdate) {
+        crate::devtools::record_resource(self.tab_for_engine(update.tab_id), &update.event);
+    }
+
+    fn on_engine_event_inner(&mut self, evt: EngineEvent) -> Vec<BeaconEvent> {
         match evt {
             EngineEvent::Redraw { .. } => vec![BeaconEvent::Redraw],
-
-            // Folded into the developer panel's request log and otherwise dropped: a
-            // frontend has nothing to redraw for a subresource fetch, and a `BeaconEvent`
-            // per request would mean a repaint per request on a page with two hundred of
-            // them. The panel reads the log when it feels like it.
-            EngineEvent::Resource { tab_id, event } => {
-                crate::devtools::record_resource(self.tab_for_engine(tab_id), &event);
-                Vec::new()
-            }
 
             EngineEvent::Navigation { tab_id, event } => match self.tab_for_engine(tab_id) {
                 Some(our_id) => self.on_navigation(our_id, event),
@@ -295,6 +299,7 @@ impl Beacon {
 
             EngineEvent::DownloadRequested {
                 tab_id,
+                offer,
                 url,
                 suggested_filename,
                 total_bytes,
@@ -308,6 +313,7 @@ impl Beacon {
                     BeaconEvent::Log(format!("Download offered: {suggested_filename}{size}")),
                     BeaconEvent::DownloadOffered {
                         tab_id: our_id,
+                        offer,
                         url: url.to_string(),
                         suggested_filename,
                         total_bytes,
