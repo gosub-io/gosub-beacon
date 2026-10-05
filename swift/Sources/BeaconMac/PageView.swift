@@ -224,33 +224,67 @@ final class PageView: NSView, NSTextInputClient {
 
     // ── scrolling, swiping, pinching ──────────────────────────────────────
 
-    /// Horizontal travel accumulated in the current scroll gesture, for swipe navigation.
+    /// What the current trackpad gesture turned out to be. Decided once, from its opening
+    /// travel, and kept until the fingers lift and the momentum runs out.
+    private enum GestureKind { case undecided, scroll, swipe }
+    private var gestureKind = GestureKind.scroll
+    /// Travel seen while the gesture is still undecided.
+    private var gestureTravel = CGSize.zero
+    /// Horizontal travel of a swipe, and whether it has already navigated.
     private var swipeAccumulator: CGFloat = 0
     private var swipeHandled = false
+
+    /// Opening travel (points) after which a gesture is classified.
+    private static let classifyAfter: CGFloat = 8
+    /// Horizontal travel (points) at which a swipe navigates.
+    private static let swipeDistance: CGFloat = 80
 
     override func scrollWheel(with event: NSEvent) {
         guard tab != 0 else { return }
 
-        // A mostly-horizontal trackpad gesture is a navigation, not a scroll. This is
+        // A clearly horizontal trackpad gesture is a navigation, not a scroll. This is
         // accumulated by hand rather than driven through trackSwipeEvent: there is no
         // rubber-band preview, but it behaves the same at the two ends and cannot get stuck
         // half-tracked, which matters more on a demo machine.
-        if event.hasPreciseScrollingDeltas, abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) {
-            // NSEvent.Phase is an OptionSet, so this tests membership rather than equality.
+        //
+        // The decision is made once per gesture. Judging each event on its own let the
+        // sideways drift of an ordinary diagonal scroll add up to a navigation mid-scroll,
+        // and then split the rest of the gesture between the page and the swipe.
+        // NSEvent.Phase is an OptionSet, so these test membership rather than equality.
+        if event.hasPreciseScrollingDeltas {
             if event.phase.contains(.began) {
+                gestureKind = NSEvent.isSwipeTrackingFromScrollEventsEnabled ? .undecided : .scroll
+                gestureTravel = .zero
                 swipeAccumulator = 0
                 swipeHandled = false
-            } else if event.phase.contains(.changed) {
-                swipeAccumulator += event.scrollingDeltaX
-                if !swipeHandled, abs(swipeAccumulator) > 80 {
-                    swipeHandled = true
-                    // Content moves with the fingers: swiping right (positive) goes back.
-                    onSwipeNavigate?(swipeAccumulator > 0 ? -1 : 1)
-                }
-            } else if event.phase.contains(.ended) || event.phase.contains(.cancelled) {
-                swipeAccumulator = 0
             }
-            if swipeHandled { return }
+            switch gestureKind {
+            case .undecided:
+                gestureTravel.width += abs(event.scrollingDeltaX)
+                gestureTravel.height += abs(event.scrollingDeltaY)
+                swipeAccumulator += event.scrollingDeltaX
+                guard gestureTravel.width + gestureTravel.height >= Self.classifyAfter else {
+                    // Held back while undecided: a scroll loses only a few points of travel,
+                    // and a swipe never nudges the page.
+                    return
+                }
+                gestureKind = gestureTravel.width > 2 * gestureTravel.height ? .swipe : .scroll
+                if gestureKind == .swipe {
+                    navigateIfSwiped()
+                    return
+                }
+            case .swipe:
+                // Every event of a swipe, momentum included, belongs to the swipe, but only
+                // the fingers' own travel counts towards navigating: a short flick must not
+                // turn into a page change on its momentum alone.
+                if event.momentumPhase.isEmpty {
+                    swipeAccumulator += event.scrollingDeltaX
+                    navigateIfSwiped()
+                }
+                return
+            case .scroll:
+                break
+            }
         }
 
         // AppKit reports a wheel notch as ±1 lines and a trackpad as precise deltas; the
@@ -266,6 +300,14 @@ final class PageView: NSView, NSTextInputClient {
         let dy = -Float(event.scrollingDeltaY) * step / zoom
         guard dx != 0 || dy != 0 else { return }
         browser.scroll(tab, dx: dx, dy: dy, precise: precise)
+    }
+
+    /// Navigate once per swipe, when its horizontal travel is far enough.
+    private func navigateIfSwiped() {
+        guard !swipeHandled, abs(swipeAccumulator) > Self.swipeDistance else { return }
+        swipeHandled = true
+        // Content moves with the fingers: swiping right (positive) goes back.
+        onSwipeNavigate?(swipeAccumulator > 0 ? -1 : 1)
     }
 
     /// Pinch to zoom, which on a Mac is how people expect to resize a page.
