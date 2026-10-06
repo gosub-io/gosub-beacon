@@ -109,6 +109,8 @@ pub struct BrowserWindow {
     #[template_child]
     pub timings_list: TemplateChild<gtk4::ColumnView>,
     #[template_child]
+    pub history_list: TemplateChild<gtk4::ColumnView>,
+    #[template_child]
     pub network_scroller: TemplateChild<ScrolledWindow>,
     #[template_child]
     pub network_list: TemplateChild<gtk4::ColumnView>,
@@ -139,6 +141,8 @@ pub struct BrowserWindow {
     pub network_selected: RefCell<Option<uuid::Uuid>>,
     /// The timings table's rows, updated in place like the others'.
     pub timings_model: gtk4::gio::ListStore,
+    /// The history tree's lines, updated in place like the others'.
+    pub history_model: gtk4::gio::ListStore,
     /// The rows the network table is showing, in order. Held rather than rebuilt: a refresh
     /// writes new values into the objects already here, and the view updates the labels it
     /// has bound to them. Rows are only added or removed when the request list really
@@ -268,6 +272,7 @@ impl Default for BrowserWindow {
             log_scroller: TemplateChild::default(),
             timings_scroller: TemplateChild::default(),
             timings_list: TemplateChild::default(),
+            history_list: TemplateChild::default(),
             network_scroller: TemplateChild::default(),
             network_list: TemplateChild::default(),
             network_detail_stack: TemplateChild::default(),
@@ -286,6 +291,7 @@ impl Default for BrowserWindow {
             network_model: gtk4::gio::ListStore::new::<super::rows::RequestRow>(),
             network_selection: gtk4::SingleSelection::builder().autoselect(false).can_unselect(true).build(),
             timings_model: gtk4::gio::ListStore::new::<super::rows::TimingRow>(),
+            history_model: gtk4::gio::ListStore::new::<super::rows::HistoryRow>(),
             detail_rendered: RefCell::new(std::collections::HashMap::new()),
             devtools_tick: RefCell::new(None),
             devtools_height: Cell::new(260),
@@ -777,6 +783,7 @@ impl BrowserWindow {
         self.build_network_columns();
         self.build_log_columns();
         self.build_timings_columns();
+        self.build_history_columns();
 
         // Selecting a request shows it in full. The row object carries the id, so a refresh
         // that reorders or trims the list cannot leave the detail pane on the wrong request.
@@ -811,8 +818,9 @@ impl BrowserWindow {
             };
             imp.devtools_action.set_label(label);
             imp.devtools_action.set_tooltip_text(Some(tooltip));
-            // Nothing to clear or filter on a page with nothing on it.
-            let has_content = imp.devtools_page() != "console";
+            // Nothing to clear or filter on a page with nothing on it. History has content but
+            // neither: the engine owns it, and a filter would cut the branches it is drawn from.
+            let has_content = !matches!(imp.devtools_page().as_str(), "console" | "history");
             imp.devtools_action.set_visible(has_content);
             imp.devtools_filter.set_visible(has_content);
             imp.refresh_devtools();
@@ -834,6 +842,7 @@ impl BrowserWindow {
         match self.devtools_page().as_str() {
             "timings" => self.refresh_timings(&needle),
             "network" => self.refresh_network(&needle),
+            "history" => self.refresh_history(),
             // The page's own console, which has nothing to say until scripts run. Its
             // summary line would otherwise keep whatever the last page put there.
             "console" => self.devtools_summary.set_text(""),
@@ -967,6 +976,152 @@ impl BrowserWindow {
                 _ => Self::text_column(title, property, width, xalign),
             };
             self.timings_list.append_column(&column);
+        }
+    }
+
+    // ── history ───────────────────────────────────────────────────────────
+
+    /// The history page's columns, and the click that jumps.
+    fn build_history_columns(&self) {
+        self.history_list
+            .set_model(Some(&gtk4::NoSelection::new(Some(self.history_model.clone()))));
+        let page = Self::history_page_column("Page");
+        page.set_fixed_width(320);
+        page.set_resizable(true);
+        self.history_list.append_column(&page);
+        self.history_list.append_column(&Self::text_column("URL", "url", None, 0.0));
+
+        // One click, not a double: a line here is a place to go, the way a bookmark is. The
+        // row hands over the entry id, never its position, which a refresh may have moved.
+        let window = self.obj().clone();
+        self.history_list.connect_activate(move |_, position| {
+            let imp = window.imp();
+            let Some(row) = imp.history_model.item(position).and_downcast::<super::rows::HistoryRow>() else {
+                return;
+            };
+            imp.go_to_history_entry(HistoryEntryId(row.entry() as usize));
+        });
+    }
+
+    /// The tree column: indented by the row's branch depth, a mark for where the tab is.
+    fn history_page_column(title: &str) -> gtk4::ColumnViewColumn {
+        /// Pixels per level of side branch.
+        const INDENT: u32 = 16;
+
+        let factory = gtk4::SignalListItemFactory::new();
+        factory.connect_setup(move |_, item| {
+            let cell = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
+            let marker = gtk4::Label::new(None);
+            // Wide enough for either mark, so titles line up whether a row has one or not.
+            marker.set_width_chars(1);
+            let label = gtk4::Label::new(None);
+            label.set_xalign(0.0);
+            label.set_ellipsize(gtk4::pango::EllipsizeMode::End);
+            label.set_hexpand(true);
+            cell.append(&marker);
+            cell.append(&label);
+            Self::as_list_item(item).set_child(Some(&cell));
+        });
+        factory.connect_bind(move |_, item| {
+            let item = Self::as_list_item(item);
+            let (Some(row), Some(cell)) = (item.item(), item.child().and_downcast::<gtk4::Box>()) else {
+                return;
+            };
+            let (Some(marker), Some(label)) = (
+                cell.first_child().and_downcast::<gtk4::Label>(),
+                cell.last_child().and_downcast::<gtk4::Label>(),
+            ) else {
+                return;
+            };
+            let classes = |_: &glib::Binding, classes: String| {
+                let classes: glib::StrV = classes.split_whitespace().collect::<Vec<_>>().into();
+                Some(classes.to_value())
+            };
+            let bindings = vec![
+                row.bind_property("depth", &cell, "margin-start")
+                    .transform_to(|_, depth: u32| Some((depth * INDENT) as i32))
+                    .sync_create()
+                    .build(),
+                row.bind_property("marker", &marker, "label").sync_create().build(),
+                row.bind_property("title", &label, "label").sync_create().build(),
+                row.bind_property("url", &cell, "tooltip-text").sync_create().build(),
+                row.bind_property("css", &label, "css-classes")
+                    .transform_to(classes)
+                    .sync_create()
+                    .build(),
+                row.bind_property("css", &marker, "css-classes")
+                    .transform_to(classes)
+                    .sync_create()
+                    .build(),
+            ];
+            unsafe { item.set_data("bindings", bindings) };
+        });
+        factory.connect_unbind(move |_, item| {
+            let item = Self::as_list_item(item);
+            if let Some(bindings) = unsafe { item.steal_data::<Vec<glib::Binding>>("bindings") } {
+                for binding in bindings {
+                    binding.unbind();
+                }
+            }
+        });
+        gtk4::ColumnViewColumn::new(Some(title), Some(factory))
+    }
+
+    /// Redraw the active tab's history tree. The tree itself is `beacon-core`'s; this only
+    /// writes its lines into the rows already on screen.
+    fn refresh_history(&self) {
+        let rows = match self.active_tab_id() {
+            Some(id) => {
+                let manager = self.tab_manager.lock().unwrap();
+                manager.get_tab(id).map(|tab| tab.history().tree()).unwrap_or_default()
+            }
+            None => Vec::new(),
+        };
+
+        let branches = rows.iter().filter(|row| row.depth > 0).count();
+        self.devtools_summary.set_text(&match (rows.len(), branches) {
+            (1, _) => "1 entry".to_string(),
+            (n, 0) => format!("{n} entries"),
+            (n, b) => format!("{n} entries, {b} on side branches"),
+        });
+
+        for (index, line) in rows.iter().enumerate() {
+            // The current entry stands out; what "back" would walk through reads normally;
+            // everything off that path -- branches left behind -- is quieter.
+            let css = match (line.current, line.on_current_path) {
+                (true, _) => "history-current",
+                (false, true) => "",
+                (false, false) => "history-off-path",
+            };
+            let marker = if line.current {
+                "\u{25CF}"
+            } else if line.next {
+                "\u{203A}"
+            } else {
+                ""
+            };
+            let title = line.title.as_deref().filter(|t| !t.trim().is_empty()).unwrap_or(line.url.as_str());
+            let entry = line.id.0 as u64;
+            let depth = line.depth as u32;
+            let item = match self.history_model.item(index as u32).and_downcast::<super::rows::HistoryRow>() {
+                Some(item) => item,
+                None => {
+                    let item = super::rows::HistoryRow::default();
+                    self.history_model.append(&item);
+                    item
+                }
+            };
+            set_changed!(item, entry, set_entry, entry);
+            set_changed!(item, depth, set_depth, depth);
+            set_changed!(item, title, set_title, title);
+            set_changed!(item, url, set_url, line.url.as_str());
+            set_changed!(item, marker, set_marker, marker);
+            set_changed!(item, css, set_css, css);
+        }
+        let wanted = rows.len() as u32;
+        if self.history_model.n_items() > wanted {
+            self.history_model
+                .splice(wanted, self.history_model.n_items() - wanted, &[] as &[super::rows::HistoryRow]);
         }
     }
 
@@ -2988,7 +3143,8 @@ impl BrowserWindow {
         }
     }
 
-    /// Navigate the active tab to a specific (forward) history entry.
+    /// Navigate the active tab to any entry in its history tree: a forward branch from the
+    /// forward menu, or any line of the history page.
     fn go_to_history_entry(&self, entry: HistoryEntryId) {
         self.dispatch(BeaconCommand::GoToHistoryEntry(entry));
     }

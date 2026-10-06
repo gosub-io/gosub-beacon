@@ -38,6 +38,97 @@ impl History {
             .map(|s| s.forward.iter().map(|e| (e.id, e.url.clone())).collect())
             .unwrap_or_default()
     }
+
+    /// The whole tree as lines for a history view, top to bottom.
+    ///
+    /// Plain depth-first indentation would push every navigation one level deeper, so an
+    /// ordinary run of twenty clicks would draw as a staircase twenty steps wide. Instead each
+    /// entry has one child that *continues* its line at the same depth -- the one on the path
+    /// to the current entry, or else the newest -- and only the others are indented, as side
+    /// branches. Those come first, so the continuing line reads on below them: A, the
+    /// branches abandoned at A, then where the user went from A in the end.
+    pub fn tree(&self) -> Vec<HistoryTreeRow> {
+        let Some(snapshot) = self.snapshot.as_ref() else {
+            return Vec::new();
+        };
+        let entries = &snapshot.entries;
+
+        // `entries` is in creation order with `index == id.0`, so children collected in one
+        // pass are in creation order too. A parent that is not in the list makes its entry a
+        // root rather than vanishing: the engine never sends one, but a view that drops pages
+        // is worse than one that shows them unattached.
+        let mut children: Vec<Vec<usize>> = vec![Vec::new(); entries.len()];
+        let mut roots = Vec::new();
+        for (index, entry) in entries.iter().enumerate() {
+            match entry.parent.map(|p| p.0) {
+                Some(parent) if parent < entries.len() && parent != index => children[parent].push(index),
+                _ => roots.push(index),
+            }
+        }
+
+        // The current entry and its ancestors. Bounded by the entry count, so a cycle in a
+        // malformed snapshot ends the walk instead of the program.
+        let mut on_path = vec![false; entries.len()];
+        let mut cursor = snapshot.current.map(|c| c.0).filter(|&c| c < entries.len());
+        for _ in 0..entries.len() {
+            let Some(index) = cursor else { break };
+            if on_path[index] {
+                break;
+            }
+            on_path[index] = true;
+            cursor = entries[index].parent.map(|p| p.0).filter(|&p| p < entries.len());
+        }
+
+        let next = snapshot.forward.first().map(|e| e.id);
+        let mut rows = Vec::with_capacity(entries.len());
+        // An explicit stack rather than recursion: a long linear history is a chain as deep
+        // as it is long, and every link of it continues at the same depth.
+        let mut stack: Vec<(usize, usize)> = roots.iter().rev().map(|&r| (r, 0)).collect();
+        let mut seen = vec![false; entries.len()];
+        while let Some((index, depth)) = stack.pop() {
+            if std::mem::replace(&mut seen[index], true) {
+                continue;
+            }
+            let entry = &entries[index];
+            rows.push(HistoryTreeRow {
+                id: entry.id,
+                depth,
+                url: entry.url.clone(),
+                title: entry.title.clone(),
+                current: snapshot.current == Some(entry.id),
+                on_current_path: on_path[index],
+                next: next == Some(entry.id),
+            });
+
+            let kids = &children[index];
+            let Some(main) = kids.iter().copied().find(|&k| on_path[k]).or_else(|| kids.last().copied()) else {
+                continue;
+            };
+            // Pushed in reverse of reading order: the continuing line last, below the side
+            // branches, which pop in creation order.
+            stack.push((main, depth));
+            for &side in kids.iter().rev().filter(|&&k| k != main) {
+                stack.push((side, depth + 1));
+            }
+        }
+        rows
+    }
+}
+
+/// One line of the history view: an entry and where it sits in the drawing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HistoryTreeRow {
+    pub id: HistoryEntryId,
+    /// How many side branches deep the entry is; the main line is 0.
+    pub depth: usize,
+    pub url: Url,
+    pub title: Option<String>,
+    /// The entry the tab is showing.
+    pub current: bool,
+    /// The current entry or one of its ancestors: what "back" walks through.
+    pub on_current_path: bool,
+    /// Where a plain "forward" would go.
+    pub next: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
@@ -531,8 +622,76 @@ impl GosubTabManager {
 
 #[cfg(test)]
 mod test {
-    use super::{GosubTab, GosubTabManager, TabCommand, TabId};
+    use super::{GosubTab, GosubTabManager, History, HistoryEntryId, HistorySnapshot, TabCommand, TabId};
+    use gosub_engine::tab::HistoryEntrySummary;
     use url::Url;
+
+    /// A history whose entries are `(name, parent)` in creation order, with `current` showing
+    /// and `forward` as the engine would list it for that entry.
+    fn history(entries: &[(&str, Option<usize>)], current: usize, forward: &[usize]) -> History {
+        let summary = |index: usize| {
+            let (name, parent) = entries[index];
+            HistoryEntrySummary {
+                id: HistoryEntryId(index),
+                url: Url::parse(&format!("https://{name}.test/")).unwrap(),
+                title: Some(name.to_string()),
+                parent: parent.map(HistoryEntryId),
+            }
+        };
+        let mut history = History::default();
+        history.update(HistorySnapshot {
+            current: Some(HistoryEntryId(current)),
+            can_go_back: entries[current].1.is_some(),
+            forward: forward.iter().map(|&i| summary(i)).collect(),
+            entries: (0..entries.len()).map(summary).collect(),
+        });
+        history
+    }
+
+    /// `(title, depth)` per line, which is the shape of the drawing.
+    fn shape(history: &History) -> Vec<(String, usize)> {
+        history.tree().into_iter().map(|row| (row.title.unwrap(), row.depth)).collect()
+    }
+
+    #[test]
+    fn history_tree_is_empty_before_the_first_snapshot() {
+        assert!(History::default().tree().is_empty());
+    }
+
+    #[test]
+    fn a_straight_history_stays_on_one_line() {
+        let h = history(&[("a", None), ("b", Some(0)), ("c", Some(1))], 2, &[]);
+        assert_eq!(shape(&h), [("a".into(), 0), ("b".into(), 0), ("c".into(), 0)]);
+    }
+
+    /// Visit A, B, back, C, back, D: three branches under A, the user on D.
+    #[test]
+    fn abandoned_branches_indent_under_where_they_left() {
+        let h = history(&[("a", None), ("b", Some(0)), ("c", Some(0)), ("d", Some(0))], 3, &[]);
+        assert_eq!(shape(&h), [("a".into(), 0), ("b".into(), 1), ("c".into(), 1), ("d".into(), 0)]);
+
+        let rows = h.tree();
+        let current: Vec<_> = rows.iter().filter(|r| r.current).map(|r| r.id).collect();
+        assert_eq!(current, [HistoryEntryId(3)]);
+        let path: Vec<_> = rows.iter().filter(|r| r.on_current_path).map(|r| r.id).collect();
+        assert_eq!(path, [HistoryEntryId(0), HistoryEntryId(3)]);
+    }
+
+    /// Back on A, the newest branch continues the line and the next "forward" is marked.
+    #[test]
+    fn at_a_fork_the_newest_branch_continues_and_forward_is_marked() {
+        let h = history(&[("a", None), ("b", Some(0)), ("c", Some(0))], 0, &[2, 1]);
+        assert_eq!(shape(&h), [("a".into(), 0), ("b".into(), 1), ("c".into(), 0)]);
+        let next: Vec<_> = h.tree().iter().filter(|r| r.next).map(|r| r.id).collect();
+        assert_eq!(next, [HistoryEntryId(2)]);
+    }
+
+    /// Jumped back into an old branch: that branch becomes the line, its subtree with it.
+    #[test]
+    fn the_current_path_is_the_line_even_through_an_old_branch() {
+        let h = history(&[("a", None), ("b", Some(0)), ("b2", Some(1)), ("c", Some(0))], 2, &[]);
+        assert_eq!(shape(&h), [("a".into(), 0), ("c".into(), 1), ("b".into(), 0), ("b2".into(), 0)]);
+    }
 
     #[test]
     fn test_tab_id() {

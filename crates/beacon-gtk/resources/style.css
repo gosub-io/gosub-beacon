@@ -463,3 +463,12 @@ window.private-window menubar.header-menubar > item {
 .data-table .error {
     color: @error_color;
 }
+
+/* The history page: the entry the tab is on, and the branches it has left behind. */
+.data-table .history-current {
+    font-weight: bold;
+}
+
+.data-table .history-off-path {
+    opacity: 0.6;
+}

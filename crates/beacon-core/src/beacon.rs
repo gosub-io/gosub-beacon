@@ -62,7 +62,7 @@ impl Beacon {
         match command {
             BeaconCommand::Back => self.send_to_active(EngineTabCommand::GoBack),
             BeaconCommand::Forward(entry) => self.send_to_active(EngineTabCommand::GoForward { entry }),
-            BeaconCommand::GoToHistoryEntry(entry) => self.send_to_active(EngineTabCommand::GoForward { entry: Some(entry) }),
+            BeaconCommand::GoToHistoryEntry(entry) => self.send_to_active(EngineTabCommand::GoToHistoryEntry { entry }),
             BeaconCommand::Reload { ignore_cache } => self.send_to_active(EngineTabCommand::Reload { ignore_cache }),
             BeaconCommand::Stop => self.send_to_active(EngineTabCommand::CancelNavigation),
 
