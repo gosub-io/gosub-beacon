@@ -166,6 +166,20 @@ impl Activity {
                             now,
                         );
                     }
+                    None if kind.ends_with(".ended") => {
+                        // The pass produced nothing to merge: failed, stale, no retained
+                        // page, or never started. The line ends with what happened.
+                        let pass = kind.trim_end_matches(".ended");
+                        let key = Key::Remote(tab, pass.to_string());
+                        let what = pass.strip_prefix("remote.").unwrap_or(pass);
+                        let outcome = text("outcome").unwrap_or_else(|| "ended".into());
+                        let label = match text("error") {
+                            Some(error) => format!("Render {what} in the site's process {outcome}: {error}"),
+                            None => format!("Render {what} in the site's process {outcome}"),
+                        };
+                        self.relabel(&key, label);
+                        self.end(&key, now, None);
+                    }
                     None => {
                         let key = Key::Remote(tab, kind.to_string());
                         if let Some(laps) = renderer_laps(data) {
@@ -500,6 +514,20 @@ mod tests {
         let line = activity.lines(at(50))[0].clone();
         assert!(line.contains("raster 30 ms, paint 5 ms"), "{line}");
         assert!(line.ends_with("  0.0s"), "{line}");
+    }
+
+    #[test]
+    fn a_remote_pass_that_produced_nothing_still_ends() {
+        let mut activity = Activity::default();
+        activity.on_telemetry("remote.input.start", &serde_json::json!({"tab": "t", "url": "u"}), at(0));
+        activity.on_telemetry(
+            "remote.input.ended",
+            &serde_json::json!({"tab": "t", "url": "u", "outcome": "failed", "error": "renderer gone"}),
+            at(30),
+        );
+        let line = activity.lines(at(40))[0].clone();
+        assert!(line.contains("failed: renderer gone"), "{line}");
+        assert!(!activity.is_active(&Key::Remote("t".into(), "remote.input".into())));
     }
 
     #[test]

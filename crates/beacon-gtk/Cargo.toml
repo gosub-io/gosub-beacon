@@ -42,7 +42,7 @@ uuid.workspace = true
 # justifies text differently from Skia's own font system, and the default build must
 # render as it always has. Without it `--isolated` still runs the network, vault and
 # decoder processes; pages render in-process.
-isolation = ["gosub_engine/cairo-tiles"]
+isolation = ["gosub_engine/cairo-tiles", "beacon-core/isolated-by-default"]
 
 # EGL is how Skia binds the GL context on Wayland/X11; macOS uses CGL natively.
 [target.'cfg(not(target_os = "macos"))'.dependencies]

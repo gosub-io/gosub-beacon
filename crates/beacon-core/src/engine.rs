@@ -81,6 +81,7 @@ impl<C: BeaconConfig> BrowserEngine<C> {
         let mut engine = GosubEngine::<C>::new(None, backend, compositor.clone());
 
         let data_dir = crate::paths::data_dir();
+        let isolated = crate::cli::Cli::global().isolated();
 
         // Beacon's own settings, merged into the engine's store under the `useragent`
         // namespace the client schema already owns. Registering here rather than editing the
@@ -132,17 +133,18 @@ impl<C: BeaconConfig> BrowserEngine<C> {
             }
         }
 
-        // The process tier is behind `--isolated` for now, so a plain run stays the
-        // single-process engine it always was. Set for this run rather than stored: the
-        // engine's own defaults (and the user's `security.process_isolation` choice in
-        // gosub://config) only take effect once this gating comes off. Must land before
-        // start(), which reads the process settings once.
+        // The switch follows the command line (and the build: an `isolation` build is on
+        // unless `--single-process`), so a plain run stays the single-process engine it
+        // always was. Set for this run rather than stored: the engine's own defaults (and
+        // the user's `security.process_isolation` choice in gosub://config) only take effect
+        // once this gating comes off. Must land before start(), which reads the process
+        // settings once.
         // The renderer tier needs more than the switch: a forked rasterizer and a font
         // system the engine can confine fully, both of which only the GTK frontend's
         // `isolation` build feature provides. Without them the engine says so at start
         // and keeps page rendering in-process; the switch still gets the other processes.
         engine
-            .set_process_isolation_for_this_run(crate::cli::Cli::global().isolated)
+            .set_process_isolation_for_this_run(isolated)
             .map_err(|e| anyhow::anyhow!("security.process_isolation: {e:?}"))?;
 
         // start() hands back the engine main-loop future; it only runs once spawned.
@@ -219,11 +221,27 @@ impl<C: BeaconConfig> BrowserEngine<C> {
             let cookie_store: gosub_engine::cookies::CookieStoreHandle = SqliteCookieStore::new(data_dir.join("cookies.db"))
                 .map_err(|e| anyhow::anyhow!("cookie store: {e:?}"))?
                 .into();
+            // Isolated: localStorage lives in file areas served by the engine's storage
+            // process, the one store kind that process can serve; the SQLite store stays
+            // in this process. The two builds therefore keep separate localStorage for the
+            // same profile, which is accepted: the isolated build is a different mode.
+            // The storage process is Linux only, like the rest of the tier; elsewhere the
+            // isolated mode keeps the SQLite store.
+            #[cfg(target_os = "linux")]
+            let local: Arc<dyn gosub_engine::storage::LocalStore> = if isolated {
+                let dir = data_dir.join("local-storage");
+                Arc::new(
+                    gosub_engine::storage::ServiceLocalStore::new(&dir)
+                        .map_err(|e| anyhow::anyhow!("local store service in {}: {e:?}", dir.display()))?,
+                )
+            } else {
+                Arc::new(SqliteLocalStore::new(&local_db).map_err(|e| anyhow::anyhow!("local store: {e:?}"))?)
+            };
+            #[cfg(not(target_os = "linux"))]
+            let local: Arc<dyn gosub_engine::storage::LocalStore> =
+                Arc::new(SqliteLocalStore::new(&local_db).map_err(|e| anyhow::anyhow!("local store: {e:?}"))?);
             ZoneServices {
-                storage: Arc::new(StorageService::new(
-                    Arc::new(SqliteLocalStore::new(&local_db).map_err(|e| anyhow::anyhow!("local store: {e:?}"))?),
-                    Arc::new(InMemorySessionStore::new()),
-                )),
+                storage: Arc::new(StorageService::new(local, Arc::new(InMemorySessionStore::new()))),
                 cookie_store: Some(cookie_store),
                 cookie_jar: None,
                 partition_policy: PartitionPolicy::None,

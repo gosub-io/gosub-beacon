@@ -6,6 +6,12 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
+[features]
+# Run with every component process unless `--single-process` is given. Selected by the
+# GTK frontend's `isolation` feature, which also brings the rasterizer and font system the
+# renderer tier needs; on its own it only changes the default of the switch.
+isolated-by-default = []
+
 [dependencies]
 gosub_engine.workspace = true
 gosub_render_pipeline.workspace = true
