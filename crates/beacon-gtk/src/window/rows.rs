@@ -142,6 +142,45 @@ mod imp_timing {
     impl ObjectImpl for TimingRow {}
 }
 
+mod imp_history {
+    use gtk4::glib;
+    use gtk4::glib::Properties;
+    use gtk4::prelude::*;
+    use gtk4::subclass::prelude::*;
+    use std::cell::{Cell, RefCell};
+
+    #[derive(Properties, Default)]
+    #[properties(wrapper_type = super::HistoryRow)]
+    pub struct HistoryRow {
+        /// The engine's history entry id. A click is resolved through it rather than the row's
+        /// position, so a refresh that inserts a branch above cannot send the jump elsewhere.
+        #[property(get, set)]
+        pub entry: Cell<u64>,
+        /// Side-branch depth; the tree column indents by it.
+        #[property(get, set)]
+        pub depth: Cell<u32>,
+        /// The title, or the URL while the page has none -- what the tree column shows.
+        #[property(get, set)]
+        pub title: RefCell<String>,
+        #[property(get, set)]
+        pub url: RefCell<String>,
+        /// A one-character mark before the title: where the tab is, and where forward goes.
+        #[property(get, set)]
+        pub marker: RefCell<String>,
+        #[property(get, set)]
+        pub css: RefCell<String>,
+    }
+
+    #[glib::object_subclass]
+    impl ObjectSubclass for HistoryRow {
+        const NAME: &'static str = "BeaconHistoryRow";
+        type Type = super::HistoryRow;
+    }
+
+    #[glib::derived_properties]
+    impl ObjectImpl for HistoryRow {}
+}
+
 glib::wrapper! {
     /// One request in the network table.
     pub struct RequestRow(ObjectSubclass<imp_request::RequestRow>);
@@ -155,6 +194,11 @@ glib::wrapper! {
 glib::wrapper! {
     /// One namespace in the timings table.
     pub struct TimingRow(ObjectSubclass<imp_timing::TimingRow>);
+}
+
+glib::wrapper! {
+    /// One entry in the history tree.
+    pub struct HistoryRow(ObjectSubclass<imp_history::HistoryRow>);
 }
 
 impl RequestRow {
@@ -177,6 +221,12 @@ impl Default for LogRow {
 }
 
 impl Default for TimingRow {
+    fn default() -> Self {
+        glib::Object::new()
+    }
+}
+
+impl Default for HistoryRow {
     fn default() -> Self {
         glib::Object::new()
     }

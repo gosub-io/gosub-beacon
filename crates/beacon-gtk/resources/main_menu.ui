@@ -133,6 +133,11 @@
                             <attribute name="action">app.devtools-page</attribute>
                             <attribute name="target">timings</attribute>
                         </item>
+                        <item>
+                            <attribute name="label">History</attribute>
+                            <attribute name="action">app.devtools-page</attribute>
+                            <attribute name="target">history</attribute>
+                        </item>
                     </section>
                     <section>
                         <item>
