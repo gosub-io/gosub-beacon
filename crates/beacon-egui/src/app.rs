@@ -26,6 +26,10 @@ use crate::chrome::{self, Favicons};
 use crate::context::EguiContextProvider;
 use crate::platform::EguiPlatform;
 
+/// Phone layout: no tab strip and no bookmarks bar, which a phone has no room for. Tabs are
+/// behind a button that opens a list of them instead.
+const COMPACT: bool = cfg!(target_os = "android");
+
 /// Fling (kinetic scroll) tuning. The release speed is measured over the last `FLING_WINDOW`
 /// seconds of the swipe; a finger held still that long before lifting does not fling.
 const FLING_WINDOW: f64 = 0.1;
@@ -52,6 +56,9 @@ fn fling_velocity(trail: &std::collections::VecDeque<(f64, egui::Pos2)>, now: f6
     let speed = velocity.length();
     (speed >= FLING_MIN).then(|| velocity * (speed.min(FLING_MAX) / speed))
 }
+
+/// Bookmark bar text size, in points. A phone needs it big enough to hit with a finger.
+const BOOKMARK_TEXT: f32 = if cfg!(target_os = "android") { 16.0 } else { 12.0 };
 
 /// Link-hover status text size, in points.
 const STATUS_TEXT: f32 = if cfg!(target_os = "android") { 14.0 } else { 11.0 };
@@ -98,6 +105,8 @@ pub struct BeaconApp {
     touch: Option<(egui::TouchId, egui::Pos2)>,
     /// Per tab, the queue that forwards [`Self::send_active`]'s commands in order.
     senders: std::cell::RefCell<HashMap<TabId, tokio::sync::mpsc::UnboundedSender<TabCommand>>>,
+    /// The tab list is showing in place of the page (compact layout).
+    tab_list_open: bool,
     /// The finger's recent positions, with their times, for the speed it lifts off at.
     touch_trail: std::collections::VecDeque<(f64, egui::Pos2)>,
     /// A scroll still going after the finger let go: velocity in points per second, and when
@@ -165,6 +174,7 @@ impl BeaconApp {
             last_pointer: None,
             touch_trail: Default::default(),
             fling: None,
+            tab_list_open: false,
             senders: Default::default(),
         };
         app.bookmarks = app.engine.places().bookmarks().into_iter().map(|b| (b.title, b.url)).collect();
@@ -524,56 +534,58 @@ impl eframe::App for BeaconApp {
         self.refresh_texture(active, &ctx, frame);
 
         // ── tab strip ─────────────────────────────────────────────────────
-        egui::Panel::top("tabs")
-            .frame(egui::Frame::default().fill(faint).inner_margin(egui::Margin {
-                left: 6,
-                right: 6,
-                top: 4,
-                bottom: 0,
-            }))
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 2.0;
-                    let order = self.tabs.lock().unwrap().order();
-                    // Share the strip between tabs, down to a floor -- past that they would
-                    // be unreadable, and a scrolling strip is the lesser evil.
-                    let count = order.len().max(1) as f32;
-                    let room = ui.available_width() - 34.0;
-                    let width = (room / count).clamp(90.0, 240.0);
+        if !COMPACT {
+            egui::Panel::top("tabs")
+                .frame(egui::Frame::default().fill(faint).inner_margin(egui::Margin {
+                    left: 6,
+                    right: 6,
+                    top: 4,
+                    bottom: 0,
+                }))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 2.0;
+                        let order = self.tabs.lock().unwrap().order();
+                        // Share the strip between tabs, down to a floor -- past that they would
+                        // be unreadable, and a scrolling strip is the lesser evil.
+                        let count = order.len().max(1) as f32;
+                        let room = ui.available_width() - 34.0;
+                        let width = (room / count).clamp(90.0, 240.0);
 
-                    let mut action = None;
-                    for tab_id in order {
-                        let Some(tab) = self.tabs.lock().unwrap().get_tab(tab_id) else {
-                            continue;
-                        };
-                        let icon = self.favicons.get(&ctx, tab_id, tab.favicon());
-                        let title = if tab.title().is_empty() { tab.url().as_str() } else { tab.title() };
-                        let (response, closed) =
-                            chrome::tab(ui, title, icon.as_ref(), tab.is_loading(), Some(tab_id) == self.active(), width);
-                        let response = response.on_hover_text(tab.url().as_str());
-                        if closed {
-                            action = Some(chrome::TabAction::Close(tab_id));
-                        } else if response.clicked() {
-                            action = Some(chrome::TabAction::Activate(tab_id));
+                        let mut action = None;
+                        for tab_id in order {
+                            let Some(tab) = self.tabs.lock().unwrap().get_tab(tab_id) else {
+                                continue;
+                            };
+                            let icon = self.favicons.get(&ctx, tab_id, tab.favicon());
+                            let title = if tab.title().is_empty() { tab.url().as_str() } else { tab.title() };
+                            let (response, closed) =
+                                chrome::tab(ui, title, icon.as_ref(), tab.is_loading(), Some(tab_id) == self.active(), width);
+                            let response = response.on_hover_text(tab.url().as_str());
+                            if closed {
+                                action = Some(chrome::TabAction::Close(tab_id));
+                            } else if response.clicked() {
+                                action = Some(chrome::TabAction::Activate(tab_id));
+                            }
                         }
-                    }
-                    if ui
-                        .add(egui::Button::new(egui::RichText::new("+").size(16.0)).frame(false))
-                        .on_hover_text("New tab")
-                        .clicked()
-                    {
-                        if let Some(id) = self.open_tab("gosub://home") {
-                            action = Some(chrome::TabAction::Activate(id));
+                        if ui
+                            .add(egui::Button::new(egui::RichText::new("+").size(16.0)).frame(false))
+                            .on_hover_text("New tab")
+                            .clicked()
+                        {
+                            if let Some(id) = self.open_tab("gosub://home") {
+                                action = Some(chrome::TabAction::Activate(id));
+                            }
                         }
-                    }
 
-                    match action {
-                        Some(chrome::TabAction::Activate(tab_id)) => self.activate(tab_id),
-                        Some(chrome::TabAction::Close(tab_id)) => self.close_tab(tab_id),
-                        None => {}
-                    }
+                        match action {
+                            Some(chrome::TabAction::Activate(tab_id)) => self.activate(tab_id),
+                            Some(chrome::TabAction::Close(tab_id)) => self.close_tab(tab_id),
+                            None => {}
+                        }
+                    });
                 });
-            });
+        }
 
         // ── toolbar ───────────────────────────────────────────────────────
         egui::Panel::top("toolbar")
@@ -596,7 +608,9 @@ impl eframe::App for BeaconApp {
                     if chrome::tool_button(ui, "\u{23f4}", "Back", can_back).clicked() {
                         self.dispatch(BeaconCommand::Back);
                     }
-                    if chrome::tool_button(ui, "\u{23f5}", "Forward", can_forward).clicked() {
+                    // Compact keeps back and reload; forward, home and the star give their
+                    // room to the address bar.
+                    if !COMPACT && chrome::tool_button(ui, "\u{23f5}", "Forward", can_forward).clicked() {
                         self.dispatch(BeaconCommand::Forward(None));
                     }
                     if loading {
@@ -606,14 +620,18 @@ impl eframe::App for BeaconApp {
                     } else if chrome::tool_button(ui, "\u{21bb}", "Reload", true).clicked() {
                         self.dispatch(BeaconCommand::Reload { ignore_cache: false });
                     }
-                    if chrome::tool_button(ui, "\u{1f3e0}", "Home", true).clicked() {
+                    if !COMPACT && chrome::tool_button(ui, "\u{1f3e0}", "Home", true).clicked() {
                         self.navigate_active("gosub://home");
                     }
                     ui.add_space(4.0);
 
                     // The address bar takes the room left after the trailing controls, so
                     // they stay put instead of drifting with the URL length.
-                    let trailing = 30.0;
+                    let trailing = if COMPACT {
+                        ui.spacing().interact_size.y + ui.spacing().item_spacing.x
+                    } else {
+                        30.0
+                    };
                     let response = ui.add_sized(
                         [ui.available_width() - trailing, ui.spacing().interact_size.y],
                         egui::TextEdit::singleline(&mut self.address_bar)
@@ -640,14 +658,21 @@ impl eframe::App for BeaconApp {
                         self.navigate_active(&target);
                     }
 
-                    let bookmarked = self.bookmarks.iter().any(|(_, b)| b.as_str() == url.as_str());
-                    let star = if bookmarked { "\u{2605}" } else { "\u{2606}" };
-                    chrome::tool_button(ui, star, "Bookmark this page", true);
+                    if COMPACT {
+                        let count = self.tabs.lock().unwrap().tab_count();
+                        if chrome::tab_count_button(ui, count).clicked() {
+                            self.tab_list_open = !self.tab_list_open;
+                        }
+                    } else {
+                        let bookmarked = self.bookmarks.iter().any(|(_, b)| b.as_str() == url.as_str());
+                        let star = if bookmarked { "\u{2605}" } else { "\u{2606}" };
+                        chrome::tool_button(ui, star, "Bookmark this page", true);
+                    }
                 });
             });
 
         // ── bookmarks bar ─────────────────────────────────────────────────
-        if !self.bookmarks.is_empty() {
+        if !COMPACT && !self.bookmarks.is_empty() {
             egui::Panel::top("bookmarks")
                 .frame(egui::Frame::default().inner_margin(egui::Margin {
                     left: 10,
@@ -656,23 +681,35 @@ impl eframe::App for BeaconApp {
                     bottom: 5,
                 }))
                 .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 10.0;
-                        let mut go = None;
-                        for (title, url) in &self.bookmarks {
-                            if ui
-                                .add(egui::Button::new(egui::RichText::new(title).size(12.0)).frame(false))
-                                .on_hover_text(url)
-                                .clicked()
-                            {
-                                go = Some(url.clone());
-                            }
-                        }
-                        if let Some(url) = go {
-                            self.navigate_active(&url);
-                        }
-                    });
+                    // Scrolls sideways once the bookmarks outgrow the window, which on a
+                    // phone is after three or four of them.
+                    let mut go = None;
+                    egui::ScrollArea::horizontal()
+                        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 10.0;
+                                for (title, url) in &self.bookmarks {
+                                    if ui
+                                        .add(egui::Button::new(egui::RichText::new(title).size(BOOKMARK_TEXT)).frame(false))
+                                        .on_hover_text(url)
+                                        .clicked()
+                                    {
+                                        go = Some(url.clone());
+                                    }
+                                }
+                            });
+                        });
+                    if let Some(url) = go {
+                        self.navigate_active(&url);
+                    }
                 });
+        }
+
+        // ── tab list, in place of the page (compact) ──────────────────────
+        if self.tab_list_open {
+            self.tab_list(ui, &ctx);
+            return;
         }
 
         // ── page ──────────────────────────────────────────────────────────
@@ -866,6 +903,81 @@ fn inset(ui: &mut egui::Ui, panel: egui::Panel, size: f32, fill: egui::Color32) 
 }
 
 impl BeaconApp {
+    /// The tab list: every tab as a card to switch to or close, and a way to open a new one.
+    /// Shown instead of the page while the tab button is toggled on.
+    fn tab_list(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        egui::CentralPanel::default().show(ui, |ui| {
+            let order = self.tabs.lock().unwrap().order();
+            let mut action = None;
+            ui.horizontal(|ui| {
+                let label = if order.len() == 1 {
+                    "1 tab".to_owned()
+                } else {
+                    format!("{} tabs", order.len())
+                };
+                ui.heading(label);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("Done").clicked() {
+                        self.tab_list_open = false;
+                    }
+                    if ui.button("+ New tab").clicked() {
+                        if let Some(id) = self.open_tab("gosub://home") {
+                            action = Some(chrome::TabAction::Activate(id));
+                        }
+                    }
+                });
+            });
+            ui.add_space(8.0);
+            // Two columns of cards, each the top of its page as last drawn. The page textures
+            // are already on the GPU and registered with egui, so a card costs no copy.
+            let gap = 12.0;
+            let width = ((ui.available_width() - gap) / 2.0).floor();
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                for row in order.chunks(2) {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = gap;
+                        for &tab_id in row {
+                            let Some(tab) = self.tabs.lock().unwrap().get_tab(tab_id) else {
+                                continue;
+                            };
+                            let icon = self.favicons.get(ctx, tab_id, tab.favicon());
+                            let title = if tab.title().is_empty() { tab.url().as_str() } else { tab.title() };
+                            let thumbnail = self.views.get(&tab_id).and_then(|view| {
+                                let texture = view
+                                    .gpu_texture
+                                    .as_ref()
+                                    .map(|(_, id)| *id)
+                                    .or_else(|| view.cpu_texture.as_ref().map(|t| t.id()))?;
+                                let (w, h) = view.viewport?;
+                                Some(chrome::Thumbnail {
+                                    texture,
+                                    aspect: w as f32 / h.max(1) as f32,
+                                })
+                            });
+                            let active = Some(tab_id) == self.active();
+                            let (response, closed) = chrome::tab_card(ui, title, icon.as_ref(), thumbnail, active, width);
+                            if closed {
+                                action = Some(chrome::TabAction::Close(tab_id));
+                            } else if response.clicked() {
+                                action = Some(chrome::TabAction::Activate(tab_id));
+                            }
+                        }
+                    });
+                    ui.add_space(gap);
+                }
+            });
+            match action {
+                // Picking a tab (or opening one) is done with the list.
+                Some(chrome::TabAction::Activate(tab_id)) => {
+                    self.activate(tab_id);
+                    self.tab_list_open = false;
+                }
+                Some(chrome::TabAction::Close(tab_id)) => self.close_tab(tab_id),
+                None => {}
+            }
+        });
+    }
+
     /// Navigate the active tab, running the address through the same parser the GTK
     /// frontend uses so `example.com` and `/etc/hosts` behave the same in both.
     fn navigate_active(&mut self, address: &str) {
