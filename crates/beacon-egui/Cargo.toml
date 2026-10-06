@@ -18,6 +18,10 @@ egui.workspace = true
 # Favicons arrive as encoded PNG/ICO; already in the graph via the render stack.
 image = { version = "0.25", default-features = false, features = ["png", "ico", "jpeg", "gif"] }
 vello.workspace = true
+# eframe's winit, named directly: eframe does not re-export it, and the Android entry needs
+# its `AndroidApp`. The default features are eframe's `winit/default`; they are Linux-only
+# underneath, so Android ignores them.
+winit = "0.30"
 
 anyhow.workspace = true
 colog.workspace = true
@@ -25,3 +29,18 @@ log.workspace = true
 parking_lot.workspace = true
 tokio.workspace = true
 url.workspace = true
+
+# eframe's own defaults, minus the ones the workspace already asks for.
+[target.'cfg(not(target_os = "android"))'.dependencies]
+eframe = { workspace = true, features = ["accesskit", "wayland", "web_screen_reader", "x11"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+# winit's NativeActivity glue: no Java, the APK points straight at the cdylib.
+eframe = { workspace = true, features = ["android-native-activity"] }
+# stderr goes nowhere on a phone; this is how the log reaches logcat.
+android_logger = "0.15"
+# The engine's network stack verifies certificates against the system trust store through
+# rustls-platform-verifier, which on Android calls into Java and has to be handed the JVM
+# and the activity before the first fetch. Same versions the network stack uses.
+jni = { version = "0.22", default-features = false }
+rustls-platform-verifier = "0.7"

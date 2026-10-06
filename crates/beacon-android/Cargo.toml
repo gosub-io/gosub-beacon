@@ -1,0 +1,17 @@
+[package]
+name = "beacon-android"
+description = "Gosub Beacon for Android: the egui frontend as a NativeActivity library"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+# Android loads the app as a shared library named in the manifest (`beacon_android`);
+# `scripts/android-apk.sh` builds it and wraps it in an APK.
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[target.'cfg(target_os = "android")'.dependencies]
+beacon-egui = { path = "../beacon-egui" }
+winit = "0.30"

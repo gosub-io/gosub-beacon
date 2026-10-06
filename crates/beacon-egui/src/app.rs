@@ -72,6 +72,9 @@ impl BeaconApp {
         // enters the runtime for its own setup, and `create_tab` below does a `block_on` --
         // which panics if it runs while a runtime context is already entered. Holding a
         // guard here stalls startup before the first frame, with an empty log.
+        #[cfg(target_os = "android")]
+        crate::android::touch_style(&cc.egui_ctx);
+
         let context = Arc::new(
             EguiContextProvider::from_eframe(cc)
                 .ok_or_else(|| anyhow::anyhow!("eframe is not running its wgpu renderer; Beacon's egui frontend needs it"))?,
@@ -402,6 +405,16 @@ impl eframe::App for BeaconApp {
 
         let Some(active) = self.active() else { return };
 
+        // The window runs under the status and navigation bars on Android; keep the chrome
+        // and the page out from under them. Added first, so they are the outermost panels.
+        #[cfg(target_os = "android")]
+        if let Some((_, top, _, bottom)) = crate::android::content_rect() {
+            let ppp = ctx.pixels_per_point();
+            let screen = ctx.content_rect().height() * ppp;
+            inset(ui, egui::Panel::top("inset-top"), top as f32 / ppp, faint);
+            inset(ui, egui::Panel::bottom("inset-bottom"), (screen - bottom as f32) / ppp, faint);
+        }
+
         // ── scroll ────────────────────────────────────────────────────────
         // Raw wheel events, not egui's smoothed delta: the engine smooths scrolling itself,
         // and forwarding an already-smoothed value double-smooths it into a slow ramp.
@@ -544,6 +557,10 @@ impl eframe::App for BeaconApp {
                             .vertical_align(egui::Align::Center),
                     );
                     self.address_bar_focused = response.has_focus();
+                    #[cfg(target_os = "android")]
+                    if response.gained_focus() || response.lost_focus() {
+                        crate::android::show_keyboard(response.gained_focus());
+                    }
                     if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                         let target = self.address_bar.clone();
                         self.navigate_active(&target);
@@ -663,6 +680,19 @@ impl eframe::App for BeaconApp {
                 }
             }
         });
+    }
+}
+
+/// An empty strip `size` points deep, keeping what comes after it off a system bar.
+#[cfg(target_os = "android")]
+fn inset(ui: &mut egui::Ui, panel: egui::Panel, size: f32, fill: egui::Color32) {
+    if size > 0.0 {
+        panel
+            .exact_size(size)
+            .resizable(false)
+            .show_separator_line(false)
+            .frame(egui::Frame::default().fill(fill))
+            .show(ui, |_| {});
     }
 }
 
