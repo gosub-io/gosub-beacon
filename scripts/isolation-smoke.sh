@@ -5,7 +5,8 @@
 #
 # Two runs of the same binary against a fixture page served from 127.0.0.1, both under
 # Xvfb: a `--single-process` run and an `--isolated` run (the isolation build's default). Each run also types into a field, scrolls
-# down and back, and follows a link, with a capture after every step. The plain run must stay single-process. The
+# down and back, narrows the window and widens it again, and follows a link, with a capture
+# after every step. The plain run must stay single-process. The
 # isolated run must show the network, vault, fork server and a renderer process, log the
 # fork server as ready at the Full tier, record the page title (it comes back from the
 # renderer, so it proves the remote render completed) and crash nothing. Then the two
@@ -34,7 +35,7 @@ SECOND_TITLE="Isolation smoke, page two"
 FIELD_Y=160
 LINK_Y=324
 TARGET_X=200
-STEPS="initial typed scrolled restored page2"
+STEPS="initial typed scrolled restored narrow widened page2"
 mkdir -p "$OUT"
 
 failures=0
@@ -254,6 +255,37 @@ run_mode() {
         pass "$mode: scrolling back restored the page (differing pixels: $back)"
     else
         fail "$mode: scrolling back did not restore the page (differing pixels: $back)"
+    fi
+
+    # Narrow the window in steps, as a drag does, then widen it again. The page
+    # rewraps at the new width and must come back as it was.
+    local wid w
+    wid=$(xdotool search --name 'Gosub Beacon' 2>/dev/null | tail -1)
+    for w in $(seq 1000 -24 760); do
+        xdotool windowsize "$wid" "$w" 768
+        sleep 0.05
+    done
+    xdotool windowsize --sync "$wid" 760 768
+    settle_capture "$OUT/$mode-narrow.png"
+    local narrowed
+    narrowed=$(diff_share "$OUT/$mode-restored.png" "$OUT/$mode-narrow.png")
+    if python3 -c "import sys; sys.exit(0 if float('$narrowed') >= 0.02 else 1)"; then
+        pass "$mode: the page followed the narrower window (differing pixels: $narrowed)"
+    else
+        fail "$mode: the page did not change with the window (differing pixels: $narrowed)"
+    fi
+    for w in $(seq 784 24 1024); do
+        xdotool windowsize "$wid" "$w" 768
+        sleep 0.05
+    done
+    xdotool windowsize --sync "$wid" 1024 768
+    settle_capture "$OUT/$mode-widened.png"
+    local widened
+    widened=$(diff_share "$OUT/$mode-restored.png" "$OUT/$mode-widened.png")
+    if python3 -c "import sys; sys.exit(0 if float('$widened') <= float('$MAX_DIFF') else 1)"; then
+        pass "$mode: widening the window again restored the page (differing pixels: $widened)"
+    else
+        fail "$mode: widening the window again did not restore the page (differing pixels: $widened)"
     fi
 
     # Follow the link.

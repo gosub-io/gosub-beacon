@@ -119,9 +119,9 @@ network process do not report back to the request log yet.
 fixture page in `tests/fixtures/isolation`, plain and `--isolated`, and checks the
 component processes, the log and the recorded page title (it comes back from the
 renderer process, so it proves the remote render). Each run then types into the page's
-field, scrolls down and back, and follows its link; after every step the two runs'
-screenshots must agree within a small antialiasing margin, and scrolling back must
-restore the page exactly. CI runs it as the `isolation-smoke` job. Locally:
+field, scrolls down and back, narrows the window and widens it again, and follows its
+link; after every step the two runs' screenshots must agree within a small antialiasing
+margin, and scrolling back and widening back must restore the page exactly. CI runs it as the `isolation-smoke` job. Locally:
 
 ```bash
 cargo build --bin gosub-beacon-gtk --no-default-features --features gtk,isolation

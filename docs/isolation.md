@@ -45,14 +45,14 @@ A default build (`--features gtk`) is the one-process engine; `--isolated` there
 
 Three layers, each proving something the others cannot.
 
-- **The engine's isolation suite**: `cargo test -p gosub_engine --test process_isolation` in the engine repository, 44 scenarios run through the `isolation-harness` binary under the broker lockdown. They cover the network process, the vault, the storage service, the decoder, the fork server, the renderer protocol (scroll, hover, input, crash and replacement), and `no_process_finds_a_way_out_of_its_sandbox`. Sandbox correctness is proven here; Beacon cannot prove it and does not try.
+- **The engine's isolation suite**: `cargo test -p gosub_engine --test process_isolation` in the engine repository, 44 scenarios run through the `isolation-harness` binary under the broker lockdown. They cover the network process, the vault, the storage service, the decoder, the fork server, the renderer protocol (scroll, hover, input, resize, crash and replacement), and `no_process_finds_a_way_out_of_its_sandbox`. Sandbox correctness is proven here; Beacon cannot prove it and does not try.
 - **The sandbox probes**: `gosub_sandbox`'s `sandbox-probe` binary applies each lockdown and attempts one escape per probe; the engine's tests run them. These are the negative controls.
-- **Beacon's smoke test**: `scripts/isolation-smoke.sh`, run in CI as the `isolation-smoke` job. A `--single-process` run and an `--isolated` run of the same binary under Xvfb against the fixture page: the process tree (network, vault, storage, fork server, a renderer), the log lines above and the absence of every fallback warning, the page title recorded by the renderer process, typing, scrolling and a link followed in both modes, and the two renders compared after every step. This proves Beacon's wiring, not the sandboxes.
+- **Beacon's smoke test**: `scripts/isolation-smoke.sh`, run in CI as the `isolation-smoke` job. A `--single-process` run and an `--isolated` run of the same binary under Xvfb against the fixture page: the process tree (network, vault, storage, fork server, a renderer), the log lines above and the absence of every fallback warning, the page title recorded by the renderer process, typing, scrolling, a window narrowed and widened again and a link followed in both modes, and the two renders compared after every step. This proves Beacon's wiring, not the sandboxes.
 
 ## Known limits
 
 - Same-site tabs share a renderer and render serially; a keystroke in one waits behind another's render.
-- Resizing the window is slow under isolation: every size during a drag costs a full re-layout in the renderer. To be fixed with a resize pass in the renderer protocol.
+- During a window drag the page shows at its old geometry until the renderer's resize pass lands; sizes that arrive while one is in flight collapse to the latest. Tiles are not scaled to the new size meanwhile.
 - The activity strip shows no network lines under isolation: requests through the network process do not report back to the request log yet, so the developer panel's network view is empty there too.
 - A re-layout after input is a full layout, in-process and out alike.
 - Downloads can only be saved under `~/Downloads` (or the profile) while the broker is locked down.
