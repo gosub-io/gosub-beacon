@@ -26,6 +26,9 @@ use crate::chrome::{self, Favicons};
 use crate::context::EguiContextProvider;
 use crate::platform::EguiPlatform;
 
+/// Link-hover status text size, in points.
+const STATUS_TEXT: f32 = if cfg!(target_os = "android") { 14.0 } else { 11.0 };
+
 /// This frontend's render configuration: Vello on egui's own wgpu device.
 pub type EguiConfig = gosub_engine::DefaultRenderConfig<VelloBackend<EguiContextProvider>>;
 
@@ -64,6 +67,8 @@ pub struct BeaconApp {
     favicons: Favicons,
     /// Bookmarks, read from the engine's places store once at startup.
     bookmarks: Vec<(String, String)>,
+    /// Per tab, the queue that forwards [`Self::send_active`]'s commands in order.
+    senders: std::cell::RefCell<HashMap<TabId, tokio::sync::mpsc::UnboundedSender<TabCommand>>>,
 }
 
 impl BeaconApp {
@@ -120,6 +125,7 @@ impl BeaconApp {
             log: Vec::new(),
             favicons: Favicons::default(),
             bookmarks: Vec::new(),
+            senders: Default::default(),
         };
         app.bookmarks = app.engine.places().bookmarks().into_iter().map(|b| (b.title, b.url)).collect();
 
@@ -175,21 +181,34 @@ impl BeaconApp {
 
     /// Send a raw engine command to the active tab. Used for pointer, key and viewport
     /// traffic, which is this frontend's own input plumbing rather than a browser decision.
+    ///
+    /// In order: a tap is a move, a press and a release, and the engine follows the link under
+    /// the pointer as of the press. Sent from a task each, they raced, and a press that beat its
+    /// move followed whatever link the pointer was last over -- or none. So each tab gets one
+    /// task that forwards its commands as they were queued.
     fn send_active(&self, command: TabCommand) {
-        let Some(handle) = self.active_handle() else { return };
-        self.rt.spawn(async move {
-            let _ = handle.send(command).await;
-        });
+        let Some(tab_id) = self.active() else { return };
+        let mut senders = self.senders.borrow_mut();
+        if let std::collections::hash_map::Entry::Vacant(entry) = senders.entry(tab_id) {
+            let Some(handle) = self.active_handle() else { return };
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<TabCommand>();
+            self.rt.spawn(async move {
+                while let Some(command) = rx.recv().await {
+                    let _ = handle.send(command).await;
+                }
+            });
+            entry.insert(tx);
+        }
+        if let Some(tx) = senders.get(&tab_id) {
+            let _ = tx.send(command);
+        }
     }
 
     /// Send a command and then make sure the tab is actually drawing. Drawing is suspended
     /// until asked, and neither navigating nor resizing resumes it on its own.
     fn send_active_and_draw(&self, command: TabCommand) {
-        let Some(handle) = self.active_handle() else { return };
-        self.rt.spawn(async move {
-            let _ = handle.send(command).await;
-            let _ = handle.send(TabCommand::ResumeDrawing { fps: DRAW_FPS }).await;
-        });
+        self.send_active(command);
+        self.send_active(TabCommand::ResumeDrawing { fps: DRAW_FPS });
     }
 
     /// Switch to a tab: record it, promote it in the MRU list, and follow the address bar.
@@ -219,6 +238,8 @@ impl BeaconApp {
         self.tabs.lock().unwrap().remove_tab(tab_id);
         self.beacon.mru_mut().forget(tab_id);
         self.views.remove(&tab_id);
+        // Dropping the sender ends the tab's forwarding task.
+        self.senders.borrow_mut().remove(&tab_id);
         self.favicons.forget(tab_id);
         // remove_tab hands over to a neighbour; follow it so the address bar agrees.
         let next = self.tabs.lock().unwrap().active();
@@ -279,6 +300,7 @@ impl BeaconApp {
                 }
                 BeaconEvent::TabCrashed(tab_id, _) => {
                     self.views.remove(&tab_id);
+                    self.senders.borrow_mut().remove(&tab_id);
                     self.favicons.forget(tab_id);
                 }
                 BeaconEvent::FaviconChanged(tab_id) => self.favicons.forget(tab_id),
@@ -529,20 +551,20 @@ impl eframe::App for BeaconApp {
                         }
                     };
 
-                    if chrome::tool_button(ui, "\u{2190}", "Back", can_back).clicked() {
+                    if chrome::tool_button(ui, "\u{23f4}", "Back", can_back).clicked() {
                         self.dispatch(BeaconCommand::Back);
                     }
-                    if chrome::tool_button(ui, "\u{2192}", "Forward", can_forward).clicked() {
+                    if chrome::tool_button(ui, "\u{23f5}", "Forward", can_forward).clicked() {
                         self.dispatch(BeaconCommand::Forward(None));
                     }
                     if loading {
-                        if chrome::tool_button(ui, "\u{2715}", "Stop", true).clicked() {
+                        if chrome::tool_button(ui, "\u{1f5d9}", "Stop", true).clicked() {
                             self.dispatch(BeaconCommand::Stop);
                         }
                     } else if chrome::tool_button(ui, "\u{21bb}", "Reload", true).clicked() {
                         self.dispatch(BeaconCommand::Reload { ignore_cache: false });
                     }
-                    if chrome::tool_button(ui, "\u{2302}", "Home", true).clicked() {
+                    if chrome::tool_button(ui, "\u{1f3e0}", "Home", true).clicked() {
                         self.navigate_active("gosub://home");
                     }
                     ui.add_space(4.0);
@@ -557,6 +579,16 @@ impl eframe::App for BeaconApp {
                             .vertical_align(egui::Align::Center),
                     );
                     self.address_bar_focused = response.has_focus();
+                    // Select the whole address on focus, as browsers do, so typing replaces it.
+                    if response.gained_focus() {
+                        if let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), response.id) {
+                            let end = egui::text::CCursor::new(self.address_bar.chars().count());
+                            state
+                                .cursor
+                                .set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(0), end)));
+                            state.store(ui.ctx(), response.id);
+                        }
+                    }
                     #[cfg(target_os = "android")]
                     if response.gained_focus() || response.lost_focus() {
                         crate::android::show_keyboard(response.gained_focus());
@@ -598,15 +630,6 @@ impl eframe::App for BeaconApp {
                             self.navigate_active(&url);
                         }
                     });
-                });
-        }
-
-        // ── status: only while a link is under the pointer ────────────────
-        if !self.status.is_empty() {
-            egui::Panel::bottom("status")
-                .frame(egui::Frame::default().fill(faint).inner_margin(egui::Margin::symmetric(8, 3)))
-                .show(ui, |ui| {
-                    ui.label(egui::RichText::new(&self.status).size(11.0).color(ui.visuals().weak_text_color()));
                 });
         }
 
@@ -656,6 +679,27 @@ impl eframe::App for BeaconApp {
                 egui::Color32::WHITE,
             );
 
+            // ── status: only while a link is under the pointer ────────────
+            // Drawn over the page's bottom-left corner, not as a panel: a panel coming and
+            // going resizes the page, and each resize is a re-layout with the old frame
+            // stretched to the new size until it lands. A swipe crossing links did that on
+            // every link.
+            if !self.status.is_empty() {
+                let padding = egui::vec2(8.0, 3.0);
+                let color = ui.visuals().weak_text_color();
+                let mut job = egui::text::LayoutJob::simple_singleline(self.status.clone(), egui::FontId::proportional(STATUS_TEXT), color);
+                job.wrap = egui::text::TextWrapping::truncate_at_width(rect.width() - 2.0 * padding.x);
+                let galley = ui.painter().layout_job(job);
+                let size = galley.size() + 2.0 * padding;
+                let bubble = egui::Rect::from_min_size(egui::pos2(rect.min.x, rect.max.y - size.y), size);
+                let radius = egui::CornerRadius {
+                    ne: 4,
+                    ..Default::default()
+                };
+                ui.painter().rect_filled(bubble, radius, faint);
+                ui.painter().galley(bubble.min + padding, galley, color);
+            }
+
             if let Some(pos) = ctx.pointer_latest_pos() {
                 if rect.contains(pos) {
                     let rel = pos - rect.min;
@@ -670,9 +714,21 @@ impl eframe::App for BeaconApp {
             }
 
             if response.clicked() {
-                if let Some(pos) = ctx.input(|i| i.pointer.interact_pos()) {
+                // The click's own position: a finger lifting takes the pointer away with it,
+                // so by now the context may have none.
+                if let Some(pos) = response.interact_pointer_pos() {
                     let rel = pos - rect.min;
+                    // The engine follows the link under the pointer, and for a tap this is the
+                    // first it hears of where the finger is. For a mouse it is a no-op.
+                    self.send_active(TabCommand::MouseMove { x: rel.x, y: rel.y });
+                    // Press and release together: a press without its release would leave
+                    // the pointer holding whatever it went down on.
                     self.send_active(TabCommand::MouseDown {
+                        x: rel.x,
+                        y: rel.y,
+                        button: MouseButton::Left,
+                    });
+                    self.send_active(TabCommand::MouseUp {
                         x: rel.x,
                         y: rel.y,
                         button: MouseButton::Left,

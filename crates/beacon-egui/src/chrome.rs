@@ -133,12 +133,11 @@ pub fn tab(ui: &mut Ui, label: &str, icon: Option<&egui::TextureHandle>, loading
     } else {
         ui.visuals().text_color()
     };
-    let galley = ui
-        .painter()
-        .layout(label.to_owned(), egui::TextStyle::Body.resolve(ui.style()), color, available);
-    // One line only: a wrapped tab title would grow the strip.
+    // One line only, cut short with an ellipsis: a wrapped tab title would grow the strip.
+    let mut job = egui::text::LayoutJob::simple_singleline(label.to_owned(), egui::TextStyle::Body.resolve(ui.style()), color);
+    job.wrap = egui::text::TextWrapping::truncate_at_width(available);
+    let galley = ui.painter().layout_job(job);
     ui.painter()
-        .with_clip_rect(Rect::from_min_max(egui::pos2(cursor, rect.min.y), egui::pos2(text_end, rect.max.y)))
         .galley(egui::pos2(cursor, middle - galley.size().y / 2.0), galley, color);
 
     (response, closed)
