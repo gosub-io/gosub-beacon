@@ -1718,6 +1718,21 @@ impl BrowserWindow {
             if let Some(hint) = request.failure_hint() {
                 rows.push(DetailRow::Note(hint.into()));
             }
+            if let Some(fix) = request.failure_fix() {
+                rows.push(DetailRow::Pair("Fix".into(), fix.into()));
+            }
+            if let Some(spec) = request.failure_spec() {
+                rows.push(DetailRow::Pair("Rule".into(), spec.into()));
+            }
+            // What the refusal was decided on, pulled out of the two header lists so the
+            // reader does not have to find them there.
+            let evidence = request.cors_evidence();
+            if !evidence.is_empty() {
+                rows.push(DetailRow::Section("CORS headers".into()));
+                for (name, value) in evidence {
+                    rows.push(DetailRow::Pair(name, value));
+                }
+            }
         }
         if request.headers.is_empty() {
             rows.push(DetailRow::Note("No response headers recorded.".into()));

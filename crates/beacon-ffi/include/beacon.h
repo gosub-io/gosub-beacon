@@ -395,6 +395,10 @@ char *beacon_net_phase_hint(BeaconBrowser *browser, size_t index);
  * sends you somewhere and one that does not. */
 char *beacon_net_failure_label(BeaconBrowser *browser, size_t index);
 char *beacon_net_failure_hint(BeaconBrowser *browser, size_t index);
+/* What would make the request succeed, and a link to the rule that refused it, when the
+ * failure is precise enough to say -- today, a CORS refusal. NULL otherwise. */
+char *beacon_net_failure_fix(BeaconBrowser *browser, size_t index);
+char *beacon_net_failure_spec(BeaconBrowser *browser, size_t index);
 /* The captured body, decoded for display. NULL when none was captured: check body_evicted
  * to tell "dropped to stay in budget" from "never taken". */
 char *beacon_net_body_text(BeaconBrowser *browser, size_t index);

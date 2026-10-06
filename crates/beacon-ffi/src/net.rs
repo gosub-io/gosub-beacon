@@ -278,6 +278,16 @@ row_string!(
     |r| r.failure_hint().map(str::to_string)
 );
 row_string!(
+    beacon_net_failure_fix,
+    "What would make the request succeed, when the failure names a rule precise enough to say — today, a CORS refusal. NULL otherwise.",
+    |r| r.failure_fix().map(str::to_string)
+);
+row_string!(
+    beacon_net_failure_spec,
+    "A link to the rule that refused the request, alongside `failure_fix`. NULL otherwise.",
+    |r| r.failure_spec().map(str::to_string)
+);
+row_string!(
     beacon_net_body_text,
     "The captured response preview, decoded for display. NULL when no body was captured; check `body_evicted` to tell 'dropped' from 'never taken'.",
     |r| r
