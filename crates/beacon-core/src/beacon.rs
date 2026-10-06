@@ -412,17 +412,30 @@ impl Beacon {
             NavigationEvent::HistoryChanged { history } => {
                 // The engine also moves the address bar target: on a back/forward traversal
                 // the tab's URL is the entry we moved to, even while it is still loading.
-                let current_url = history.current.and_then(|id| history.entries.get(id.0)).map(|e| e.url.clone());
+                let current = history.current.and_then(|id| history.entries.get(id.0));
+                let current_url = current.map(|e| e.url.clone());
+                // And the title: the entry carries the document's, and this is the only place
+                // an in-process page's title arrives -- the engine sends `TitleChanged` only for
+                // pages rendered out of process. It follows `Finished`, which titled the tab
+                // with its URL as a stand-in. An untitled page keeps that stand-in.
+                let current_title = current.and_then(|e| e.title.clone()).filter(|t| !t.trim().is_empty());
                 let url_for_event = current_url.clone();
                 self.with_tab(our_id, |tab| {
                     tab.history_mut().update(history);
                     if let Some(url) = &current_url {
                         tab.set_url(url.clone());
                     }
+                    if let Some(title) = &current_title {
+                        tab.set_title(title);
+                    }
                 });
                 let mut out = Vec::new();
                 if let Some(url) = url_for_event {
                     out.push(BeaconEvent::UrlChanged(our_id, url));
+                }
+                if let Some(title) = current_title {
+                    out.push(BeaconEvent::TitleChanged(our_id, title));
+                    out.push(BeaconEvent::TabsChanged);
                 }
                 out.push(BeaconEvent::NavStateChanged(our_id));
                 out
@@ -561,6 +574,44 @@ mod tests {
         assert!(out.contains(&BeaconEvent::TabsChanged));
         let title = beacon.tabs().lock().unwrap().get_tab(tab_id).unwrap().title().to_string();
         assert_eq!(title, "Hello");
+    }
+
+    #[test]
+    fn the_history_entry_titles_an_in_process_page() {
+        use gosub_engine::tab::{HistoryEntryId, HistoryEntrySummary, HistorySnapshot};
+        let (mut beacon, tab_id, engine_id) = beacon_with_tab();
+        let url = url::Url::parse("https://news.ycombinator.com/").unwrap();
+        let title = |beacon: &Beacon| beacon.tabs().lock().unwrap().get_tab(tab_id).unwrap().title().to_string();
+
+        // The order the engine sends them in: `Finished` titles the tab with its URL...
+        beacon.on_engine_event(nav(
+            engine_id,
+            NavigationEvent::Finished {
+                nav_id: NavigationId::new(),
+                url: url.clone(),
+            },
+        ));
+        assert_eq!(title(&beacon), url.as_str());
+
+        // ...and the history snapshot after it carries the document's title.
+        let entry = HistoryEntrySummary {
+            id: HistoryEntryId(0),
+            url: url.clone(),
+            title: Some("Hacker News".into()),
+            parent: None,
+        };
+        let out = beacon.on_engine_event(nav(
+            engine_id,
+            NavigationEvent::HistoryChanged {
+                history: HistorySnapshot {
+                    current: Some(HistoryEntryId(0)),
+                    entries: vec![entry],
+                    ..Default::default()
+                },
+            },
+        ));
+        assert_eq!(title(&beacon), "Hacker News");
+        assert!(out.contains(&BeaconEvent::TitleChanged(tab_id, "Hacker News".into())));
     }
 
     #[test]
