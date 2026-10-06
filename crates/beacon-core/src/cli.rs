@@ -26,12 +26,18 @@ pub struct Cli {
     #[arg(long, value_name = "DIR")]
     pub user_data_dir: Option<PathBuf>,
 
-    /// Run the engine's component processes (network stack, cookie vault, image decoders,
-    /// per-site page renderers) and confine this process to its profile directory. Linux
-    /// only; elsewhere the engine says what cannot apply and runs in-process. For this run
-    /// only: the stored `security.process_isolation` setting is left alone.
-    #[arg(long)]
+    /// Run the engine's component processes (network stack, cookie vault, localStorage
+    /// service, image decoders, per-site page renderers) and confine this process to its
+    /// profile directory. Linux only; elsewhere the engine says what cannot apply and runs
+    /// in-process. The default in an `isolation` build. For this run only: the stored
+    /// `security.process_isolation` setting is left alone.
+    #[arg(long, conflicts_with = "single_process")]
     pub isolated: bool,
+
+    /// Run everything in this one process, as the default build does. The way out of an
+    /// `isolation` build's default.
+    #[arg(long)]
+    pub single_process: bool,
 }
 
 static CLI: OnceLock<Cli> = OnceLock::new();
@@ -46,5 +52,14 @@ impl Cli {
     /// and any stray caller get sane values rather than a panic.
     pub fn global() -> &'static Cli {
         CLI.get_or_init(Cli::default)
+    }
+
+    /// Whether this run uses the engine's component processes: asked for with
+    /// `--isolated`, or the default of an `isolation` build unless `--single-process`.
+    pub fn isolated(&self) -> bool {
+        if self.isolated {
+            return true;
+        }
+        cfg!(feature = "isolated-by-default") && !self.single_process
     }
 }

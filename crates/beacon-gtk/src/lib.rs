@@ -41,7 +41,7 @@ pub fn run() {
 
     // Before any thread, the logger or the engine exist: confine this process to what it
     // writes. Behind the same flag as the component processes, for now.
-    if cli.isolated {
+    if cli.isolated() {
         beacon_core::isolation::lock_down_broker();
     }
 

@@ -27,7 +27,7 @@ pub fn run() {
     // the network, vault and decoder processes; the renderer tier does not apply, because
     // Vello presents a GPU texture and isolated renderers produce CPU tiles.
     gosub_engine::child_process::dispatch_with::<app::EguiConfig>();
-    if beacon_core::cli::Cli::init().isolated {
+    if beacon_core::cli::Cli::init().isolated() {
         beacon_core::isolation::lock_down_broker();
     }
 

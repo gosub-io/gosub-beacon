@@ -90,20 +90,15 @@ cargo run --bin gosub-beacon-egui -- https://example.com  # the other frontend
 `gosub-beacon-gtk` is the one with features; `gosub-beacon-egui` currently does tabs,
 navigation and rendering and little else.
 
-`--isolated` (Linux) runs the engine's component processes: the network stack, the
-cookie vault and a throwaway decoder per image, with Beacon's own process confined to its
-profile directory, `~/Downloads` and the temp dir. A download saved anywhere else fails
-under it. The renderer tier, one sandboxed renderer process per site, needs the
-`isolation` build feature on top (`cargo build --features isolation`, GTK only): it
-switches the font system to cosmic-text, which the engine can confine fully, and that
-renders text differently from the default build. Off by default while it is being
-measured; the engine's `security.process_isolation` setting in `gosub://config` has no
-effect until then. The egui frontend never gets the renderer tier: Vello presents a GPU
-texture, and isolated renderers produce CPU tiles.
-
-Profile data (cookies, local storage, bookmarks/history, settings) ends up in
-`~/.local/share/gosub-beacon` on Linux and `~/Library/Application Support/gosub-beacon`
-on macOS.
+An `isolation` build (`--features isolation`, GTK, Linux) runs the engine with every
+component in its own sandboxed process: the network stack, the cookie vault, the
+localStorage service, a throwaway decoder per image, and one renderer per site; Beacon's
+own process is confined to its profile, `~/Downloads` and the temp dir. It is isolated by
+default; `--single-process` turns it off for a run. A default build is the one-process
+engine; `--isolated` there gets the service processes but renders in-process. The
+isolated mode keeps its own localStorage, and a download saved outside `~/Downloads` fails
+under the lockdown. See [docs/isolation.md](docs/isolation.md) for what runs where, how it
+is verified and the known limits.
 
 ### Watching what the engine is doing
 

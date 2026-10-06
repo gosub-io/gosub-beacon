@@ -4,7 +4,7 @@
 # in-process path paints?
 #
 # Two runs of the same binary against a fixture page served from 127.0.0.1, both under
-# Xvfb: a plain run and an `--isolated` run. Each run also types into a field, scrolls
+# Xvfb: a `--single-process` run and an `--isolated` run (the isolation build's default). Each run also types into a field, scrolls
 # down and back, and follows a link, with a capture after every step. The plain run must stay single-process. The
 # isolated run must show the network, vault, fork server and a renderer process, log the
 # fork server as ready at the Full tier, record the page title (it comes back from the
@@ -289,12 +289,12 @@ check_plain_tree() {
 
 check_isolated_tree() {
     local missing=""
-    for name in gosub-net gosub-vault gosub-forksrv; do
+    for name in gosub-net gosub-vault gosub-storage gosub-forksrv; do
         procs | grep -qx "$name" || missing="$missing $name"
     done
     procs | grep -q '^renderer-' || missing="$missing renderer-*"
     if [ -z "$missing" ]; then
-        pass "isolated: network, vault, fork server and a renderer are running"
+        pass "isolated: network, vault, storage, fork server and a renderer are running"
     else
         fail "isolated: missing process(es):$missing"
     fi
@@ -326,7 +326,7 @@ check_log() {
 }
 
 echo "== plain run"
-run_mode plain
+run_mode plain --single-process
 check_log plain "$log" \
     "security.process_isolation is off" \
     '!network stack running in a separate' \
@@ -338,7 +338,11 @@ run_mode isolated --isolated
 check_log isolated "$log" \
     "network stack running in a separate, sandboxed process" \
     "renderer fork server ready (confinement tier: Full)" \
+    "localStorage is served by a separate, sandboxed storage process" \
     "landlock active" \
+    '!storage service could not start' \
+    '!could not apply parent-side confinement to the decoder' \
+    '!falling back to in-process' \
     '!no forked_tile_rasterizer' \
     '!Renderer for' \
     '!panicked' \
