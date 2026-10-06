@@ -103,6 +103,8 @@ pub struct BeaconApp {
     bookmarks: Vec<(String, String)>,
     /// The finger scrolling the page, and where it was last seen.
     touch: Option<(egui::TouchId, egui::Pos2)>,
+    /// The activity strip over the page, while it is switched on (Show activity).
+    activity: Option<chrome::ActivityStrip>,
     /// The loading bar along the top of the page.
     progress: chrome::LoadingBar,
     /// Per tab, the queue that forwards [`Self::send_active`]'s commands in order.
@@ -179,6 +181,7 @@ impl BeaconApp {
             tab_list_open: false,
             senders: Default::default(),
             progress: Default::default(),
+            activity: None,
         };
         app.bookmarks = app.engine.places().bookmarks().into_iter().map(|b| (b.title, b.url)).collect();
 
@@ -489,6 +492,11 @@ impl eframe::App for BeaconApp {
 
         let Some(active) = self.active() else { return };
 
+        // View > Show Activity's shortcut in the GTK frontend.
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::A)) {
+            self.toggle_activity();
+        }
+
         // The window runs under the status and navigation bars on Android; keep the chrome
         // and the page out from under them. Added first, so they are the outermost panels.
         #[cfg(target_os = "android")]
@@ -638,7 +646,7 @@ impl eframe::App for BeaconApp {
                     // The address bar takes the room left after the trailing controls, so
                     // they stay put instead of drifting with the URL length.
                     let trailing = if COMPACT {
-                        ui.spacing().interact_size.y + ui.spacing().item_spacing.x
+                        2.0 * (ui.spacing().interact_size.y + ui.spacing().item_spacing.x)
                     } else {
                         30.0
                     };
@@ -673,6 +681,17 @@ impl eframe::App for BeaconApp {
                         if chrome::tab_count_button(ui, count).clicked() {
                             self.tab_list_open = !self.tab_list_open;
                         }
+                        // Frameless like the other toolbar buttons.
+                        let menu = egui::Button::new(egui::RichText::new("\u{2630}").size(18.0))
+                            .frame(false)
+                            .min_size(egui::Vec2::splat(ui.spacing().interact_size.y));
+                        egui::containers::menu::MenuButton::from_button(menu).ui(ui, |ui| {
+                            let mut showing = self.activity.is_some();
+                            if ui.checkbox(&mut showing, "Show activity").changed() {
+                                self.toggle_activity();
+                                ui.close();
+                            }
+                        });
                     } else {
                         let bookmarked = self.bookmarks.iter().any(|(_, b)| b.as_str() == url.as_str());
                         let star = if bookmarked { "\u{2605}" } else { "\u{2606}" };
@@ -832,6 +851,10 @@ impl eframe::App for BeaconApp {
                 egui::Color32::WHITE,
             );
             self.progress.paint(ui, rect);
+            let active_tab = self.active();
+            if let Some(strip) = self.activity.as_mut() {
+                strip.paint(ui, rect, active_tab);
+            }
 
             // ── status: only while a link is under the pointer ────────────
             // Drawn over the page's bottom-left corner, not as a panel: a panel coming and
@@ -914,6 +937,15 @@ fn inset(ui: &mut egui::Ui, panel: egui::Panel, size: f32, fill: egui::Color32) 
 }
 
 impl BeaconApp {
+    /// Show or hide the activity strip. Showing it subscribes to the engine's telemetry,
+    /// which is what makes the engine announce its stages; hiding drops the subscription.
+    fn toggle_activity(&mut self) {
+        self.activity = match self.activity.take() {
+            Some(_) => None,
+            None => Some(chrome::ActivityStrip::new()),
+        };
+    }
+
     /// The tab list: every tab as a card to switch to or close, and a way to open a new one.
     /// Shown instead of the page while the tab button is toggled on.
     fn tab_list(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {

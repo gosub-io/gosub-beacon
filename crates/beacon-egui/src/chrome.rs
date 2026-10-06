@@ -333,3 +333,73 @@ impl LoadingBar {
     }
 }
 
+/// The activity strip (Show activity): what the engine is doing right now, as
+/// [`beacon_core::activity`]'s four lines, over the bottom right of the page like GTK's. Holds
+/// the telemetry subscription, which is what makes the engine announce its stages at all, so
+/// dropping the strip makes browsing without it cost nothing extra.
+pub struct ActivityStrip {
+    model: beacon_core::activity::Activity,
+    rx: tokio::sync::broadcast::Receiver<std::sync::Arc<gosub_engine::telemetry::Event>>,
+}
+
+impl ActivityStrip {
+    pub fn new() -> Self {
+        Self {
+            model: Default::default(),
+            rx: gosub_engine::telemetry::subscribe(),
+        }
+    }
+
+    /// Take in what the engine said since the last frame, bring the network lines in step
+    /// with the request log for `tab`, and draw the lines over the bottom right of `page`.
+    pub fn paint(&mut self, ui: &Ui, page: Rect, tab: Option<beacon_core::tab::TabId>) {
+        let now = std::time::Instant::now();
+        loop {
+            match self.rx.try_recv() {
+                Ok(event) => self.model.on_telemetry(&event.kind, &event.data, now),
+                Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => continue,
+                Err(_) => break,
+            }
+        }
+        self.model.sync_requests(&beacon_core::devtools::requests(tab), now);
+        let lines = self.model.lines(now);
+
+        let visuals = ui.visuals();
+        let font = egui::FontId::monospace(if cfg!(target_os = "android") { 10.0 } else { 12.0 });
+        let padding = Vec2::new(8.0, 4.0);
+        let width = (page.width() - 2.0 * padding.x).max(0.0);
+        let galleys: Vec<_> = lines
+            .iter()
+            .map(|line| {
+                let mut job = egui::text::LayoutJob::simple_singleline(line.clone(), font.clone(), visuals.text_color());
+                job.wrap = egui::text::TextWrapping::truncate_at_width(width);
+                ui.painter().layout_job(job)
+            })
+            .collect();
+        let row = ui.ctx().fonts_mut(|f| f.row_height(&font)) * 1.4;
+        // As wide as a full line (label and clock), so the strip stays put as lines come and
+        // go and still reads as a panel when nothing is happening; never wider than the page.
+        let full_line = ui.ctx().fonts_mut(|f| f.glyph_width(&font, '0')) * 68.0;
+        let text_width = galleys.iter().map(|g| g.size().x).fold(full_line, f32::max).min(width);
+        let size = Vec2::new(text_width, row * galleys.len() as f32) + 2.0 * padding;
+        let strip = Rect::from_min_size(page.max - size, size);
+        let radius = CornerRadius {
+            nw: 6,
+            ..Default::default()
+        };
+        ui.painter().rect_filled(strip, radius, visuals.panel_fill.gamma_multiply(0.85));
+        ui.painter().rect_stroke(
+            strip,
+            radius,
+            Stroke::new(1.0, visuals.text_color().gamma_multiply(0.15)),
+            StrokeKind::Inside,
+        );
+        for (i, galley) in galleys.into_iter().enumerate() {
+            let top = strip.min.y + padding.y + i as f32 * row + (row - galley.size().y) / 2.0;
+            ui.painter()
+                .galley(egui::pos2(strip.min.x + padding.x, top), galley, Color32::PLACEHOLDER);
+        }
+        // Ten times a second: the clocks read in tenths.
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
+    }
+}
