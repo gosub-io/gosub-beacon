@@ -133,7 +133,12 @@ impl BeaconApp {
             EguiContextProvider::from_eframe(cc)
                 .ok_or_else(|| anyhow::anyhow!("eframe is not running its wgpu renderer; Beacon's egui frontend needs it"))?,
         );
-        let backend = VelloBackend::new(context.clone()).map_err(|e| anyhow::anyhow!("Vello backend: {e:?}"))?;
+        // On a phone, Vello rendering the whole HiDPI viewport takes longer than a frame (~55 ms
+        // on a Fairphone 6), so every scroll step lagged. The tile pipeline rasterizes once and
+        // scrolls by compositing (~12 ms). The desktop keeps the scene path for now.
+        let backend = VelloBackend::new(context.clone())
+            .map_err(|e| anyhow::anyhow!("Vello backend: {e:?}"))?
+            .with_gpu_tiles(cfg!(target_os = "android"));
 
         let mut engine = BrowserEngine::<EguiConfig>::new(rt, false, Arc::new(backend))?;
         let event_rx = engine

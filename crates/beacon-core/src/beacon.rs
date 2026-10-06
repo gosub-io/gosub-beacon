@@ -24,8 +24,9 @@ use crate::tab::{GosubTabManager, TabId};
 /// The engine's own tab identifier.
 pub type EngineTabId = gosub_engine::tab::TabId;
 
-/// Frame rate to ask the engine for when a tab starts drawing again.
-pub const DRAW_FPS: u16 = 30;
+/// Frame rate to ask the engine for when a tab starts drawing again. Android asks for 60: a
+/// finger drags the page directly, and 30 reads as stutter there in a way a wheel does not.
+pub const DRAW_FPS: u16 = if cfg!(target_os = "android") { 60 } else { 30 };
 
 /// Browser state that reacts to the engine.
 pub struct Beacon {
