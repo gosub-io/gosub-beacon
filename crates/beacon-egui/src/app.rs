@@ -103,6 +103,8 @@ pub struct BeaconApp {
     bookmarks: Vec<(String, String)>,
     /// The finger scrolling the page, and where it was last seen.
     touch: Option<(egui::TouchId, egui::Pos2)>,
+    /// The loading bar along the top of the page.
+    progress: chrome::LoadingBar,
     /// Per tab, the queue that forwards [`Self::send_active`]'s commands in order.
     senders: std::cell::RefCell<HashMap<TabId, tokio::sync::mpsc::UnboundedSender<TabCommand>>>,
     /// The tab list is showing in place of the page (compact layout).
@@ -176,6 +178,7 @@ impl BeaconApp {
             fling: None,
             tab_list_open: false,
             senders: Default::default(),
+            progress: Default::default(),
         };
         app.bookmarks = app.engine.places().bookmarks().into_iter().map(|b| (b.title, b.url)).collect();
 
@@ -263,8 +266,9 @@ impl BeaconApp {
 
     /// Switch to a tab: record it, promote it in the MRU list, and follow the address bar.
     fn activate(&mut self, tab_id: TabId) {
-        // A fling belongs to the page it started on.
+        // A fling belongs to the page it started on, and so does a loading bar.
         self.fling = None;
+        self.progress = Default::default();
         self.tabs.lock().unwrap().mark_active(tab_id);
         self.beacon.mru_mut().touch(tab_id);
         if let Some(tab) = self.tabs.lock().unwrap().get_tab(tab_id) {
@@ -356,6 +360,13 @@ impl BeaconApp {
                     self.favicons.forget(tab_id);
                 }
                 BeaconEvent::FaviconChanged(tab_id) => self.favicons.forget(tab_id),
+                // Only the active tab's load is reported. `None` is the load ending, which
+                // runs the bar to the end before it goes.
+                BeaconEvent::LoadProgress(tab_id, fraction) => {
+                    if self.active() == Some(tab_id) {
+                        self.progress.set(fraction.map(|f| f as f32));
+                    }
+                }
                 // The tab strip, the buttons and the viewport are all rebuilt from current
                 // state every frame, so these need no separate handling in an immediate-mode
                 // UI -- unlike GTK, where each one has a widget to poke.
@@ -365,7 +376,6 @@ impl BeaconApp {
                 | BeaconEvent::ActiveTabChanged(_)
                 | BeaconEvent::TitleChanged(..)
                 | BeaconEvent::LoadingChanged(..)
-                | BeaconEvent::LoadProgress(..)
                 | BeaconEvent::NavStateChanged(_)
                 | BeaconEvent::NavigationFailed(..)
                 | BeaconEvent::DownloadOffered { .. }
@@ -821,6 +831,7 @@ impl eframe::App for BeaconApp {
                 egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
                 egui::Color32::WHITE,
             );
+            self.progress.paint(ui, rect);
 
             // ── status: only while a link is under the pointer ────────────
             // Drawn over the page's bottom-left corner, not as a panel: a panel coming and

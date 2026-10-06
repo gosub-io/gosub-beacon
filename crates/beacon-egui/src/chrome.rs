@@ -276,3 +276,60 @@ pub fn tab_card(
     (response, close.clicked())
 }
 
+/// The thin bar along the top of the page while it loads. Eases toward the reported progress
+/// rather than jumping, creeps forward on its own while nothing is reported (a server taking
+/// its time to answer would otherwise look like a stuck bar), and on completion runs to the end
+/// before it disappears.
+#[derive(Default)]
+pub struct LoadingBar {
+    /// Where the load says it is, `None` when idle.
+    target: Option<f32>,
+    /// Where the bar is drawn, chasing `target` or `creep`, whichever is further.
+    shown: f32,
+    /// The bar's own slow progress, slowing as it nears `CREEP_LIMIT`.
+    creep: f32,
+    /// The load has ended; the bar runs to the end and then hides.
+    finishing: bool,
+}
+
+impl LoadingBar {
+    /// A progress report: `Some` fraction while loading, `None` once the load is over.
+    pub fn set(&mut self, fraction: Option<f32>) {
+        match fraction {
+            Some(fraction) => {
+                if self.target.is_none() || self.finishing {
+                    // A new load starts from the left.
+                    *self = Self::default();
+                }
+                self.target = Some(fraction.clamp(0.0, 1.0));
+            }
+            None if self.target.is_some() => {
+                self.target = Some(1.0);
+                self.finishing = true;
+            }
+            None => {}
+        }
+    }
+
+    /// Draw the bar along the top edge of `page`, if a load is in progress.
+    pub fn paint(&mut self, ui: &Ui, page: Rect) {
+        let Some(target) = self.target else { return };
+        /// How far the bar creeps without being told; only a reported finish goes past it.
+        const CREEP_LIMIT: f32 = 0.9;
+        let dt = ui.input(|i| i.stable_dt).min(0.1);
+        if !self.finishing {
+            self.creep += (CREEP_LIMIT - self.creep) * dt * 0.25;
+        }
+        let goal = if self.finishing { target } else { target.max(self.creep) };
+        // Ease: cover a fixed share of the remaining distance per unit of time.
+        self.shown += (goal - self.shown) * (dt * 8.0).min(1.0);
+        if self.finishing && self.shown > 0.99 {
+            *self = Self::default();
+            return;
+        }
+        let bar = Rect::from_min_size(page.min, Vec2::new(page.width() * self.shown, 3.0));
+        ui.painter().rect_filled(bar, CornerRadius::ZERO, ui.visuals().selection.bg_fill);
+        ui.ctx().request_repaint();
+    }
+}
+
