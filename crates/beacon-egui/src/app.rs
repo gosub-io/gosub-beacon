@@ -26,6 +26,33 @@ use crate::chrome::{self, Favicons};
 use crate::context::EguiContextProvider;
 use crate::platform::EguiPlatform;
 
+/// Fling (kinetic scroll) tuning. The release speed is measured over the last `FLING_WINDOW`
+/// seconds of the swipe; a finger held still that long before lifting does not fling.
+const FLING_WINDOW: f64 = 0.1;
+/// How much velocity a fling keeps per millisecond: iOS's "normal" deceleration rate.
+const FLING_DECAY: f32 = 0.998;
+/// Slower than this at release (points per second) is a drag that ended, not a flick.
+const FLING_MIN: f32 = 150.0;
+/// A fling has stopped once it is slower than this.
+const FLING_STOP: f32 = 20.0;
+/// Upper bound on a release speed, against a stray sample pair a few microseconds apart.
+const FLING_MAX: f32 = 8000.0;
+
+/// The velocity a finger lifted off with, in points per second, from its last positions, or
+/// `None` when that is no flick: too slow, or the finger had stopped before it lifted.
+fn fling_velocity(trail: &std::collections::VecDeque<(f64, egui::Pos2)>, now: f64) -> Option<egui::Vec2> {
+    let recent: Vec<_> = trail.iter().filter(|(t, _)| now - t <= FLING_WINDOW).collect();
+    let (&&(t0, p0), &&(t1, p1)) = (recent.first()?, recent.last()?);
+    // The finger must still have been moving when it lifted, over a span long enough to
+    // measure: two samples in one frame say nothing about speed.
+    if now - t1 > FLING_WINDOW / 2.0 || t1 - t0 < 0.01 {
+        return None;
+    }
+    let velocity = (p1 - p0) / (t1 - t0) as f32;
+    let speed = velocity.length();
+    (speed >= FLING_MIN).then(|| velocity * (speed.min(FLING_MAX) / speed))
+}
+
 /// Link-hover status text size, in points.
 const STATUS_TEXT: f32 = if cfg!(target_os = "android") { 14.0 } else { 11.0 };
 
@@ -67,8 +94,17 @@ pub struct BeaconApp {
     favicons: Favicons,
     /// Bookmarks, read from the engine's places store once at startup.
     bookmarks: Vec<(String, String)>,
+    /// The finger scrolling the page, and where it was last seen.
+    touch: Option<(egui::TouchId, egui::Pos2)>,
     /// Per tab, the queue that forwards [`Self::send_active`]'s commands in order.
     senders: std::cell::RefCell<HashMap<TabId, tokio::sync::mpsc::UnboundedSender<TabCommand>>>,
+    /// The finger's recent positions, with their times, for the speed it lifts off at.
+    touch_trail: std::collections::VecDeque<(f64, egui::Pos2)>,
+    /// A scroll still going after the finger let go: velocity in points per second, and when
+    /// it was last advanced.
+    fling: Option<(egui::Vec2, f64)>,
+    /// Where the mouse was over the page last frame, so only real movement reaches the engine.
+    last_pointer: Option<egui::Pos2>,
 }
 
 impl BeaconApp {
@@ -125,6 +161,10 @@ impl BeaconApp {
             log: Vec::new(),
             favicons: Favicons::default(),
             bookmarks: Vec::new(),
+            touch: None,
+            last_pointer: None,
+            touch_trail: Default::default(),
+            fling: None,
             senders: Default::default(),
         };
         app.bookmarks = app.engine.places().bookmarks().into_iter().map(|b| (b.title, b.url)).collect();
@@ -213,6 +253,8 @@ impl BeaconApp {
 
     /// Switch to a tab: record it, promote it in the MRU list, and follow the address bar.
     fn activate(&mut self, tab_id: TabId) {
+        // A fling belongs to the page it started on.
+        self.fling = None;
         self.tabs.lock().unwrap().mark_active(tab_id);
         self.beacon.mru_mut().touch(tab_id);
         if let Some(tab) = self.tabs.lock().unwrap().get_tab(tab_id) {
@@ -672,6 +714,70 @@ impl eframe::App for BeaconApp {
             };
 
             let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+
+            // A finger dragging the page scrolls it, as on any phone. From the raw touch
+            // events rather than egui's drag, which drops in and out during a swipe. Mouse
+            // drags are left alone: there the wheel above scrolls. The movement is already
+            // in points and tracks the finger, so it goes through as precise.
+            let mut drag = egui::Vec2::ZERO;
+            let now = ctx.input(|i| i.time);
+            ctx.input(|i| {
+                for event in &i.events {
+                    let egui::Event::Touch { id, phase, pos, .. } = *event else {
+                        continue;
+                    };
+                    let ours = self.touch.is_some_and(|(touch, _)| touch == id);
+                    match phase {
+                        egui::TouchPhase::Start if rect.contains(pos) => {
+                            self.touch = Some((id, pos));
+                            // A finger on the page catches a fling, as on any phone.
+                            self.fling = None;
+                            self.touch_trail.clear();
+                            self.touch_trail.push_back((now, pos));
+                        }
+                        egui::TouchPhase::Move if ours => {
+                            if let Some((_, last)) = self.touch.as_mut() {
+                                drag += pos - *last;
+                                *last = pos;
+                            }
+                            self.touch_trail.push_back((now, pos));
+                        }
+                        egui::TouchPhase::End if ours => {
+                            self.touch = None;
+                            self.fling = fling_velocity(&self.touch_trail, now).map(|v| (v, now));
+                        }
+                        egui::TouchPhase::Cancel if ours => self.touch = None,
+                        _ => {}
+                    }
+                }
+            });
+            while self.touch_trail.front().is_some_and(|(t, _)| now - t > FLING_WINDOW) {
+                self.touch_trail.pop_front();
+            }
+
+            // A released fling keeps the page going at the finger's speed, slowing down until
+            // it stops. Each frame moves it as far as its velocity carried it since the last.
+            if let (None, Some((velocity, last))) = (self.touch, self.fling) {
+                let dt = (now - last) as f32;
+                drag += velocity * dt;
+                let velocity = velocity * FLING_DECAY.powf(dt * 1000.0);
+                self.fling = (velocity.length() > FLING_STOP).then_some((velocity, now));
+                ctx.request_repaint();
+            }
+            if drag != egui::Vec2::ZERO {
+                let (dx, dy) = (-drag.x, -drag.y);
+                if let Some(view) = self.views.get_mut(&active) {
+                    let max_y = (view.page_height - view.viewport.map(|(_, h)| h as f32).unwrap_or(0.0)).max(0.0);
+                    view.scroll_x = (view.scroll_x + dx).max(0.0);
+                    view.scroll_y = (view.scroll_y + dy).clamp(0.0, max_y);
+                }
+                self.send_active(TabCommand::MouseScroll {
+                    delta_x: dx,
+                    delta_y: dy,
+                    precise: true,
+                });
+            }
+
             ui.painter().image(
                 texture,
                 rect,
@@ -700,18 +806,25 @@ impl eframe::App for BeaconApp {
                 ui.painter().galley(bubble.min + padding, galley, color);
             }
 
-            if let Some(pos) = ctx.pointer_latest_pos() {
-                if rect.contains(pos) {
+            // Hover follows a mouse, and only when it actually moved: every move is a hit test,
+            // and a hover change can restyle and re-layout the page. A finger has no hover, and
+            // a swipe forwarded as moves re-laid the page out for every link it crossed. A tap
+            // sends its own move below.
+            let touching = self.touch.is_some() || ctx.input(|i| i.any_touches());
+            let pointer = ctx.pointer_latest_pos().filter(|pos| rect.contains(*pos) && !touching);
+            if let Some(pos) = pointer {
+                if self.last_pointer != Some(pos) {
                     let rel = pos - rect.min;
                     self.send_active(TabCommand::MouseMove { x: rel.x, y: rel.y });
-                    ui.ctx().set_cursor_icon(match self.cursor {
-                        Cursor::Pointer => egui::CursorIcon::PointingHand,
-                        Cursor::Text => egui::CursorIcon::Text,
-                        Cursor::Resize => egui::CursorIcon::ResizeNwSe,
-                        Cursor::Default => egui::CursorIcon::Default,
-                    });
                 }
+                ui.ctx().set_cursor_icon(match self.cursor {
+                    Cursor::Pointer => egui::CursorIcon::PointingHand,
+                    Cursor::Text => egui::CursorIcon::Text,
+                    Cursor::Resize => egui::CursorIcon::ResizeNwSe,
+                    Cursor::Default => egui::CursorIcon::Default,
+                });
             }
+            self.last_pointer = pointer;
 
             if response.clicked() {
                 // The click's own position: a finger lifting takes the pointer away with it,
@@ -756,6 +869,7 @@ impl BeaconApp {
     /// Navigate the active tab, running the address through the same parser the GTK
     /// frontend uses so `example.com` and `/etc/hosts` behave the same in both.
     fn navigate_active(&mut self, address: &str) {
+        self.fling = None;
         let Ok((_mode, url)) = beacon_core::address_parser::GosubAddressParser::parse(address) else {
             self.log.push(format!("cannot parse address: {address}"));
             return;
