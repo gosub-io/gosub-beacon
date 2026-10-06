@@ -225,6 +225,9 @@ impl<C: BeaconConfig> BrowserEngine<C> {
             // process, the one store kind that process can serve; the SQLite store stays
             // in this process. The two builds therefore keep separate localStorage for the
             // same profile, which is accepted: the isolated build is a different mode.
+            // The storage process is Linux only, like the rest of the tier; elsewhere the
+            // isolated mode keeps the SQLite store.
+            #[cfg(target_os = "linux")]
             let local: Arc<dyn gosub_engine::storage::LocalStore> = if isolated {
                 let dir = data_dir.join("local-storage");
                 Arc::new(
@@ -234,6 +237,9 @@ impl<C: BeaconConfig> BrowserEngine<C> {
             } else {
                 Arc::new(SqliteLocalStore::new(&local_db).map_err(|e| anyhow::anyhow!("local store: {e:?}"))?)
             };
+            #[cfg(not(target_os = "linux"))]
+            let local: Arc<dyn gosub_engine::storage::LocalStore> =
+                Arc::new(SqliteLocalStore::new(&local_db).map_err(|e| anyhow::anyhow!("local store: {e:?}"))?);
             ZoneServices {
                 storage: Arc::new(StorageService::new(local, Arc::new(InMemorySessionStore::new()))),
                 cookie_store: Some(cookie_store),
