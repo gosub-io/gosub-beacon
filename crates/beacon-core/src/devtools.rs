@@ -310,8 +310,11 @@ impl NetRequest {
 
     /// A short name for why it failed, for a status column.
     pub fn failure_label(&self) -> Option<&'static str> {
-        use gosub_engine::events::LoadError;
+        use gosub_engine::events::{BlockReason, LoadError};
         Some(match self.failure.as_ref()? {
+            LoadError::Blocked {
+                reason: BlockReason::Cors(_),
+            } => "CORS",
             LoadError::Blocked { .. } => "blocked",
             LoadError::InvalidUrl { .. } => "bad URL",
             LoadError::Tls { .. } => "TLS",
@@ -331,6 +334,9 @@ impl NetRequest {
     /// What that failure means, in the words someone debugging a dead page needs.
     pub fn failure_hint(&self) -> Option<&'static str> {
         use gosub_engine::events::LoadError;
+        if let Some(explained) = self.explanation() {
+            return Some(explained.what);
+        }
         Some(match self.failure.as_ref()? {
             LoadError::Blocked { .. } => "refused by policy before it was sent -- mixed content, CORS, or a URL the embedder disallows",
             LoadError::InvalidUrl { .. } => "the URL did not parse",
@@ -346,6 +352,137 @@ impl NetRequest {
             _ => "the engine reported a kind of failure this build does not know",
         })
     }
+
+    /// What would make this request succeed, when the failure names a rule precise enough to
+    /// say. Addressed to whoever runs the server more often than to the page's author: most
+    /// of these are fixed by sending one more header.
+    pub fn failure_fix(&self) -> Option<&'static str> {
+        self.explanation().map(|e| e.fix)
+    }
+
+    /// Where the rule that refused this request is written down.
+    pub fn failure_spec(&self) -> Option<&'static str> {
+        self.explanation().map(|e| e.spec)
+    }
+
+    /// The evidence a CORS refusal was decided on: the `Origin` the request sent and every
+    /// `Access-Control-*` header the server answered with. Empty for anything that was not
+    /// refused by CORS, where these headers are noise in a list already long enough.
+    pub fn cors_evidence(&self) -> Vec<(String, String)> {
+        use gosub_engine::events::{BlockReason, LoadError};
+        if !matches!(
+            self.failure,
+            Some(LoadError::Blocked {
+                reason: BlockReason::Cors(_)
+            })
+        ) {
+            return Vec::new();
+        }
+        let sent = self.request_headers.iter().filter(|(name, _)| name.eq_ignore_ascii_case("origin"));
+        let answered = self
+            .headers
+            .iter()
+            .filter(|(name, _)| name.to_ascii_lowercase().starts_with("access-control-"));
+        sent.chain(answered).cloned().collect()
+    }
+
+    fn explanation(&self) -> Option<Explanation> {
+        use gosub_engine::events::{BlockReason, LoadError};
+        match self.failure.as_ref()? {
+            LoadError::Blocked {
+                reason: BlockReason::Cors(failure),
+            } => explain_cors(*failure),
+            _ => None,
+        }
+    }
+}
+
+/// A refusal taken apart: what happened, what would fix it, and the rule behind it.
+///
+/// Browsers print a CORS failure as one line in the console. The engine knows which rule
+/// failed, so the panel can say all three -- and each kind of refusal (cookies, TLS, mixed
+/// content) is meant to add rows to a table like [`explain_cors`], not code to the panels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Explanation {
+    pub what: &'static str,
+    pub fix: &'static str,
+    pub spec: &'static str,
+}
+
+/// One CORS rule, explained. `None` for a rule this build of Beacon has no words for: the
+/// engine's list can grow, and the panel then falls back to the engine's own one-line reason.
+pub fn explain_cors(failure: gosub_engine::events::CorsFailure) -> Option<Explanation> {
+    use gosub_engine::events::CorsFailure::*;
+    // A section of the Fetch standard, by its anchor.
+    macro_rules! fetch {
+        ($anchor:literal) => {
+            concat!("https://fetch.spec.whatwg.org/#", $anchor)
+        };
+    }
+    let (what, fix, spec) = match failure {
+        MissingAllowOrigin => (
+            "the server's response did not say this page may read it: there was no Access-Control-Allow-Origin header",
+            "have the server send Access-Control-Allow-Origin with this page's origin, or * for a public resource fetched without credentials",
+            fetch!("http-access-control-allow-origin"),
+        ),
+        OriginMismatch => (
+            "Access-Control-Allow-Origin named a different origin from this page's, or was sent more than once",
+            "send exactly one Access-Control-Allow-Origin whose value is this page's origin, scheme and port included",
+            fetch!("cors-check"),
+        ),
+        WildcardWithCredentials => (
+            "the request carried credentials, and Access-Control-Allow-Origin: * never covers a credentialed request",
+            "echo this page's origin in Access-Control-Allow-Origin instead of *, and send Vary: Origin with it",
+            fetch!("cors-protocol-and-credentials"),
+        ),
+        CredentialsNotAllowed => (
+            "the request carried credentials, but the response did not send Access-Control-Allow-Credentials: true",
+            "send Access-Control-Allow-Credentials: true, or make the request without credentials",
+            fetch!("http-access-control-allow-credentials"),
+        ),
+        SameOriginMode => (
+            "the request was only allowed to stay on this page's origin, and it went or was redirected somewhere else",
+            "serve the resource from this page's own origin, or request it in cors mode so the server can allow it",
+            fetch!("concept-request-mode"),
+        ),
+        UnsafeMethodForNoCors => (
+            "a cross-origin request without CORS may only use GET, HEAD or POST",
+            "use one of those three methods, or make it a CORS request the server allows",
+            fetch!("cors-safelisted-method"),
+        ),
+        UnsafeHeaderForNoCors => (
+            "a cross-origin request without CORS carried a header outside the CORS safelist",
+            "drop the header, or make it a CORS request the server allows",
+            fetch!("cors-safelisted-request-header"),
+        ),
+        PreflightStatus => (
+            "the request needed permission first, and the server answered the OPTIONS preflight with a status outside 2xx",
+            "make the server answer OPTIONS for this URL with 200 or 204 and the Access-Control-Allow-* headers",
+            fetch!("cors-preflight-fetch"),
+        ),
+        PreflightInvalidResponse => (
+            "the preflight's Access-Control-Allow-Methods or Access-Control-Allow-Headers could not be parsed",
+            "send them as comma-separated lists of names, for example Access-Control-Allow-Methods: GET, PUT",
+            fetch!("http-access-control-allow-methods"),
+        ),
+        PreflightMethodRejected => (
+            "the preflight did not list this request's method in Access-Control-Allow-Methods",
+            "add the method to Access-Control-Allow-Methods in the OPTIONS response",
+            fetch!("http-access-control-allow-methods"),
+        ),
+        PreflightHeaderRejected => (
+            "the preflight did not list one of this request's headers in Access-Control-Allow-Headers",
+            "add the header to Access-Control-Allow-Headers in the OPTIONS response",
+            fetch!("http-access-control-allow-headers"),
+        ),
+        CredentialedRedirect => (
+            "a redirect pointed at a URL with a user name or password in it, which CORS refuses",
+            "redirect to a URL without user:password@ in it, and authenticate another way",
+            fetch!("http-redirect-fetch"),
+        ),
+        _ => return None,
+    };
+    Some(Explanation { what, fix, spec })
 }
 
 /// Plenty for a page load; oldest requests fall off the front.
@@ -869,5 +1006,66 @@ mod tests {
         });
         assert_eq!(row.failure_label(), Some("TLS"));
         assert!(row.failure_hint().is_some());
+        // A TLS failure has no rule precise enough to name a fix, and no CORS evidence.
+        assert_eq!(row.failure_fix(), None);
+        assert!(row.cors_evidence().is_empty());
+    }
+
+    /// A CORS refusal names the rule, the header to send, and where the rule is written, and
+    /// shows only the headers it was decided on.
+    #[test]
+    fn a_cors_refusal_explains_itself() {
+        use gosub_engine::events::{BlockReason, CorsFailure, LoadError};
+
+        let mut row = in_flight(None, None, None);
+        row.state = RequestState::Failed;
+        row.failure = Some(LoadError::Blocked {
+            reason: BlockReason::Cors(CorsFailure::MissingAllowOrigin),
+        });
+        row.request_headers = vec![("accept".into(), "*/*".into()), ("Origin".into(), "https://app.test".into())];
+        row.headers = vec![
+            ("content-type".into(), "font/woff2".into()),
+            ("Access-Control-Allow-Methods".into(), "GET".into()),
+        ];
+
+        assert_eq!(row.failure_label(), Some("CORS"));
+        assert!(row.failure_hint().unwrap().contains("no Access-Control-Allow-Origin"));
+        assert!(row.failure_fix().unwrap().contains("Access-Control-Allow-Origin"));
+        assert_eq!(
+            row.failure_spec(),
+            Some("https://fetch.spec.whatwg.org/#http-access-control-allow-origin")
+        );
+        assert_eq!(
+            row.cors_evidence(),
+            [
+                ("Origin".to_string(), "https://app.test".to_string()),
+                ("Access-Control-Allow-Methods".to_string(), "GET".to_string()),
+            ]
+        );
+    }
+
+    /// Every rule the engine can report has its own words: a rule falling through to the
+    /// generic hint is a hole in the table, not a feature.
+    #[test]
+    fn every_cors_rule_is_explained() {
+        use gosub_engine::events::CorsFailure::*;
+        let all = [
+            MissingAllowOrigin,
+            OriginMismatch,
+            WildcardWithCredentials,
+            CredentialsNotAllowed,
+            SameOriginMode,
+            UnsafeMethodForNoCors,
+            UnsafeHeaderForNoCors,
+            PreflightStatus,
+            PreflightInvalidResponse,
+            PreflightMethodRejected,
+            PreflightHeaderRejected,
+            CredentialedRedirect,
+        ];
+        for failure in all {
+            let explained = explain_cors(failure).unwrap_or_else(|| panic!("{failure:?} has no explanation"));
+            assert!(explained.spec.starts_with("https://fetch.spec.whatwg.org/#"));
+        }
     }
 }
