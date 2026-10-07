@@ -374,7 +374,16 @@ impl Beacon {
         let is_active = self.active() == Some(our_id);
 
         match event {
-            NavigationEvent::Started { .. } => {
+            NavigationEvent::Started { url, .. } => {
+                // Leaving for another address leaves the error page behind. The error
+                // page itself arrives as a load of the failed address (the shell's
+                // `LoadHtml` at that base URL), and a reload of it keeps the address
+                // too; those stay flagged until a different page is on its way.
+                self.with_tab(our_id, |tab| {
+                    if tab.url().as_str() != url.as_str() {
+                        tab.set_showing_error(false);
+                    }
+                });
                 if is_active {
                     // A small non-zero fraction, so the bar shows *something* the moment a
                     // load begins rather than staying empty until the first byte lands.
@@ -429,6 +438,9 @@ impl Beacon {
             }
 
             NavigationEvent::Failed { url, error, .. } => {
+                if !crate::error_page::is_cancellation(&error.to_string()) {
+                    self.with_tab(our_id, |tab| tab.set_showing_error(true));
+                }
                 let mut out = Vec::new();
                 if is_active {
                     out.push(BeaconEvent::LoadProgress(our_id, None));

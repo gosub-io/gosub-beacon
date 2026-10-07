@@ -181,6 +181,8 @@ pub struct GosubTab {
     history: History,
     /// Panic message when the engine worker for this tab crashed.
     crashed: Option<String>,
+    /// The tab shows the error page (see `showing_error`).
+    showing_error: bool,
     /// Title of the tab
     title: String,
     /// The tab's favicon, exactly as the engine fetched it: an encoded image, usually
@@ -212,6 +214,7 @@ impl GosubTab {
             url,
             history: History::default(),
             crashed: None,
+            showing_error: false,
             title: title.to_string(),
             favicon: None,
             content: String::new(),
@@ -246,6 +249,17 @@ impl GosubTab {
 
     pub fn set_crashed(&mut self, error: Option<String>) {
         self.crashed = error;
+    }
+
+    /// Whether the tab shows the page a failed navigation gets
+    /// (`error_page`): where a space press starts the game instead of
+    /// reaching the page.
+    pub fn showing_error(&self) -> bool {
+        self.showing_error
+    }
+
+    pub fn set_showing_error(&mut self, showing: bool) {
+        self.showing_error = showing;
     }
 
     pub fn is_loading(&self) -> bool {
