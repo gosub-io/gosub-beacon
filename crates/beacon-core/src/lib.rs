@@ -11,6 +11,7 @@ pub mod beacon;
 pub mod cli;
 pub mod command;
 pub mod devtools;
+pub mod dive;
 pub mod download;
 pub mod engine;
 pub mod error_page;

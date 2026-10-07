@@ -111,6 +111,14 @@ a moment with their total, then go. The strip always has four lines; a line keep
 more is going on than fits, the oldest keep their lines and the last says how many more.
 It costs nothing while hidden: showing it is what makes the engine announce its stages.
 
+### A game while you wait
+
+When a page cannot be reached, press space on the error page: a submarine, kelp to
+thread through, bubbles, fish and axolotls on the sand, in the spirit of the dinosaur.
+`gosub://dive` opens it directly, and the game follows the dark-mode toggle. It lives
+in `beacon-core` (rules, art and a pixel painter), so every shell shows the same
+frames; the GTK shell draws them into a `DrawingArea`.
+
 ### Testing the renderer tier
 
 `scripts/isolation-smoke.sh` runs an `isolation` build twice under Xvfb against the

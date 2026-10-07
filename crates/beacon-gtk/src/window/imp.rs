@@ -547,6 +547,8 @@ impl BrowserWindow {
         let mut manager = self.tab_manager.lock().unwrap();
         if let Some(mut tab) = manager.get_tab(tab_id) {
             tab.set_loading(true);
+            // A reload leaves the error page; failing again flags it again.
+            tab.set_showing_error(false);
             manager.update_tab(tab_id, &tab);
         }
         drop(manager);
@@ -2231,7 +2233,7 @@ impl BrowserWindow {
                     let child: Widget = if tab.crashed().is_some() {
                         self.build_crashed_page(&tab)
                     } else if Self::is_shell_rendered(tab.url()) {
-                        self.build_shell_page()
+                        self.build_shell_page(tab.url())
                     } else if tab.has_engine_tab() {
                         self.build_render_area(&tab).upcast::<Widget>()
                     } else {
@@ -2294,6 +2296,12 @@ impl BrowserWindow {
         drop(manager);
         self.refresh_tabs();
         self.load_error_page(our_id, url, error);
+    }
+
+    /// Whether `tab_id` shows the error page (see `GosubTab::showing_error`).
+    fn tab_shows_error(&self, tab_id: TabId) -> bool {
+        let manager = self.tab_manager.lock().unwrap();
+        manager.get_tab(tab_id).is_some_and(|tab| tab.showing_error())
     }
 
     /// Push the branded error page into a tab whose navigation failed.
@@ -2981,12 +2989,26 @@ impl BrowserWindow {
     }
 
     /// `gosub://` (and `about:`) pages are served by the engine's page registry like any
-    /// other navigation. The one exception is `gosub://config`: the engine's version is a
-    /// read-only dump (it cannot do forms yet), so Beacon renders its own editable GTK page
-    /// for it. Everything else - home, help, blank, version, history, unknown pages - goes
-    /// to the engine.
+    /// other navigation. Two exceptions: `gosub://config`, whose engine version is a
+    /// read-only dump (it cannot do forms yet), so Beacon renders its own editable GTK
+    /// page for it; and `gosub://dive`, the game, which is pixels the shell shows
+    /// (see `beacon_core::dive`). Everything else - home, help, blank, version, history,
+    /// unknown pages - goes to the engine.
     fn is_shell_rendered(url: &url::Url) -> bool {
-        matches!(url.scheme(), "gosub" | "about") && gosub_engine::internal_pages::InternalPages::page_name(url) == "config"
+        matches!(url.scheme(), "gosub" | "about")
+            && matches!(
+                gosub_engine::internal_pages::InternalPages::page_name(url),
+                "config" | beacon_core::dive::PAGE
+            )
+    }
+
+    /// What a shell-rendered page's tab is titled.
+    fn shell_page_title(url: &url::Url) -> &'static str {
+        if beacon_core::dive::is_dive(url) {
+            beacon_core::dive::TITLE
+        } else {
+            "Engine settings"
+        }
     }
 
     /// Sad-tab page for a crashed engine worker, with a Reload that recreates the tab.
@@ -3061,8 +3083,12 @@ impl BrowserWindow {
         let _ = self.get_sender().send_blocking(Message::LoadUrl(tab_id, url));
     }
 
-    /// The shell-rendered `gosub://config` editor (see `is_shell_rendered`).
-    fn build_shell_page(&self) -> Widget {
+    /// The shell-rendered pages (see `is_shell_rendered`): the game, or the
+    /// `gosub://config` editor.
+    fn build_shell_page(&self, url: &url::Url) -> Widget {
+        if beacon_core::dive::is_dive(url) {
+            return super::dive_page::build();
+        }
         match self.engine.borrow().as_ref() {
             Some(engine) => super::config_page::build(engine.settings().clone()),
             None => {
@@ -3717,18 +3743,24 @@ impl BrowserWindow {
                 let mut tab = manager.get_tab(tab_id).unwrap().clone();
 
                 tab.set_favicon(None);
-                tab.set_title(if shell { "Engine settings" } else { url.as_str() });
+                tab.set_title(if shell { Self::shell_page_title(&url) } else { url.as_str() });
                 tab.set_url(url.clone());
                 tab.set_loading(!shell);
+                tab.set_showing_error(false);
 
                 manager.update_tab(tab_id, &tab);
                 drop(manager);
 
                 self.refresh_tabs();
 
-                // Everything but the shell-rendered config page is an engine navigation
+                // Everything but the shell-rendered pages is an engine navigation
                 // (gosub:// pages included - the engine serves them from its registry).
-                if !shell {
+                // A shell page raises no navigation event, so the address bar is told here.
+                if shell {
+                    if self.active_tab_id() == Some(tab_id) {
+                        self.searchbar.set_text(url.as_str());
+                    }
+                } else {
                     self.navigate_engine_tab(tab_id, url.as_str());
                 }
             }
@@ -3807,7 +3839,7 @@ impl BrowserWindow {
 
         let shell = Self::is_shell_rendered(&url);
         if shell {
-            tab.set_title("Engine settings");
+            tab.set_title(Self::shell_page_title(&url));
         }
         tab.set_loading(!shell);
 
@@ -4123,9 +4155,20 @@ impl BrowserWindow {
 
             let key_handle = handle.clone();
             let press_im = im.clone();
+            let error_window = self.obj().clone();
+            let error_tab_id = tab.id();
             keys.connect_key_pressed(move |c, keyval, _keycode, state| {
                 if state.intersects(gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::ALT_MASK | gdk::ModifierType::SUPER_MASK) {
                     return glib::Propagation::Proceed;
+                }
+                // Space on the page a failed navigation shows starts the game
+                // (the browser's dinosaur); the page itself has nothing to take it.
+                if keyval == gdk::Key::space && error_window.imp().tab_shows_error(error_tab_id) {
+                    let _ = error_window
+                        .imp()
+                        .get_sender()
+                        .send_blocking(Message::LoadUrl(error_tab_id, beacon_core::dive::URL.to_string()));
+                    return glib::Propagation::Stop;
                 }
                 let modifiers = engine_modifiers(state);
                 // Web `code` (physical key) is approximated with the logical name until a
