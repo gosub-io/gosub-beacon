@@ -110,8 +110,6 @@ the site's process with the renderer's own lap times when it answers. Finished l
 a moment with their total, then go. The strip always has four lines; a line keeps its place until it is done, and when
 more is going on than fits, the oldest keep their lines and the last says how many more.
 It costs nothing while hidden: showing it is what makes the engine announce its stages.
-Under `--isolated` the network lines are missing for now, because requests through the
-network process do not report back to the request log yet.
 
 ### Testing the renderer tier
 

@@ -53,7 +53,6 @@ Three layers, each proving something the others cannot.
 
 - Same-site tabs share a renderer and render serially; a keystroke in one waits behind another's render.
 - During a window drag the page shows at its old geometry until the renderer's resize pass lands; sizes that arrive while one is in flight collapse to the latest. Tiles are not scaled to the new size meanwhile.
-- The activity strip shows no network lines under isolation: requests through the network process do not report back to the request log yet, so the developer panel's network view is empty there too.
 - A re-layout after input is a full layout, in-process and out alike.
 - Downloads can only be saved under `~/Downloads` (or the profile) while the broker is locked down.
 - cgroup v2 memory delegation is unavailable on a default desktop; children fall back to rlimits, which the log says.
