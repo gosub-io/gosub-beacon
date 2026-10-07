@@ -501,6 +501,9 @@ impl eframe::App for BeaconApp {
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::A)) {
             self.toggle_activity();
         }
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::BrowserBack)) {
+            self.back_key(&ctx, active);
+        }
 
         // The window runs under the status and navigation bars on Android; keep the chrome
         // and the page out from under them. Added first, so they are the outermost panels.
@@ -949,6 +952,31 @@ impl BeaconApp {
             Some(_) => None,
             None => Some(chrome::ActivityStrip::new()),
         };
+    }
+
+    /// The Back key (Android's Back button or gesture, a keyboard's Back key). It unwinds
+    /// whatever the chrome has open before it touches the page: the address bar's focus,
+    /// a menu, the tab list. Then it goes back in the tab's history, and with no history
+    /// left Beacon goes to the background on Android.
+    fn back_key(&mut self, ctx: &egui::Context, active: TabId) {
+        if self.address_bar_focused {
+            ctx.memory_mut(|m| m.stop_text_input());
+        } else if egui::Popup::is_any_open(ctx) {
+            egui::Popup::close_all(ctx);
+        } else if self.tab_list_open {
+            self.tab_list_open = false;
+        } else if self
+            .tabs
+            .lock()
+            .unwrap()
+            .get_tab(active)
+            .is_some_and(|tab| tab.history().can_go_back())
+        {
+            self.dispatch(BeaconCommand::Back);
+        } else {
+            #[cfg(target_os = "android")]
+            crate::android::move_to_background();
+        }
     }
 
     /// The tab list: every tab as a card to switch to or close, and a way to open a new one.

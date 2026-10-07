@@ -73,6 +73,29 @@ pub fn show_keyboard(show: bool) {
     }
 }
 
+/// Put Beacon in the background, as Back does once there is nothing left to go back to.
+/// winit reports every key it forwards as handled, so Android's own Back (finish the
+/// activity) never runs; Beacon goes to the background with its tabs kept, as other
+/// browsers do.
+pub fn move_to_background() {
+    let Some(app) = APP.get() else { return };
+    // SAFETY: as in `init_certificate_verifier`.
+    let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr().cast()) };
+    let result = vm.attach_current_thread(|env| -> Result<(), jni::errors::Error> {
+        let activity = unsafe { jni::objects::JObject::from_raw(env, app.activity_as_ptr().cast()) };
+        env.call_method(
+            &activity,
+            jni::jni_str!("moveTaskToBack"),
+            jni::jni_sig!("(Z)Z"),
+            &[jni::JValue::Bool(true)],
+        )?;
+        Ok(())
+    });
+    if let Err(e) = result {
+        log::warn!("cannot move Beacon to the background: {e}");
+    }
+}
+
 /// The part of the screen the app may draw in, in physical pixels: the window minus the
 /// status and navigation bars. `None` before the activity has reported it.
 pub fn content_rect() -> Option<(i32, i32, i32, i32)> {
