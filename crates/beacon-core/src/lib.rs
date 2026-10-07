@@ -19,6 +19,7 @@ pub mod event;
 pub mod fetch;
 pub mod isolation;
 pub mod locale;
+pub mod not_found_page;
 pub mod paths;
 pub mod platform;
 pub mod session;
