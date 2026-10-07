@@ -103,6 +103,9 @@ pub struct BeaconApp {
     bookmarks: Vec<(String, String)>,
     /// The finger scrolling the page, and where it was last seen.
     touch: Option<(egui::TouchId, egui::Pos2)>,
+    /// The pointer was last driven by a finger, not a mouse. A finger has no hover, so the
+    /// link a tap went down on is not shown as hovered after it lifts.
+    finger: bool,
     /// The activity strip over the page, while it is switched on (Show activity).
     activity: Option<chrome::ActivityStrip>,
     /// The loading bar along the top of the page.
@@ -180,6 +183,7 @@ impl BeaconApp {
             favicons: Favicons::default(),
             bookmarks: Vec::new(),
             touch: None,
+            finger: false,
             last_pointer: None,
             touch_trail: Default::default(),
             fling: None,
@@ -344,8 +348,13 @@ impl BeaconApp {
         for event in events {
             match event {
                 BeaconEvent::UrlChanged(tab_id, url) => {
-                    if self.active() == Some(tab_id) && !self.address_bar_focused {
-                        self.address_bar = url.to_string();
+                    if self.active() == Some(tab_id) {
+                        if !self.address_bar_focused {
+                            self.address_bar = url.to_string();
+                        }
+                        // The link belonged to the page that is gone; the next pointer
+                        // move finds what is under it on the new one.
+                        self.status.clear();
                     }
                 }
                 BeaconEvent::HoverUrl(tab_id, url) => {
@@ -869,7 +878,16 @@ impl eframe::App for BeaconApp {
             // going resizes the page, and each resize is a re-layout with the old frame
             // stretched to the new size until it lands. A swipe crossing links did that on
             // every link.
-            if !self.status.is_empty() {
+            // egui-winit turns a finger into pointer moves as well, in the same frame as the
+            // touch, so a move without a touch is a mouse.
+            ctx.input(|i| {
+                if i.events.iter().any(|e| matches!(e, egui::Event::Touch { .. })) {
+                    self.finger = true;
+                } else if i.events.iter().any(|e| matches!(e, egui::Event::PointerMoved(_))) {
+                    self.finger = false;
+                }
+            });
+            if !self.status.is_empty() && !self.finger {
                 let padding = egui::vec2(8.0, 3.0);
                 let color = ui.visuals().weak_text_color();
                 let mut job = egui::text::LayoutJob::simple_singleline(self.status.clone(), egui::FontId::proportional(STATUS_TEXT), color);
