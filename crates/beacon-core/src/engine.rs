@@ -110,9 +110,9 @@ impl<C: BeaconConfig> BrowserEngine<C> {
             Err(e) => log::warn!("settings database {settings_db} unavailable, settings will not persist: {e:?}"),
         }
 
-        // Beacon-branded versions of the engine's built-in gosub://home and gosub://help.
-        // Everything else (blank, version, history, config dump, unknown pages) is the
-        // engine's own; gosub://config additionally gets a shell-rendered editor.
+        // Beacon-branded versions of the engine's built-in gosub://home and gosub://help, and
+        // of its page for unknown names. Everything else (blank, version, history, config
+        // dump) is the engine's own; gosub://config additionally gets a shell-rendered editor.
         // The page carries the build's own version, so a preview build says which one it is
         // rather than just that it is one.
         engine.internal_pages().register_html(
@@ -122,6 +122,14 @@ impl<C: BeaconConfig> BrowserEngine<C> {
         engine
             .internal_pages()
             .register_html("help", include_str!("../resources/help.html"));
+        // Unknown gosub:// pages get Beacon's own "page not found", in the same style.
+        engine.internal_pages().set_not_found(Arc::new(|req, known| {
+            Some(gosub_engine::internal_pages::PageResponse::html(crate::not_found_page::build(
+                req.name,
+                req.url.as_str(),
+                known,
+            )))
+        }));
 
         // Identify as Beacon on the wire; the engine alone would send only its Gosub
         // token. Only seeded when nothing is stored, so a user-customized UA survives
@@ -199,7 +207,7 @@ impl<C: BeaconConfig> BrowserEngine<C> {
                      body{{margin:0;padding:32px 40px;font-family:sans-serif;font-size:14px}}\
                      h1{{font-size:24px;margin:0 0 4px 0}} .sub{{color:#5c6675;margin:0 0 20px 0}}\
                      table{{border-collapse:collapse}} td{{padding:4px 14px 4px 0}}\
-                     a{{color:#1d5fd1}} .muted{{color:#8a94a6}} code{{font-family:monospace;font-size:12px}}\
+                     a{{color:#1d5fd1}} .muted{{color:#8a94a6}} code{{font-family:inherit;letter-spacing:0.03em;font-size:12px}}\
                      </style></head><body>{body}</body></html>"
                 )))
             })

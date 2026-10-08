@@ -1,68 +1,153 @@
 <!DOCTYPE html>
+<!--
+    gosub://help, Beacon's own, dressed like gosub://home: the same sea, the same tiles.
+    Pinned to the top rather than centred as home is: a centred page taller than the
+    window loses its top, and this one is two rows of tiles on a tablet but more on a phone.
+-->
 <html>
 <head>
     <title>Help — Gosub Beacon</title>
     <style>
+        /* A definite height on both, as on home, or the gradient ends where the tiles do
+           and leaves a band of flat colour under them. */
+        html { height: 100%; }
         body {
-            background-color: #ffffff;
-            color: #14213d;
-            font-family: Cantarell, "DejaVu Sans", sans-serif;
+            min-height: 100%;
             margin: 0;
-            padding: 40px 60px;
+            color: #e9f0f8;
+            font-family: Cantarell, "DejaVu Sans", sans-serif;
+            background-color: #061224;
+            background-image: linear-gradient(#050f1f 0%, #08203a 42%, #0d3358 62%, #071c33 100%);
         }
-        h1 { font-size: 28px; margin: 0; }
-        .subtitle { color: #6b7280; margin-bottom: 28px; font-size: 15px; }
-        .page { margin-bottom: 16px; }
-        .addr { font-family: monospace; font-size: 15px; color: #1a5fb4; }
-        .desc { color: #4b5563; font-size: 14px; margin-top: 2px; }
-        .footer {
-            margin-top: 48px;
-            padding-top: 12px;
-            border-top: 1px solid #e5e7eb;
-            color: #9aa3af;
+
+        .page {
+            padding: 56px 40px 48px 40px;
+            text-align: center;
+        }
+
+        .mark {
+            font-size: 40px;
+            font-weight: bold;
+            letter-spacing: -1px;
+            line-height: 1.05;
+            color: #ffffff;
+        }
+        .tag {
+            margin-top: 12px;
             font-size: 12px;
+            letter-spacing: 4px;
+            text-transform: uppercase;
+            color: #7f9ab8;
+        }
+
+        .horizon {
+            height: 1px;
+            width: 100%;
+            margin-top: 36px;
+            background-image: linear-gradient(to right, #000000 0%, #24567f 50%, #000000 100%);
+            mix-blend-mode: screen;
+        }
+
+        .tiles {
+            display: flex;
+            justify-content: center;
+            flex-wrap: wrap;
+            gap: 14px;
+            /* Four across at most, so the eight pages make two even rows rather than five
+               and three. */
+            max-width: 920px;
+            margin: 28px auto 0 auto;
+        }
+        a.tile {
+            display: block;
+            width: 188px;
+            padding: 16px 14px 14px 14px;
+            background-color: #0c2440;
+            border: 1px solid #17395f;
+            border-radius: 12px;
+            text-align: left;
+            text-decoration: none;
+            color: #e9f0f8;
+        }
+        .tile-name { font-size: 14px; }
+        .tile-addr {
+            margin-top: 3px;
+            font-size: 11px;
+            letter-spacing: 0.03em;
+            color: #8fb8e6;
+        }
+        .tile-what {
+            margin-top: 8px;
+            font-size: 11px;
+            line-height: 1.45;
+            color: #7f9ab8;
+        }
+
+        .foot {
+            margin-top: 44px;
+            font-size: 12px;
+            color: #5d7692;
+        }
+        .foot .addr {
+            letter-spacing: 0.03em;
+            color: #8fb8e6;
         }
     </style>
 </head>
 <body>
-    <h1>Gosub Beacon</h1>
-    <div class="subtitle">Internal pages</div>
+    <div class="page">
+        <div class="mark">beacon</div>
+        <div class="tag">internal pages</div>
 
-    <div class="page">
-        <a class="addr" href="gosub://home">gosub://home</a>
-        <div class="desc">The home page</div>
-    </div>
-    <div class="page">
-        <a class="addr" href="gosub://blank">gosub://blank</a>
-        <div class="desc">An empty page (about:blank is an alias)</div>
-    </div>
-    <div class="page">
-        <a class="addr" href="gosub://help">gosub://help</a>
-        <div class="desc">This page</div>
-    </div>
+        <div class="horizon"></div>
 
-    <div class="page">
-        <a class="addr" href="gosub://version">gosub://version</a>
-        <div class="desc">Build, engine and render-backend info</div>
-    </div>
-    <div class="page">
-        <a class="addr" href="gosub://config">gosub://config</a>
-        <div class="desc">Engine settings (editable)</div>
-    </div>
-    <div class="page">
-        <a class="addr" href="gosub://history">gosub://history</a>
-        <div class="desc">This tab's session history</div>
-    </div>
+        <div class="tiles">
+            <a class="tile" href="gosub://home">
+                <div class="tile-name">Home</div>
+                <div class="tile-addr">gosub://home</div>
+                <div class="tile-what">The page a new tab opens on</div>
+            </a>
+            <a class="tile" href="gosub://bookmarks">
+                <div class="tile-name">Bookmarks</div>
+                <div class="tile-addr">gosub://bookmarks</div>
+                <div class="tile-what">Your saved bookmarks</div>
+            </a>
+            <a class="tile" href="gosub://history">
+                <div class="tile-name">History</div>
+                <div class="tile-addr">gosub://history</div>
+                <div class="tile-what">Where this tab has been</div>
+            </a>
+            <a class="tile" href="gosub://config">
+                <div class="tile-name">Settings</div>
+                <div class="tile-addr">gosub://config</div>
+                <div class="tile-what">Engine settings, editable</div>
+            </a>
+            <a class="tile" href="gosub://version">
+                <div class="tile-name">Version</div>
+                <div class="tile-addr">gosub://version</div>
+                <div class="tile-what">Build, engine and render backend</div>
+            </a>
+            <a class="tile" href="gosub://stats">
+                <div class="tile-name">Stats</div>
+                <div class="tile-addr">gosub://stats</div>
+                <div class="tile-what">Rendering diagnostics and engine timings</div>
+            </a>
+            <a class="tile" href="gosub://blank">
+                <div class="tile-name">Blank</div>
+                <div class="tile-addr">gosub://blank</div>
+                <div class="tile-what">An empty page</div>
+            </a>
+            <a class="tile" href="gosub://help">
+                <div class="tile-name">Help</div>
+                <div class="tile-addr">gosub://help</div>
+                <div class="tile-what">This page</div>
+            </a>
+        </div>
 
-    <div class="page">
-        <a class="addr" href="gosub://stats">gosub://stats</a>
-        <div class="desc">Rendering diagnostics and engine timings</div>
+        <div class="foot">
+            Every page also opens with <span class="addr">about:</span> in front of its
+            name, as in <span class="addr">about:blank</span>
+        </div>
     </div>
-    <div class="page">
-        <a class="addr" href="gosub://bookmarks">gosub://bookmarks</a>
-        <div class="desc">Your bookmarks</div>
-    </div>
-
-    <div class="footer">This page is rendered by the Gosub engine.</div>
 </body>
 </html>

@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<!--
+    Beacon's page for a gosub:// address no page answers, dressed like gosub://help.
+    beacon_core::engine fills it in: {{HEADING}} and {{SUB}} say what went wrong,
+    {{SUGGESTION}} is the "did you mean" tile or nothing, {{TILES}} lists every page.
+-->
+<html>
+<head>
+    <title>Page not found</title>
+    <style>
+        html { height: 100%; }
+        body {
+            min-height: 100%;
+            margin: 0;
+            color: #e9f0f8;
+            font-family: Cantarell, "DejaVu Sans", sans-serif;
+            background-color: #061224;
+            background-image: linear-gradient(#050f1f 0%, #08203a 42%, #0d3358 62%, #071c33 100%);
+        }
+
+        .page {
+            padding: 56px 40px 48px 40px;
+            text-align: center;
+        }
+
+        h1 {
+            margin: 0;
+            font-size: 36px;
+            font-weight: bold;
+            letter-spacing: -0.5px;
+            color: #ffffff;
+        }
+        .sub {
+            margin-top: 12px;
+            font-size: 14px;
+            color: #7f9ab8;
+        }
+        .addr {
+            letter-spacing: 0.03em;
+            color: #8fb8e6;
+        }
+
+        /* The amber of home's preview badge: the one thing on the page to look at first.
+           A centred block of fixed width rather than an inline-block sized to fit: the
+           engine lays an inline-block's block children out on one line. */
+        a.guess {
+            display: block;
+            width: 220px;
+            margin: 28px auto 0 auto;
+            padding: 14px 22px;
+            border: 1px solid #6b5426;
+            border-radius: 12px;
+            background-color: #171b28;
+            text-align: left;
+            text-decoration: none;
+            color: #e9f0f8;
+        }
+        .guess-label {
+            font-size: 10px;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            color: #e0b558;
+        }
+        .guess-name {
+            margin-top: 6px;
+            font-size: 16px;
+        }
+        .guess .addr {
+            margin-top: 2px;
+            font-size: 12px;
+        }
+
+        .horizon {
+            height: 1px;
+            width: 100%;
+            margin-top: 40px;
+            background-image: linear-gradient(to right, #000000 0%, #24567f 50%, #000000 100%);
+            mix-blend-mode: screen;
+        }
+
+        .row-label {
+            margin-top: 28px;
+            font-size: 11px;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            color: #5d7692;
+        }
+
+        .tiles {
+            display: flex;
+            justify-content: center;
+            flex-wrap: wrap;
+            gap: 14px;
+            /* Four across at most, as on gosub://help. */
+            max-width: 920px;
+            margin: 18px auto 0 auto;
+        }
+        a.tile {
+            display: block;
+            width: 188px;
+            padding: 16px 14px 14px 14px;
+            background-color: #0c2440;
+            border: 1px solid #17395f;
+            border-radius: 12px;
+            text-align: left;
+            text-decoration: none;
+            color: #e9f0f8;
+        }
+        .tile-name { font-size: 14px; }
+        .tile .addr {
+            margin-top: 3px;
+            font-size: 11px;
+        }
+        .tile-what {
+            margin-top: 8px;
+            font-size: 11px;
+            line-height: 1.45;
+            color: #7f9ab8;
+        }
+    </style>
+</head>
+<body>
+    <div class="page">
+        <h1>{{HEADING}}</h1>
+        <div class="sub">{{SUB}}</div>
+        {{SUGGESTION}}
+
+        <div class="horizon"></div>
+
+        <div class="row-label">Beacon's pages</div>
+        <div class="tiles">{{TILES}}</div>
+    </div>
+</body>
+</html>
