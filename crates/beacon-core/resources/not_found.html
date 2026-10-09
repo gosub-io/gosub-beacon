@@ -41,12 +41,10 @@
         }
 
         /* The amber of home's preview badge: the one thing on the page to look at first.
-           A centred block of fixed width rather than an inline-block sized to fit: the
-           engine lays an inline-block's block children out on one line. */
+           Sized to fit and centred by .page's text-align. */
         a.guess {
-            display: block;
-            width: 220px;
-            margin: 28px auto 0 auto;
+            display: inline-block;
+            margin-top: 28px;
             padding: 14px 22px;
             border: 1px solid #6b5426;
             border-radius: 12px;
