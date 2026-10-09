@@ -83,63 +83,15 @@ x86_64) `.app` and DMG; that, and everything else about the Mac shell, is in
 
 `make test` runs the unit tests, clippy and the format check; `make fix-format` applies
 `cargo fmt` and clippy's fixes. CI runs the same on Ubuntu, builds and tests the isolation
-build under Xvfb (below), and on `macos-14` builds the egui frontend, the C ABI with a
-headless C consumer, and the Swift app.
+build under Xvfb (`scripts/isolation-smoke.sh`; see [docs/isolation.md](docs/isolation.md)),
+and on `macos-14` builds the egui frontend, the C ABI with a headless C consumer, and the
+Swift app.
 
-## More on running
-
-An `isolation` build (`--features isolation`, GTK, Linux) runs the engine with every
-component in its own sandboxed process: the network stack, the cookie vault, the
-localStorage service, a throwaway decoder per image, and one renderer per site; Beacon's
-own process is confined to its profile, `~/Downloads` and the temp dir. It is isolated by
-default; `--single-process` turns it off for a run. A default build is the one-process
-engine; `--isolated` there gets the service processes but renders in-process. The
-isolated mode keeps its own localStorage, and a download saved outside `~/Downloads` fails
-under the lockdown. See [docs/isolation.md](docs/isolation.md) for what runs where, how it
-is verified and the known limits.
-
-### Watching what the engine is doing
-
-View > Show Activity (Ctrl+Shift+A) puts up to four status lines over the page, each with
-a running clock: the document request as it resolves, connects, waits and receives; the
-page's other fetches folded into one line; and the engine's stages as they run (parsing,
-the render tree, layout, tiling, raster, paint) or, under `--isolated`, the render pass in
-the site's process with the renderer's own lap times when it answers. Finished lines stay
-a moment with their total, then go. The strip always has four lines; a line keeps its place until it is done, and when
-more is going on than fits, the oldest keep their lines and the last says how many more.
-It costs nothing while hidden: showing it is what makes the engine announce its stages.
-
-### A game while you wait
-
-When a page cannot be reached, press space on the error page: a submarine, kelp to
-thread through, bubbles, fish and axolotls on the sand, in the spirit of the dinosaur.
-`gosub://dive` opens it directly, and the game follows the dark-mode toggle. It lives
-in `beacon-core` (rules, art and a pixel painter), so every shell shows the same
-frames; the GTK shell draws them into a `DrawingArea`.
-
-### Testing the renderer tier
-
-`scripts/isolation-smoke.sh` runs an `isolation` build twice under Xvfb against the
-fixture page in `tests/fixtures/isolation`, plain and `--isolated`, and checks the
-component processes, the log and the recorded page title (it comes back from the
-renderer process, so it proves the remote render). Each run then types into the page's
-field, scrolls down and back, narrows the window and widens it again, and follows its
-link; after every step the two runs' screenshots must agree within a small antialiasing
-margin, and scrolling back and widening back must restore the page exactly. CI runs it as the `isolation-smoke` job. Locally:
-
-```bash
-cargo build --bin gosub-beacon-gtk --no-default-features --features gtk,isolation
-xvfb-run -a -s "-screen 0 1400x900x24" scripts/isolation-smoke.sh
-```
-
-It needs `xvfb`, `xdotool`, ImageMagick and `python3`; artefacts (logs, screenshots, a
-diff image) land in the directory it prints.
-
-### Running in a container
+## Running in a container
 
 To (re-)create a docker/podman image, you can use the supplied [Dockerfile](./Dockerfile) to build a local image with dependencies installed.
 
-#### Building an image
+### Building an image
 
 First build the image.
 
@@ -163,7 +115,7 @@ docker build --tag gosub-beacon --build-arg='ENGINE_BRANCH=main' .
 podman build --tag gosub-beacon --build-arg='ENGINE_BRANCH=main' .
 ```
 
-#### Running the image
+### Running the image
 
 Run this image using Wayland (X11 should also work)
 
