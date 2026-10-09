@@ -93,13 +93,7 @@ impl<C: BeaconConfig> BrowserEngine<C> {
         // `set_storage` loads stored values for the keys it knows about at attach time. Merge
         // afterwards and the key exists but its persisted value is never read back, so the
         // setting silently always reports its default.
-        let beacon_settings = gosub_engine::Config::new(vec![gosub_engine::SettingInfo {
-            key: "general.homepage".to_string(),
-            description: "Page the Home button navigates to.".to_string(),
-            default: gosub_engine::Setting::String("gosub://home".to_string()),
-            constraint: None,
-        }]);
-        engine.settings().merge(&beacon_settings, "useragent");
+        engine.settings().merge(&beacon_settings(), "useragent");
 
         // Persist settings overrides (edited via gosub://config) across runs. Attached
         // before anything reads or writes settings, so stored values win over defaults.
@@ -114,21 +108,20 @@ impl<C: BeaconConfig> BrowserEngine<C> {
         // of its page for unknown names. Everything else (blank, version, history, config
         // dump) is the engine's own; gosub://config additionally gets a shell-rendered editor.
         // The page carries the build's own version, so a preview build says which one it is
-        // rather than just that it is one.
-        engine.internal_pages().register_html(
+        // rather than just that it is one. Each declines while BEACON_PAGES is off, which hands
+        // the request to the engine's own page; it is read per request, so flipping it in
+        // gosub://config shows on the next load.
+        engine.internal_pages().register(
             "home",
-            include_str!("../resources/home.html").replace("{{VERSION}}", env!("CARGO_PKG_VERSION")),
+            beacon_page(include_str!("../resources/home.html").replace("{{VERSION}}", env!("CARGO_PKG_VERSION"))),
         );
         engine
             .internal_pages()
-            .register_html("help", include_str!("../resources/help.html"));
-        // Unknown gosub:// pages get Beacon's own "page not found", in the same style.
+            .register("help", beacon_page(include_str!("../resources/help.html").to_string()));
         engine.internal_pages().set_not_found(Arc::new(|req, known| {
-            Some(gosub_engine::internal_pages::PageResponse::html(crate::not_found_page::build(
-                req.name,
-                req.url.as_str(),
-                known,
-            )))
+            req.settings
+                .get_bool(BEACON_PAGES)
+                .then(|| gosub_engine::internal_pages::PageResponse::html(crate::not_found_page::build(req.name, req.url.as_str(), known)))
         }));
 
         // Identify as Beacon on the wire; the engine alone would send only its Gosub
@@ -325,6 +318,37 @@ impl<C: BeaconConfig> BrowserEngine<C> {
     }
 }
 
+/// Beacon's own versions of the engine's home, help and not-found pages, or the engine's.
+const BEACON_PAGES: &str = "useragent.general.beacon_pages";
+
+/// Beacon's settings, merged into the engine's store under `useragent`.
+fn beacon_settings() -> gosub_engine::Config {
+    gosub_engine::Config::new(vec![
+        gosub_engine::SettingInfo {
+            key: "general.homepage".to_string(),
+            description: "Page the Home button navigates to.".to_string(),
+            default: gosub_engine::Setting::String("gosub://home".to_string()),
+            constraint: None,
+        },
+        gosub_engine::SettingInfo {
+            key: "general.beacon_pages".to_string(),
+            description: "Show Beacon's own gosub://home, gosub://help and page-not-found; off shows the engine's built-in ones."
+                .to_string(),
+            default: gosub_engine::Setting::Bool(true),
+            constraint: None,
+        },
+    ])
+}
+
+/// A page that is Beacon's `html` while [`BEACON_PAGES`] is on, and declines otherwise.
+fn beacon_page(html: String) -> gosub_engine::internal_pages::PageProvider {
+    Arc::new(move |req: &gosub_engine::internal_pages::PageRequest<'_>| {
+        req.settings
+            .get_bool(BEACON_PAGES)
+            .then(|| gosub_engine::internal_pages::PageResponse::html(html.clone()))
+    })
+}
+
 /// Minimal HTML escaping for the bookmarks page.
 fn html_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -338,4 +362,32 @@ fn html_escape(s: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gosub_engine::internal_pages::{PageRequest, TabView};
+
+    fn serve(provider: &gosub_engine::internal_pages::PageProvider, settings: &gosub_engine::Config) -> Option<String> {
+        let url = url::Url::parse("gosub://home").unwrap();
+        let req = PageRequest {
+            name: "home",
+            url: &url,
+            settings,
+            tab: &TabView::default(),
+        };
+        provider(&req).map(|page| page.html)
+    }
+
+    #[test]
+    fn beacons_pages_give_way_to_the_engines_when_switched_off() {
+        let settings = gosub_engine::Config::new(Vec::new());
+        settings.merge(&beacon_settings(), "useragent");
+        let home = beacon_page("BEACON".to_string());
+
+        assert_eq!(serve(&home, &settings).as_deref(), Some("BEACON"), "on by default");
+        settings.set_transient(BEACON_PAGES, gosub_engine::Setting::Bool(false)).unwrap();
+        assert_eq!(serve(&home, &settings), None, "declines, so the engine's page answers");
+    }
 }
