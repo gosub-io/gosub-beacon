@@ -13,14 +13,6 @@ gosub_engine.workspace = true
 gosub_render_pipeline.workspace = true
 # For the picker's colour model: the engine's own CSS named-colour table.
 gosub_shared.workspace = true
-gosub_renderer_skia.workspace = true
-# For `CosmicFontSystem` (the `isolation` feature): a font system the engine can confine
-# fully, so isolated renderers get a warmed fork server instead of a fresh process per render.
-gosub_fontmanager.workspace = true
-
-skia-safe.workspace = true
-gtk4.workspace = true
-gtk-macros.workspace = true
 
 anyhow.workspace = true
 async-channel.workspace = true
@@ -44,9 +36,23 @@ uuid.workspace = true
 # decoder processes; pages render in-process.
 isolation = ["gosub_engine/cairo-tiles", "beacon-core/isolated-by-default"]
 
-# EGL is how Skia binds the GL context on Wayland/X11; macOS uses CGL natively.
+# GTK and Skia, kept out of a macOS build altogether. The GTK frontend does not build there
+# (Skia's EGL backend needs `EGL/egl.h`), and a stray `cargo build` on a Mac would otherwise
+# spend minutes on them before failing; build.rs stops it with directions instead. The Mac
+# frontend is the Swift app over beacon-ffi.
 [target.'cfg(not(target_os = "macos"))'.dependencies]
-skia-safe = { workspace = true, features = ["egl"] }
+gosub_renderer_skia.workspace = true
+# For `CosmicFontSystem` (the `isolation` feature): a font system the engine can confine
+# fully, so isolated renderers get a warmed fork server instead of a fresh process per render.
+gosub_fontmanager.workspace = true
 
-[build-dependencies]
+# EGL is how Skia binds the GL context on Wayland/X11.
+skia-safe = { workspace = true, features = ["egl"] }
+gtk4.workspace = true
+gtk-macros.workspace = true
+
+# Not on macOS either: it pulls in gio and GLib's -sys crates, which would fail on a Mac without
+# Homebrew before build.rs gets to say anything. On a native Mac build, host and target are
+# both macOS, so this matches either way.
+[target.'cfg(not(target_os = "macos"))'.build-dependencies]
 glib-build-tools.workspace = true

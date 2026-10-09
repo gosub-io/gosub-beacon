@@ -1,6 +1,6 @@
 .SILENT:
 
-SHELL=/usr/bin/env bash -O globstar
+SHELL=/usr/bin/env bash
 
 all: help
 
@@ -10,6 +10,11 @@ bench: ## Benchmark the project
 	cargo bench
 
 build: ## Build the project
+	if [ "$$(uname)" = Darwin ]; then \
+		echo "make build builds the GTK frontend, which does not build on macOS." ;\
+		echo "On a Mac: cargo build -p beacon-ffi, then cd swift && swift run BeaconMac (see swift/README.md)." ;\
+		exit 1 ;\
+	fi ;\
 	source test-utils.sh ;\
 	section "Cargo build" ;\
 	cargo build --all
