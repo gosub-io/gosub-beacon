@@ -17,10 +17,13 @@
            colour under it -- which is exactly what the old page did. */
         html { height: 100%; }
         body {
-            height: 100%;
+            min-height: 100%;
             margin: 0;
             /* Centred in the window rather than pinned to the top: a new-tab page is one
-               short block, and left high it leaves half a screen of empty sea below it. */
+               short block, and left high it leaves half a screen of empty sea below it.
+               min-height, not height: in a window shorter than the page (a tablet in
+               landscape), centring a fixed-height body pushes the top out above the
+               page, where no scroll reaches. */
             display: flex;
             align-items: center;
             justify-content: center;
@@ -31,7 +34,7 @@
         }
 
         .page {
-            padding: 0 40px 40px 40px;
+            padding: 40px 40px 40px 40px;
             text-align: center;
         }
 
