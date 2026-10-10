@@ -13,9 +13,9 @@ use winit::platform::android::activity::AndroidApp;
 
 static APP: OnceLock<AndroidApp> = OnceLock::new();
 
-/// Start Beacon in the activity `app`. Called from the cdylib's `android_main`; returns
-/// when the activity is destroyed.
-pub fn run(app: AndroidApp) {
+/// Start Beacon in the activity `app`. Called from the cdylib's `android_main`; never
+/// returns. When the activity is destroyed the process ends with it.
+pub fn run(app: AndroidApp) -> ! {
     // RUST_LOG cannot be set for an app, so the levels are fixed here; read them with
     //   adb logcat -s beacon RustStdoutStderr
     android_logger::init_once(
@@ -42,6 +42,14 @@ pub fn run(app: AndroidApp) {
         ..Default::default()
     };
     crate::start(options, Vec::new());
+
+    // The activity is gone, but Android may keep the process and later create a new
+    // activity in it, calling `android_main` again. Beacon cannot start twice in one
+    // process (winit allows one event loop, and `APP` and `Cli` are set once), so that
+    // activity would stay blank until a force-stop. Ending the process here makes the next
+    // launch a cold start instead.
+    log::info!("activity destroyed, exiting");
+    std::process::exit(0);
 }
 
 /// Give rustls-platform-verifier the JVM and the activity, so HTTPS fetches can check
