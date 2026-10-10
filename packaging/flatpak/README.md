@@ -12,7 +12,6 @@ What is here:
 | `cargo-sources.json` | ~760 vendored crates + the vello git checkout, generated from `Cargo.lock` |
 | `io.gosub.beacon.desktop` | desktop entry |
 | `io.gosub.beacon.metainfo.xml` | AppStream metadata |
-| `icons/` | hicolor PNGs, resized from `swift/packaging/icon.png` |
 | `refresh-skia.sh` | prints the prebuilt-Skia source stanza after a skia-safe bump |
 
 ## Building
@@ -88,3 +87,16 @@ flatpak override --user --filesystem=host:ro io.gosub.beacon
 Not submitted. Flathub additionally requires the sources to be remote (no `dir` sources,
 so the engine must become the pinned git source), screenshots that resolve, and a passing
 `flatpak run --command=flatpak-builder-lint org.flatpak.Builder manifest <manifest>`.
+
+## Icons
+
+The lighthouse exists only as `crates/beacon-core/resources/lighthouse.svg`, the same file
+gosub://home shows; no PNG of it is kept in the repository. The flatpak installs it as the
+scalable hicolor icon. Packaging that needs pixels renders them at build time with
+`beacon-icon`, which puts the circle on 91% of the square:
+
+```bash
+cargo run -p beacon-icon -- 256 icon.png
+```
+
+`swift/package.sh` builds the macOS `.icns` that way, and the Android script the launcher icon.
