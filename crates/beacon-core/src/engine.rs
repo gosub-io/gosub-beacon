@@ -111,10 +111,7 @@ impl<C: BeaconConfig> BrowserEngine<C> {
         // rather than just that it is one. Each declines while BEACON_PAGES is off, which hands
         // the request to the engine's own page; it is read per request, so flipping it in
         // gosub://config shows on the next load.
-        engine.internal_pages().register(
-            "home",
-            beacon_page(include_str!("../resources/home.html").replace("{{VERSION}}", env!("CARGO_PKG_VERSION"))),
-        );
+        engine.internal_pages().register("home", beacon_page(home_html()));
         engine
             .internal_pages()
             .register("help", beacon_page(include_str!("../resources/help.html").to_string()));
@@ -349,6 +346,30 @@ fn beacon_page(html: String) -> gosub_engine::internal_pages::PageProvider {
     })
 }
 
+/// gosub://home with the build's version and the lighthouse filled in.
+fn home_html() -> String {
+    include_str!("../resources/home.html")
+        .replace("{{VERSION}}", env!("CARGO_PKG_VERSION"))
+        .replace("{{LOGO}}", &svg_data_url(include_str!("../resources/lighthouse.svg")))
+}
+
+/// `svg` as a `data:` URL for an `<img>` in a double-quoted attribute. An `<img>` rather than
+/// inline `<svg>`, because the engine sizes and clips inline SVG wrongly.
+fn svg_data_url(svg: &str) -> String {
+    let mut out = String::from("data:image/svg+xml,");
+    for c in svg.trim().chars() {
+        match c {
+            '%' => out.push_str("%25"),
+            '#' => out.push_str("%23"),
+            '"' => out.push_str("%22"),
+            '<' => out.push_str("%3C"),
+            '>' => out.push_str("%3E"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
 /// Minimal HTML escaping for the bookmarks page.
 fn html_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -389,5 +410,14 @@ mod tests {
         assert_eq!(serve(&home, &settings).as_deref(), Some("BEACON"), "on by default");
         settings.set_transient(BEACON_PAGES, gosub_engine::Setting::Bool(false)).unwrap();
         assert_eq!(serve(&home, &settings), None, "declines, so the engine's page answers");
+    }
+
+    #[test]
+    fn home_carries_the_lighthouse_as_an_svg_data_url() {
+        let home = home_html();
+        assert!(!home.contains("{{"), "every placeholder is filled");
+        let src = home.split(r#"class="logo" src=""#).nth(1).unwrap().split('"').next().unwrap();
+        assert!(src.starts_with("data:image/svg+xml,%3Csvg "));
+        assert!(!src.contains(['#', '<', '>']));
     }
 }

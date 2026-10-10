@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/beacon", "crates/beacon-core", "crates/beacon-egui", "crates/beacon-ffi", "crates/beacon-gtk"]
+members = ["crates/beacon", "crates/beacon-core", "crates/beacon-egui", "crates/beacon-ffi", "crates/beacon-gtk", "crates/beacon-icon"]
 default-members = ["crates/beacon"]
 
 [workspace.package]

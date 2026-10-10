@@ -75,8 +75,9 @@ recorded too (`BeaconEngineCommit`, and `-engine-<commit>` in the file name): th
 commit built against two engine checkouts is two different builds. Built outside a git
 checkout, they are `0` and `unknown`.
 
-The icon is `packaging/icon.png`, the Beacon lighthouse on a 1024 square. The script turns
-it into an `.icns` (16 through 512, each at 1x and 2x) with `sips` and `iconutil`.
+The icon is the Beacon lighthouse, `crates/beacon-core/resources/lighthouse.svg`. The script
+renders it at every size an `.icns` takes (16 through 512, each at 1x and 2x) with the
+workspace's `beacon-icon` tool and packs them with `iconutil`.
 
 The disk image opens on `packaging/dmg-background.png`, with the app and the Applications
 symlink either side of centre, clear of the submarine below and the wordmark above.

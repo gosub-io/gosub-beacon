@@ -57,11 +57,9 @@ modules:
           /app/share/applications/io.gosub.beacon.desktop
       - install -Dm644 gosub-beacon/packaging/flatpak/io.gosub.beacon.metainfo.xml
           /app/share/metainfo/io.gosub.beacon.metainfo.xml
-      - |
-        for size in 64 128 256 512; do
-          install -Dm644 "gosub-beacon/packaging/flatpak/icons/io.gosub.beacon-$size.png" \
-            "/app/share/icons/hicolor/${size}x${size}/apps/io.gosub.beacon.png"
-        done
+      # The lighthouse is only ever an SVG; the icon theme scales it.
+      - install -Dm644 gosub-beacon/crates/beacon-core/resources/lighthouse.svg
+          /app/share/icons/hicolor/scalable/apps/io.gosub.beacon.svg
     sources:
       # Beacon itself. `skip` keeps the multi-GB target/ out of the copy flatpak-builder
       # makes on every run.

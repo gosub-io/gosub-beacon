@@ -1,0 +1,11 @@
+[package]
+name = "beacon-icon"
+description = "Renders the Beacon lighthouse SVG to the app icon PNGs the packaging scripts need"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+resvg = { version = "0.48.1", default-features = false }

@@ -284,21 +284,20 @@ printf 'APPL????' > "$app/Contents/PkgInfo"
 
 # ── icon ──────────────────────────────────────────────────────────────────────
 #
-# packaging/icon.png is the Beacon lighthouse on a 1024 square. iconutil wants every size
-# named exactly so, and both scales of each, or it refuses the set.
+# The lighthouse exists only as crates/beacon-core/resources/lighthouse.svg; beacon-icon
+# renders each PNG iconutil wants from it. iconutil wants every size named exactly so, and
+# both scales of each, or it refuses the set.
 
-if [[ -f "$here/packaging/icon.png" ]]; then
-    say "building the icon"
-    iconset="$out/AppIcon.iconset"
-    rm -rf "$iconset"; mkdir -p "$iconset"
-    for size in 16 32 128 256 512; do
-        sips -z $size $size "$here/packaging/icon.png" --out "$iconset/icon_${size}x${size}.png" >/dev/null
-        sips -z $((size * 2)) $((size * 2)) "$here/packaging/icon.png" \
-            --out "$iconset/icon_${size}x${size}@2x.png" >/dev/null
-    done
-    iconutil -c icns "$iconset" -o "$app/Contents/Resources/AppIcon.icns"
-    rm -rf "$iconset"
-fi
+say "building the icon"
+iconset="$out/AppIcon.iconset"
+rm -rf "$iconset"; mkdir -p "$iconset"
+cargo build --manifest-path "$root/Cargo.toml" -p beacon-icon --release
+for size in 16 32 128 256 512; do
+    "$root/target/release/beacon-icon" $size "$iconset/icon_${size}x${size}.png"
+    "$root/target/release/beacon-icon" $((size * 2)) "$iconset/icon_${size}x${size}@2x.png"
+done
+iconutil -c icns "$iconset" -o "$app/Contents/Resources/AppIcon.icns"
+rm -rf "$iconset"
 
 # ── make it relocatable ───────────────────────────────────────────────────────
 #
