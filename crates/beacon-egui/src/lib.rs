@@ -27,9 +27,10 @@ pub fn run() {
     // the network, vault and decoder processes; the renderer tier does not apply, because
     // Vello presents a GPU texture and isolated renderers produce CPU tiles.
     gosub_engine::child_process::dispatch_with::<app::EguiConfig>();
-    if beacon_core::cli::Cli::init().isolated() {
-        beacon_core::isolation::lock_down_broker();
-    }
+    // Then argv (the lockdown needs `--user-data-dir`) and the lockdown, in every mode,
+    // before any thread, the logger or the engine exist.
+    beacon_core::cli::Cli::init();
+    beacon_core::isolation::lock_down_broker();
 
     // RUST_LOG wins when it is set, so a diagnostic run needs no rebuild:
     //   RUST_LOG=beacon_egui=debug ./gosub-beacon-egui https://example.org
