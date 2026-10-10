@@ -6,6 +6,8 @@
 //! there is no widget tree to keep in step, so most `BeaconEvent`s need no handling at all
 //! — the chrome is rebuilt from current state on every frame.
 
+#[cfg(target_os = "android")]
+pub mod android;
 mod app;
 mod chrome;
 mod context;
@@ -55,7 +57,13 @@ pub fn run() {
         renderer: eframe::Renderer::Wgpu,
         ..Default::default()
     };
+    start(options, urls);
+}
 
+/// Run the event loop with `options` until the window closes, opening `urls` as startup
+/// tabs. Shared by the desktop entry above and the Android one, which differ only in how
+/// they get here.
+fn start(options: eframe::NativeOptions, urls: Vec<String>) {
     let result = eframe::run_native(
         "Gosub Beacon",
         options,

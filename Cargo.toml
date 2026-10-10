@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/beacon", "crates/beacon-core", "crates/beacon-egui", "crates/beacon-ffi", "crates/beacon-gtk", "crates/beacon-icon"]
+members = ["crates/beacon", "crates/beacon-android", "crates/beacon-core", "crates/beacon-egui", "crates/beacon-ffi", "crates/beacon-gtk", "crates/beacon-icon"]
 default-members = ["crates/beacon"]
 
 [workspace.package]
@@ -26,7 +26,9 @@ skia-safe = { version = "0.99.0", features = ["gl"] }
 gtk4 = { version = "0.11.1", features = ["v4_6", "v4_14"] }
 gtk-macros = "0.3"
 
-eframe = { version = "0.35.0", features = ["wgpu"] }
+# Defaults off: they include accesskit, which eframe refuses to build on Android under
+# NativeActivity. beacon-egui puts the rest of the defaults back for the desktop.
+eframe = { version = "0.35.0", default-features = false, features = ["default_fonts", "wgpu"] }
 egui = "0.35.0"
 vello = "0.8.0"
 parking_lot = "0.12"
@@ -45,7 +47,10 @@ sys-locale = "0.3.2"
 # The glibc locale tables chrono formats from; the pickers read week starts and clock
 # formats out of them too.
 pure-rust-locales = "0.8.2"
-reqwest = { version = "0.12.11", features = ["gzip", "brotli", "deflate", "http2", "rustls-tls"] }
+# No default features: they add native-tls (OpenSSL on Linux and Android) next to the rustls
+# stack already asked for here, and OpenSSL does not cross-compile to Android. The other
+# defaults (charset, http2, system-proxy) are listed.
+reqwest = { version = "0.12.11", default-features = false, features = ["charset", "gzip", "brotli", "deflate", "http2", "rustls-tls", "system-proxy"] }
 tokio = { version = "1.42.0", features = ["rt-multi-thread", "macros", "sync", "time"] }
 url = "2.5.2"
 # The engine's telemetry events carry their payload as JSON.

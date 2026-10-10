@@ -24,8 +24,9 @@ use crate::tab::{GosubTabManager, TabId};
 /// The engine's own tab identifier.
 pub type EngineTabId = gosub_engine::tab::TabId;
 
-/// Frame rate to ask the engine for when a tab starts drawing again.
-pub const DRAW_FPS: u16 = 30;
+/// Frame rate to ask the engine for when a tab starts drawing again. Android asks for 60: a
+/// finger drags the page directly, and 30 reads as stutter there in a way a wheel does not.
+pub const DRAW_FPS: u16 = if cfg!(target_os = "android") { 60 } else { 30 };
 
 /// Browser state that reacts to the engine.
 pub struct Beacon {
@@ -64,7 +65,7 @@ impl Beacon {
             BeaconCommand::Forward(entry) => self.send_to_active(EngineTabCommand::GoForward { entry }),
             BeaconCommand::GoToHistoryEntry(entry) => self.send_to_active(EngineTabCommand::GoToHistoryEntry { entry }),
             BeaconCommand::Reload { ignore_cache } => self.send_to_active(EngineTabCommand::Reload { ignore_cache }),
-            BeaconCommand::Stop => self.send_to_active(EngineTabCommand::CancelNavigation),
+            BeaconCommand::Stop => self.stop_active(),
 
             BeaconCommand::CopyText(text) => {
                 self.platform.copy_text(&text);
@@ -96,6 +97,27 @@ impl Beacon {
     /// The engine owns session history, so back/forward/reload are just asks: it answers
     /// with `HistoryChanged` and the usual navigation events, which come back through
     /// [`Self::on_engine_event`].
+    /// Stop the active tab's load. Not a navigation, so unlike [`Self::send_to_active`] it does
+    /// not mark the tab loading -- it did, and pressing Stop left the button on Stop. The tab
+    /// stops loading here and now: the engine drops a cancelled load without reporting back.
+    fn stop_active(&mut self) -> Vec<BeaconEvent> {
+        let Some(tab_id) = self.active() else {
+            return Vec::new();
+        };
+        let handle = self.tabs.lock().unwrap().get_tab(tab_id).and_then(|tab| tab.tab_handle());
+        if let Some(handle) = handle {
+            self.rt.spawn(async move {
+                let _ = handle.send(EngineTabCommand::CancelNavigation).await;
+            });
+        }
+        self.with_tab(tab_id, |tab| tab.set_loading(false));
+        vec![
+            BeaconEvent::LoadProgress(tab_id, None),
+            BeaconEvent::LoadingChanged(tab_id, false),
+            BeaconEvent::TabsChanged,
+        ]
+    }
+
     fn send_to_active(&mut self, command: EngineTabCommand) -> Vec<BeaconEvent> {
         let Some(tab_id) = self.active() else {
             return Vec::new();
@@ -374,23 +396,27 @@ impl Beacon {
         let is_active = self.active() == Some(our_id);
 
         match event {
+            // Every navigation, whoever started it: a link the page followed, a redirect, a
+            // back/forward. Only the ones started here were marked loading before, so a tapped
+            // link loaded under a Reload button.
             NavigationEvent::Started { url, .. } => {
                 // Leaving for another address leaves the error page behind. The error
                 // page itself arrives as a load of the failed address (the shell's
                 // `LoadHtml` at that base URL), and a reload of it keeps the address
                 // too; those stay flagged until a different page is on its way.
                 self.with_tab(our_id, |tab| {
+                    tab.set_loading(true);
                     if tab.url().as_str() != url.as_str() {
                         tab.set_showing_error(false);
                     }
                 });
+                let mut out = vec![BeaconEvent::LoadingChanged(our_id, true), BeaconEvent::TabsChanged];
                 if is_active {
                     // A small non-zero fraction, so the bar shows *something* the moment a
                     // load begins rather than staying empty until the first byte lands.
-                    vec![BeaconEvent::LoadProgress(our_id, Some(0.05))]
-                } else {
-                    Vec::new()
+                    out.push(BeaconEvent::LoadProgress(our_id, Some(0.05)));
                 }
+                out
             }
 
             NavigationEvent::Progress {
@@ -412,17 +438,30 @@ impl Beacon {
             NavigationEvent::HistoryChanged { history } => {
                 // The engine also moves the address bar target: on a back/forward traversal
                 // the tab's URL is the entry we moved to, even while it is still loading.
-                let current_url = history.current.and_then(|id| history.entries.get(id.0)).map(|e| e.url.clone());
+                let current = history.current.and_then(|id| history.entries.get(id.0));
+                let current_url = current.map(|e| e.url.clone());
+                // And the title: the entry carries the document's, and this is the only place
+                // an in-process page's title arrives -- the engine sends `TitleChanged` only for
+                // pages rendered out of process. It follows `Finished`, which titled the tab
+                // with its URL as a stand-in. An untitled page keeps that stand-in.
+                let current_title = current.and_then(|e| e.title.clone()).filter(|t| !t.trim().is_empty());
                 let url_for_event = current_url.clone();
                 self.with_tab(our_id, |tab| {
                     tab.history_mut().update(history);
                     if let Some(url) = &current_url {
                         tab.set_url(url.clone());
                     }
+                    if let Some(title) = &current_title {
+                        tab.set_title(title);
+                    }
                 });
                 let mut out = Vec::new();
                 if let Some(url) = url_for_event {
                     out.push(BeaconEvent::UrlChanged(our_id, url));
+                }
+                if let Some(title) = current_title {
+                    out.push(BeaconEvent::TitleChanged(our_id, title));
+                    out.push(BeaconEvent::TabsChanged);
                 }
                 out.push(BeaconEvent::NavStateChanged(our_id));
                 out
@@ -430,18 +469,20 @@ impl Beacon {
 
             // Load ended without a page change (stop button, download offer).
             NavigationEvent::Cancelled { .. } => {
+                self.with_tab(our_id, |tab| tab.set_loading(false));
+                let mut out = vec![BeaconEvent::LoadingChanged(our_id, false), BeaconEvent::TabsChanged];
                 if is_active {
-                    vec![BeaconEvent::LoadProgress(our_id, None)]
-                } else {
-                    Vec::new()
+                    out.push(BeaconEvent::LoadProgress(our_id, None));
                 }
+                out
             }
 
             NavigationEvent::Failed { url, error, .. } => {
+                self.with_tab(our_id, |tab| tab.set_loading(false));
                 if !crate::error_page::is_cancellation(&error.to_string()) {
                     self.with_tab(our_id, |tab| tab.set_showing_error(true));
                 }
-                let mut out = Vec::new();
+                let mut out = vec![BeaconEvent::LoadingChanged(our_id, false), BeaconEvent::TabsChanged];
                 if is_active {
                     out.push(BeaconEvent::LoadProgress(our_id, None));
                 }
@@ -561,6 +602,85 @@ mod tests {
         assert!(out.contains(&BeaconEvent::TabsChanged));
         let title = beacon.tabs().lock().unwrap().get_tab(tab_id).unwrap().title().to_string();
         assert_eq!(title, "Hello");
+    }
+
+    fn loading(beacon: &Beacon, tab_id: TabId) -> bool {
+        beacon.tabs().lock().unwrap().get_tab(tab_id).unwrap().is_loading()
+    }
+
+    #[test]
+    fn any_navigation_marks_the_tab_loading_and_a_failure_clears_it() {
+        let (mut beacon, tab_id, engine_id) = beacon_with_tab();
+        let url = url::Url::parse("https://example.com/").unwrap();
+        // Started by the page (a followed link), not through Beacon.
+        let out = beacon.on_engine_event(nav(
+            engine_id,
+            NavigationEvent::Started {
+                nav_id: NavigationId::new(),
+                url: url.clone(),
+            },
+        ));
+        assert!(out.contains(&BeaconEvent::LoadingChanged(tab_id, true)));
+        assert!(loading(&beacon, tab_id));
+
+        let out = beacon.on_engine_event(nav(
+            engine_id,
+            NavigationEvent::Failed {
+                nav_id: Some(NavigationId::new()),
+                url,
+                error: gosub_engine::events::LoadError::InvalidUrl { message: "refused".into() },
+            },
+        ));
+        assert!(out.contains(&BeaconEvent::LoadingChanged(tab_id, false)));
+        assert!(!loading(&beacon, tab_id));
+    }
+
+    #[test]
+    fn stop_ends_the_load_instead_of_starting_one() {
+        let (mut beacon, tab_id, _) = beacon_with_tab();
+        beacon.with_tab(tab_id, |tab| tab.set_loading(true));
+        let out = beacon.apply(BeaconCommand::Stop);
+        assert!(out.contains(&BeaconEvent::LoadingChanged(tab_id, false)));
+        assert!(!out.contains(&BeaconEvent::LoadingChanged(tab_id, true)));
+        assert!(!loading(&beacon, tab_id));
+    }
+
+    #[test]
+    fn the_history_entry_titles_an_in_process_page() {
+        use gosub_engine::tab::{HistoryEntryId, HistoryEntrySummary, HistorySnapshot};
+        let (mut beacon, tab_id, engine_id) = beacon_with_tab();
+        let url = url::Url::parse("https://news.ycombinator.com/").unwrap();
+        let title = |beacon: &Beacon| beacon.tabs().lock().unwrap().get_tab(tab_id).unwrap().title().to_string();
+
+        // The order the engine sends them in: `Finished` titles the tab with its URL...
+        beacon.on_engine_event(nav(
+            engine_id,
+            NavigationEvent::Finished {
+                nav_id: NavigationId::new(),
+                url: url.clone(),
+            },
+        ));
+        assert_eq!(title(&beacon), url.as_str());
+
+        // ...and the history snapshot after it carries the document's title.
+        let entry = HistoryEntrySummary {
+            id: HistoryEntryId(0),
+            url: url.clone(),
+            title: Some("Hacker News".into()),
+            parent: None,
+        };
+        let out = beacon.on_engine_event(nav(
+            engine_id,
+            NavigationEvent::HistoryChanged {
+                history: HistorySnapshot {
+                    current: Some(HistoryEntryId(0)),
+                    entries: vec![entry],
+                    ..Default::default()
+                },
+            },
+        ));
+        assert_eq!(title(&beacon), "Hacker News");
+        assert!(out.contains(&BeaconEvent::TitleChanged(tab_id, "Hacker News".into())));
     }
 
     #[test]

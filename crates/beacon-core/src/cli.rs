@@ -47,6 +47,13 @@ impl Cli {
         CLI.get_or_init(Cli::parse)
     }
 
+    /// Publish a command line built in code, for hosts with no argv to parse: Android
+    /// starts the app with none, and has to point the profile at the app's own storage.
+    /// Call before anything reads [`Cli::global`]; a later `init` then keeps this one.
+    pub fn set(cli: Cli) -> &'static Cli {
+        CLI.get_or_init(|| cli)
+    }
+
     /// The parsed command line. Falls back to defaults if `init` was never called, so tests
     /// and any stray caller get sane values rather than a panic.
     pub fn global() -> &'static Cli {
