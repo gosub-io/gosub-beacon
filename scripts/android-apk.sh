@@ -71,7 +71,7 @@ fi
 "$BUILD_TOOLS/d8" --release --min-api "$MIN_SDK" --lib "$PLATFORM/android.jar" \
     --output "$STAGE/apk" "$STAGE/java/classes.jar" "$KOTLIN_STDLIB"
 
-cp "$ROOT/packaging/flatpak/icons/io.gosub.beacon-256.png" "$STAGE/res/mipmap-xxxhdpi/ic_launcher.png"
+(cd "$ROOT" && cargo run -q --release -p beacon-icon -- 192 "$STAGE/res/mipmap-xxxhdpi/ic_launcher.png")
 unzip -q -o "$AAR" 'res/xml/*' -d "$STAGE"
 "$BUILD_TOOLS/aapt2" compile --dir "$STAGE/res" -o "$STAGE/res.zip"
 "$BUILD_TOOLS/aapt2" link -o "$STAGE/unaligned.apk" \
