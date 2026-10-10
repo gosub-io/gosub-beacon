@@ -27,9 +27,8 @@ pub struct Cli {
     pub user_data_dir: Option<PathBuf>,
 
     /// Run the engine's component processes (network stack, cookie vault, localStorage
-    /// service, image decoders, per-site page renderers) and confine this process to its
-    /// profile directory. Linux only; elsewhere the engine says what cannot apply and runs
-    /// in-process. The default in an `isolation` build. For this run only: the stored
+    /// service, image decoders, per-site page renderers). Linux only; elsewhere the engine
+    /// says what cannot apply and runs in-process. The default in an `isolation` build. For this run only: the stored
     /// `security.process_isolation` setting is left alone.
     #[arg(long, conflicts_with = "single_process")]
     pub isolated: bool,

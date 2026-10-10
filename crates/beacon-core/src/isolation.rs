@@ -10,7 +10,8 @@ use std::path::{Path, PathBuf};
 /// Confine this process's filesystem writes to its profile, the downloads directory and the
 /// temp dir, and drop the escalation syscalls. Call right after `dispatch_with`, before any
 /// thread, the logger or the engine exist; everything the process writes to after this
-/// point must be listed here or created under one of these.
+/// point must be listed here or created under one of these. Applied in every mode, not just
+/// with the component processes: in single-process mode page content runs here.
 ///
 /// `/dev/dri` is granted because the GTK frontend composites on GL, and EGL opens the render
 /// node read-write; Landlock counts that as a file write.

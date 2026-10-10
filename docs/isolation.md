@@ -22,7 +22,7 @@ engine repository; this is the embedder's side.
 The engine's embedder contract has five steps; Beacon takes all five.
 
 1. `child_process::dispatch_with::<GtkConfig>()` is the first statement of `run()`. The engine spawns children by re-executing the Beacon binary with a role argument.
-2. `lock_down_broker` right after, before any thread, the logger or the engine exist (`beacon-core::isolation`).
+2. `lock_down_broker` right after, before any thread, the logger or the engine exist (`beacon-core::isolation`). This runs in every mode, `--single-process` included: there page content is parsed in Beacon's own process, so the confinement matters more, not less.
 3. The `security.process_isolation` switch is set for the run before `start()`: on in an `isolation` build unless `--single-process`, on with `--isolated` in any build, off otherwise. The stored setting is left alone.
 4. A forked rasteriser and a fully confinable font system: the `isolation` build feature switches `GtkConfig` to cosmic-text fonts and compiles in the Cairo tile rasteriser. Skia's own font system is fontconfig-backed, which the engine can only confine as a fresh process per render; cosmic-text gets the fork server and resident renderers.
 5. `localStorage` through `ServiceLocalStore` in the isolated mode, so the storage process serves it; the plain build keeps the SQLite store. The two modes keep separate `localStorage` for the same profile.

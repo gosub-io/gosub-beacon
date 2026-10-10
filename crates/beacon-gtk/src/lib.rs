@@ -40,10 +40,8 @@ pub fn run() {
     let cli = beacon_core::cli::Cli::init();
 
     // Before any thread, the logger or the engine exist: confine this process to what it
-    // writes. Behind the same flag as the component processes, for now.
-    if cli.isolated() {
-        beacon_core::isolation::lock_down_broker();
-    }
+    // writes. In every mode: single-process is where page content runs in this process.
+    beacon_core::isolation::lock_down_broker();
 
     // `build()` rather than `init()`: the logger is handed to beacon-core, which installs
     // it wrapped so every record it accepts is also kept for the developer pane. colog still

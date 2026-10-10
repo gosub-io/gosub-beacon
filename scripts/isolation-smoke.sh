@@ -361,6 +361,7 @@ echo "== plain run"
 run_mode plain --single-process
 check_log plain "$log" \
     "security.process_isolation is off" \
+    "landlock active" \
     '!network stack running in a separate' \
     '!panicked' \
     '!SIGSYS: blocked syscall'
