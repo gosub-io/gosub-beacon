@@ -39,6 +39,13 @@ pub fn run() {
     // result rather than re-scanning argv.
     let cli = beacon_core::cli::Cli::init();
 
+    // The profile next: creating or migrating it writes outside the folders the lockdown
+    // leaves open, and the lockdown needs to know which profile those are.
+    if let Err(e) = beacon_core::paths::init() {
+        eprintln!("gosub-beacon: cannot open the profile: {e:#}");
+        std::process::exit(1);
+    }
+
     // Before any thread, the logger or the engine exist: confine this process to what it
     // writes. In every mode: single-process is where page content runs in this process.
     beacon_core::isolation::lock_down_broker();
@@ -83,8 +90,14 @@ pub fn run() {
 
     gio::resources_register_include!("gosub.gresource").expect("Failed to register resources.");
 
-    let app = Application::new();
+    let app = Application::new(&app_id());
     app.connect_startup(|_| {
+        // Only the primary instance gets here; a second launch has already handed off. So
+        // this is where a profile another process holds is refused, before any window.
+        if let Err(e) = beacon_core::paths::lock_profile() {
+            eprintln!("gosub-beacon: {e:#}");
+            std::process::exit(1);
+        }
         load_css();
         // Chrome follows the desktop light/dark preference; the manual toggle overrides it
         // until the desktop preference next changes.
@@ -95,6 +108,18 @@ pub fn run() {
     let _ = cli;
     let argv0: Vec<String> = std::env::args().take(1).collect();
     app.run_with_args(&argv0);
+}
+
+/// One GTK instance per profile. A second launch hands its URLs to the instance with the
+/// same id, so a shared id would open `--profile work` as a window of whichever profile is
+/// already running. The default profile keeps the plain id the desktop file and Flatpak use.
+fn app_id() -> String {
+    if beacon_core::paths::is_default() {
+        APP_ID.to_string()
+    } else {
+        // D-Bus name elements may not start with a digit, hence the prefix.
+        format!("{APP_ID}.Profile{}", beacon_core::paths::profile().id().simple())
+    }
 }
 
 fn load_css() {

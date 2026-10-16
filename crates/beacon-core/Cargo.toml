@@ -16,6 +16,7 @@ isolated-by-default = []
 gosub_engine.workspace = true
 gosub_render_pipeline.workspace = true
 gosub_shared.workspace = true
+beacon-profile = { path = "../beacon-profile" }
 
 anyhow.workspace = true
 clap.workspace = true

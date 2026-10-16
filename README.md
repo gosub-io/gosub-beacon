@@ -70,6 +70,28 @@ cargo run --bin gosub-beacon-gtk -- https://example.com   # URLs become the star
 cargo run --bin gosub-beacon-egui -- https://example.com  # the other frontend
 ```
 
+## Profiles
+
+Everything Beacon keeps about you (settings, cookies, bookmarks, history, site storage, open
+tabs) lives in one profile folder, which can be copied to another machine as is. Its cache
+lives outside it and is rebuilt when missing.
+
+| | Linux | macOS |
+| --- | --- | --- |
+| Profiles | `~/.local/share/gosub-beacon/profiles/<id>/` | `~/Library/Application Support/gosub-beacon/profiles/<id>/` |
+| Cache | `~/.cache/gosub-beacon/<id>/` | `~/Library/Caches/gosub-beacon/<id>/` |
+
+A Beacon from before profiles kept these files straight in `gosub-beacon/`; the first start
+moves them into a profile named `default`.
+
+```bash
+cargo run --bin gosub-beacon-gtk -- --profile work          # open (or create) the profile "work"
+cargo run --bin gosub-beacon-gtk -- --user-data-dir /tmp/p  # use exactly this folder
+cargo run -p beaconctl -- profile list                      # list, show, create, set-default, path
+```
+
+One Beacon process opens a profile at a time; a second one on the same profile is refused.
+
 ## Building and running on macOS
 
 Skip the Linux commands: a bare `cargo build` (or `make build`) builds the GTK shell, which

@@ -7,8 +7,8 @@
 
 use std::path::{Path, PathBuf};
 
-/// Confine this process's filesystem writes to its profile, the downloads directory and the
-/// temp dir, and drop the escalation syscalls. Call right after `dispatch_with`, before any
+/// Confine this process's filesystem writes to its profile and its cache, the downloads
+/// directory and the temp dir, and drop the escalation syscalls. Call right after `dispatch_with`, before any
 /// thread, the logger or the engine exist; everything the process writes to after this
 /// point must be listed here or created under one of these. Applied in every mode, not just
 /// with the component processes: in single-process mode page content runs here.
@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 /// `/dev/dri` is granted because the GTK frontend composites on GL, and EGL opens the render
 /// node read-write; Landlock counts that as a file write.
 pub fn lock_down_broker() {
-    let mut writable: Vec<PathBuf> = vec![crate::paths::data_dir()];
+    let mut writable: Vec<PathBuf> = vec![crate::paths::profile_dir().into(), crate::paths::cache_dir().into()];
     // Downloads go wherever the save dialog points; anywhere outside these fails under
     // the lockdown.
     if let Some(downloads) = dirs::download_dir() {

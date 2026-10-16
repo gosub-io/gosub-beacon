@@ -1,0 +1,17 @@
+[package]
+name = "beacon-profile"
+description = "Beacon profiles on disk: layout, manifest, lock, migration"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+dirs.workspace = true
+serde.workspace = true
+toml.workspace = true
+uuid = { workspace = true, features = ["serde"] }
+
+[dev-dependencies]
+tempfile.workspace = true

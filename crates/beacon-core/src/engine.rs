@@ -24,9 +24,6 @@ use gosub_render_pipeline::render::DefaultCompositor;
 use tokio::runtime::Runtime;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
-use uuid::uuid;
-
-const DEFAULT_ZONE: uuid::Uuid = uuid!("f1234567-abcd-4000-8000-000000000001");
 
 /// Engine TabId, re-exported for callers that need to key on the engine's identifier.
 pub type EngineTabId = gosub_engine::tab::TabId;
@@ -80,7 +77,10 @@ impl<C: BeaconConfig> BrowserEngine<C> {
 
         let mut engine = GosubEngine::<C>::new(None, backend, compositor.clone());
 
-        let data_dir = crate::paths::data_dir();
+        // One process per profile: a second one would write the same databases.
+        crate::paths::lock_profile()?;
+        let profile = crate::paths::profile();
+        let data_dir = &profile.dir;
         let isolated = crate::cli::Cli::global().isolated();
 
         // Beacon's own settings, merged into the engine's store under the `useragent`
@@ -250,7 +250,7 @@ impl<C: BeaconConfig> BrowserEngine<C> {
         let zone = engine
             .zone_builder()
             .config(zone_cfg)
-            .id(ZoneId::from(DEFAULT_ZONE))
+            .id(ZoneId::from(profile.zone_id()))
             .services(zone_services)
             .create()
             .map_err(|e| anyhow::anyhow!("create_zone: {e:?}"))?;

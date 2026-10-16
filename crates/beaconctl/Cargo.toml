@@ -1,0 +1,12 @@
+[package]
+name = "beaconctl"
+description = "Command-line control of Gosub Beacon: profiles today"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+beacon-profile = { path = "../beacon-profile" }
+clap.workspace = true

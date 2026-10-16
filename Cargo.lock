@@ -705,6 +705,7 @@ name = "beacon-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "beacon-profile",
  "clap",
  "dirs",
  "gosub_engine",
@@ -796,6 +797,27 @@ name = "beacon-icon"
 version = "0.1.0"
 dependencies = [
  "resvg",
+]
+
+[[package]]
+name = "beacon-profile"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dirs",
+ "serde",
+ "tempfile",
+ "toml",
+ "uuid",
+]
+
+[[package]]
+name = "beaconctl"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "beacon-profile",
+ "clap",
 ]
 
 [[package]]

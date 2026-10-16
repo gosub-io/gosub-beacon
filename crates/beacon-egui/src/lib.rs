@@ -34,6 +34,10 @@ pub fn run() {
     // Then argv (the lockdown needs `--user-data-dir`) and the lockdown, in every mode,
     // before any thread, the logger or the engine exist.
     beacon_core::cli::Cli::init();
+    if let Err(e) = beacon_core::paths::init() {
+        eprintln!("gosub-beacon: cannot open the profile: {e:#}");
+        std::process::exit(1);
+    }
     beacon_core::isolation::lock_down_broker();
 
     // RUST_LOG wins when it is set, so a diagnostic run needs no rebuild:

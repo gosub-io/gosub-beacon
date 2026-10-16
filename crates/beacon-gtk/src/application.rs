@@ -1,7 +1,6 @@
 use crate::dialog::about::About;
 use crate::dialog::shortcuts::ShortcutsDialog;
 use crate::window::BrowserWindow;
-use crate::APP_ID;
 use gtk4::glib::clone;
 use gtk4::subclass::prelude::GtkApplicationImpl;
 use gtk4::{gio, glib, prelude::*, subclass::prelude::*, Settings};
@@ -61,9 +60,9 @@ glib::wrapper! {
 }
 
 impl Application {
-    pub fn new() -> Self {
+    pub fn new(app_id: &str) -> Self {
         glib::Object::builder()
-            .property("application-id", APP_ID)
+            .property("application-id", app_id)
             .property("resource-base-path", Some("/io/gosub/beacon"))
             .build()
     }

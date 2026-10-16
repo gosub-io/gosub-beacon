@@ -815,7 +815,7 @@ fn color_row(entry: &Named) -> ListBoxRow {
 // ── quick-swatch storage ────────────────────────────────────────────────────
 
 fn swatches_path() -> std::path::PathBuf {
-    beacon_core::paths::data_dir().join("picker-swatches.txt")
+    beacon_core::paths::profile_dir().join("picker-swatches.txt")
 }
 
 /// The quick swatches, one hex per line beside the rest of the profile. Small enough that a

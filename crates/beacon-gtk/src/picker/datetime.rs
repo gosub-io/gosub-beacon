@@ -177,7 +177,7 @@ pub fn uses_12_hour() -> bool {
 
 #[allow(dead_code)] // the time pickers, next pass
 fn clock_format_path() -> std::path::PathBuf {
-    beacon_core::paths::data_dir().join("picker-clock.txt")
+    beacon_core::paths::profile_dir().join("picker-clock.txt")
 }
 
 #[allow(dead_code)] // the time pickers, next pass
