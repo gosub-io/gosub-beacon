@@ -576,16 +576,30 @@ impl Profile {
         if passphrase == Some("") {
             bail!("an empty passphrase protects nothing");
         }
-        let crypto = self.crypto()?.clone();
-        let Some(old) = keys.get(self.id(), Slot::Current)? else {
-            return Err(self.locked(&crypto, false));
+        // A manifest with `[crypto]` must be one this build understands. One without is
+        // only acceptable while a rotation waits to be finished: rolled back to before the
+        // profile was encrypted, it gets its `[crypto]` back below, from the new key.
+        let crypto = match &self.manifest.crypto {
+            Some(_) => Some(self.crypto()?.clone()),
+            None => None,
         };
-        let new = match keys.get(self.id(), Slot::Next)? {
-            // Picking up where an earlier call stopped.
+        let next = keys.get(self.id(), Slot::Next)?;
+        let Some(old) = keys.get(self.id(), Slot::Current)? else {
+            return Err(match &crypto {
+                Some(crypto) => self.locked(crypto, false),
+                None => anyhow!("profile {:?} has no key in this machine's keychain", self.name()),
+            });
+        };
+        let new = match next {
+            // Picking up where an earlier call stopped: the two keys are in the keychain,
+            // whatever the manifest says.
             Some(new) => new,
             None => {
+                let Some(crypto) = &crypto else {
+                    bail!("profile {:?} is not encrypted", self.name());
+                };
                 if old.check() != crypto.check {
-                    return Err(self.locked(&crypto, true));
+                    return Err(self.locked(crypto, true));
                 }
                 let new = ProfileKey::generate(self.id());
                 keys.set(&new, Slot::Next)?;
@@ -611,6 +625,7 @@ impl Profile {
             check: new.check(),
             passphrase: passphrase.map(|p| new.wrap(p, params)).transpose()?,
         });
+        self.manifest.schema = self.manifest.schema.max(SCHEMA_CRYPTO);
         self.manifest.write(&self.dir)?;
         if !file_key(keys, self.id(), &new)? {
             bail!("the keychain did not keep the key for profile {:?}", self.name());
@@ -1267,6 +1282,22 @@ mod tests {
         let err = again.unlock(Some(&keys)).unwrap_err();
         assert!(err.downcast_ref::<Rotating>().is_some(), "{err}");
         assert!(Manifest::read(&p.dir).unwrap().unwrap().crypto.is_none());
+
+        // The retry still gets through: both keys are in the keychain, and the manifest
+        // gets its `[crypto]` back from the new one.
+        let next = keys.get(p.id(), Slot::Next).unwrap().unwrap();
+        let done = again.rotate_key(&keys, Some("pw3"), crypto::TEST_KDF, &mut fake_rekey).unwrap();
+        assert_eq!(done.check(), next.check());
+        assert!(fake_stores_open_with(&p, &done));
+        let written = Manifest::read(&p.dir).unwrap().unwrap();
+        assert_eq!(
+            (written.schema, written.crypto.as_ref().map(|c| c.check.clone())),
+            (SCHEMA_CRYPTO, Some(done.check()))
+        );
+        assert!(keys.get(p.id(), Slot::Next).unwrap().is_none());
+        let mut opened = roots.open(&Selection::Default, V).unwrap();
+        assert_eq!(opened.unlock(Some(&keys)).unwrap().check(), done.check());
+        assert_eq!(opened.key_from_passphrase("pw3").unwrap().check(), done.check());
     }
 
     #[test]
