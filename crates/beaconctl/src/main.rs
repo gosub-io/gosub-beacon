@@ -53,8 +53,12 @@ enum ProfileCommand {
     /// Remove the passphrase: the profile then opens only where the keychain holds its key.
     RemovePassphrase { profile: Option<String> },
     /// Remove this machine's copy of the profile key, as before handing the machine on.
-    /// Only with a passphrase set: the passphrase is then the one way back in.
-    Forget { profile: Option<String> },
+    /// Only with a passphrase set, and asked for first: it is then the one way back in.
+    Forget {
+        profile: Option<String>,
+        #[command(flatten)]
+        input: PassphraseInput,
+    },
     /// Open a profile copied from another machine: the passphrase unwraps its key, and this
     /// machine's keychain keeps it from then on.
     Unlock {
@@ -161,7 +165,7 @@ fn profile(command: ProfileCommand) -> Result<()> {
                 p.name()
             );
         }
-        ProfileCommand::Forget { profile } => {
+        ProfileCommand::Forget { profile, input } => {
             let p = existing(&roots, profile)?;
             let _lock = p.lock()?;
             if !p.manifest.crypto.as_ref().is_some_and(|c| c.passphrase.is_some()) {
@@ -170,7 +174,11 @@ fn profile(command: ProfileCommand) -> Result<()> {
                     p.name()
                 );
             }
-            keychain()?.delete(p.id())?;
+            let keychain = keychain()?;
+            // That a passphrase is set proves nothing; that it still unwraps the key does.
+            p.key_from_passphrase(&input.read(false)?)
+                .context("the passphrase must open the profile before its key here is dropped")?;
+            keychain.delete(p.id())?;
             println!("forgot the key for {}; `beaconctl profile unlock` brings it back", p.name());
         }
         ProfileCommand::Unlock { profile, input } => {

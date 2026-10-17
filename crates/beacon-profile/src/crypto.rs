@@ -72,6 +72,17 @@ pub struct KdfParams {
     pub parallelism: u32,
 }
 
+impl KdfParams {
+    /// The most a wrapped key may ask for. The cost comes from the manifest, which travels
+    /// with a copied profile; without a ceiling a crafted one makes `unlock` claim all the
+    /// memory there is, or spin for hours. Sixteen times the default memory is plenty.
+    pub const MAX: Self = Self {
+        memory_kib: 1024 * 1024,
+        iterations: 64,
+        parallelism: 16,
+    };
+}
+
 impl Default for KdfParams {
     /// 64 MiB, three passes: well under a second on a laptop, and the cost an attacker pays
     /// per guess against a copied profile.
@@ -236,6 +247,18 @@ fn aad(profile: Uuid) -> Vec<u8> {
 }
 
 fn kek(passphrase: &str, salt: &[u8], params: KdfParams) -> Result<Zeroizing<[u8; 32]>> {
+    let max = KdfParams::MAX;
+    if params.memory_kib > max.memory_kib || params.iterations > max.iterations || params.parallelism > max.parallelism {
+        bail!(
+            "argon2 cost {} KiB x {} passes x {} lanes is beyond what Beacon accepts ({} KiB x {} x {})",
+            params.memory_kib,
+            params.iterations,
+            params.parallelism,
+            max.memory_kib,
+            max.iterations,
+            max.parallelism
+        );
+    }
     let params = argon2::Params::new(params.memory_kib, params.iterations, params.parallelism, Some(32))
         .map_err(|e| anyhow!("argon2 parameters: {e}"))?;
     let argon = argon2::Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params);
@@ -356,8 +379,9 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 fn unhex(s: &str) -> Result<Vec<u8>> {
-    if !s.len().is_multiple_of(2) {
-        bail!("odd-length hex");
+    // Byte offsets below: anything but ASCII could split a character and panic.
+    if !s.is_ascii() || !s.len().is_multiple_of(2) {
+        bail!("not even-length ASCII hex");
     }
     (0..s.len())
         .step_by(2)
@@ -402,9 +426,19 @@ mod tests {
     }
 
     #[test]
+    fn a_wrapped_key_asking_too_much_is_refused_before_hashing() {
+        let id = Uuid::new_v4();
+        let mut wrapped = ProfileKey::generate(id).wrap("pw", TEST_KDF).unwrap();
+        wrapped.memory_kib = u32::MAX;
+        let err = ProfileKey::unwrap(id, &wrapped, "pw").unwrap_err();
+        assert!(err.to_string().contains("beyond what Beacon accepts"), "{err}");
+    }
+
+    #[test]
     fn hex_round_trips() {
         assert_eq!(unhex(&hex(&[0, 1, 0xab, 0xff])).unwrap(), vec![0, 1, 0xab, 0xff]);
         assert!(unhex("abc").is_err());
         assert!(unhex("zz").is_err());
+        assert!(unhex("aéa").is_err());
     }
 }

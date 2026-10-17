@@ -98,18 +98,18 @@ Where the system has a keychain (Secret Service on Linux, Keychain on macOS, Cre
 Manager on Windows), a profile's databases are encrypted with a key kept there; the first
 start encrypts the ones already on disk. Without a keychain the profile stays unencrypted.
 
-That key never leaves the machine, so a copied profile opens elsewhere only once it has a
-passphrase:
+That key never leaves the machine, so an encrypted profile copied elsewhere opens there
+only once it has a passphrase:
 
 ```bash
 cargo run -p beaconctl -- profile passphrase              # set or change it (the default profile)
 cargo run -p beaconctl -- profile unlock work             # on the new machine: passphrase -> keychain
-cargo run -p beaconctl -- profile forget work             # drop this machine's key (needs a passphrase)
+cargo run -p beaconctl -- profile forget work             # drop this machine's key (asks for the passphrase)
 cargo run -p beaconctl -- profile remove-passphrase work  # back to this machine only
 ```
 
-The session file and the picker history are not encrypted, nor is the isolated build's
-localStorage (`--isolated` keeps it in file areas, not SQLite).
+The session file and the picker history are not encrypted, nor, on Linux, is the isolated
+build's localStorage (`--isolated` keeps it in file areas there, not SQLite).
 
 ## Building and running on macOS
 

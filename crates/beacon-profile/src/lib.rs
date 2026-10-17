@@ -439,12 +439,9 @@ impl Profile {
         }
         let Some(keys) = keys else { return Ok(None) };
         let key = ProfileKey::generate(self.id());
-        // Read back before trusting it: a keychain that accepts a key and loses it would
-        // leave databases nothing can open.
-        let stored = keys.set(&key).and_then(|()| keys.get(self.id()));
-        match stored {
-            Ok(Some(back)) if back.check() == key.check() => {}
-            Ok(_) => {
+        match file_key(keys, self.id(), &key) {
+            Ok(true) => {}
+            Ok(false) => {
                 log::warn!(
                     "the keychain did not keep the key for profile {:?}; it stays unencrypted",
                     self.name()
@@ -472,11 +469,13 @@ impl Profile {
         match found {
             Some(key) if key.check() == crypto.check => Ok(key),
             Some(_) => Err(anyhow!(Locked {
+                id: self.id(),
                 name: self.name().to_string(),
                 passphrase: crypto.passphrase.is_some(),
                 stale: true,
             })),
             None => Err(anyhow!(Locked {
+                id: self.id(),
                 name: self.name().to_string(),
                 passphrase: crypto.passphrase.is_some(),
                 stale: false,
@@ -487,6 +486,16 @@ impl Profile {
     /// Unwrap the profile key with `passphrase` and file it in `keys`, so later runs open
     /// the profile without asking. Call with the profile locked.
     pub fn unlock_with_passphrase(&self, keys: &dyn KeyStore, passphrase: &str) -> Result<ProfileKey> {
+        let key = self.key_from_passphrase(passphrase)?;
+        if !file_key(keys, self.id(), &key)? {
+            bail!("the keychain did not keep the key for profile {:?}", self.name());
+        }
+        Ok(key)
+    }
+
+    /// The profile key, unwrapped with `passphrase`: also the proof that the passphrase
+    /// still opens the profile, before this machine's key is given up.
+    pub fn key_from_passphrase(&self, passphrase: &str) -> Result<ProfileKey> {
         let crypto = self.crypto()?;
         let Some(wrapped) = &crypto.passphrase else {
             bail!("profile {:?} has no passphrase to unlock it with", self.name());
@@ -495,7 +504,6 @@ impl Profile {
         if key.check() != crypto.check {
             bail!("profile {:?}: the passphrase opens a key that is not this profile's", self.name());
         }
-        keys.set(&key)?;
         Ok(key)
     }
 
@@ -544,6 +552,7 @@ impl Profile {
 /// one of). Find it with `err.downcast_ref::<Locked>()`.
 #[derive(Debug)]
 pub struct Locked {
+    pub id: Uuid,
     pub name: String,
     /// The profile carries a passphrase-wrapped key, so the passphrase can unlock it.
     pub passphrase: bool,
@@ -559,10 +568,13 @@ impl std::fmt::Display for Locked {
             "its key is not in this machine's keychain"
         };
         if self.passphrase {
+            // The name when it can be pasted into a shell as it is, the id otherwise.
+            let plain = !self.name.starts_with('-') && self.name.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c));
+            let arg = if plain { self.name.clone() } else { self.id.to_string() };
             write!(
                 f,
-                "profile {:?} is encrypted and {held}; unlock it with `beaconctl profile unlock {}`",
-                self.name, self.name
+                "profile {:?} is encrypted and {held}; unlock it with `beaconctl profile unlock {arg}`",
+                self.name
             )
         } else {
             write!(
@@ -575,6 +587,13 @@ impl std::fmt::Display for Locked {
 }
 
 impl std::error::Error for Locked {}
+
+/// File `key` in `keys` and read it back: a keychain that accepts a key and loses it would
+/// leave databases nothing can open. `Ok(false)` when it did not keep it.
+fn file_key(keys: &dyn KeyStore, profile: Uuid, key: &ProfileKey) -> Result<bool> {
+    keys.set(key)?;
+    Ok(keys.get(profile)?.is_some_and(|back| back.check() == key.check()))
+}
 
 /// Held for as long as a process uses a profile.
 #[derive(Debug)]
@@ -787,6 +806,44 @@ mod tests {
         assert!(copy.unlock_with_passphrase(&there, "wrong").is_err());
         copy.unlock_with_passphrase(&there, "hunter2").unwrap();
         assert_eq!(copy.unlock(Some(&there)).unwrap().unwrap().check(), key.check());
+    }
+
+    #[test]
+    fn a_passphrase_unlock_into_a_keychain_that_loses_the_key_fails() {
+        struct Forgetful;
+        impl KeyStore for Forgetful {
+            fn get(&self, _profile: Uuid) -> Result<Option<ProfileKey>> {
+                Ok(None)
+            }
+            fn set(&self, _key: &ProfileKey) -> Result<()> {
+                Ok(())
+            }
+            fn delete(&self, _profile: Uuid) -> Result<()> {
+                Ok(())
+            }
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let roots = roots(&tmp);
+        let mut p = roots.open(&Selection::Default, V).unwrap();
+        let key = p.unlock(Some(&crypto::MemoryKeyStore::default())).unwrap().unwrap();
+        p.set_passphrase(&key, "pw", crypto::TEST_KDF).unwrap();
+        assert_eq!(p.key_from_passphrase("pw").unwrap().check(), key.check());
+        assert!(p.key_from_passphrase("wrong").is_err());
+        let err = p.unlock_with_passphrase(&Forgetful, "pw").unwrap_err();
+        assert!(err.to_string().contains("did not keep"), "{err}");
+    }
+
+    #[test]
+    fn the_unlock_hint_uses_the_id_for_a_name_a_shell_would_split() {
+        let id = Uuid::new_v4();
+        let locked = |name: &str| Locked {
+            id,
+            name: name.to_string(),
+            passphrase: true,
+            stale: false,
+        };
+        assert!(locked("work").to_string().ends_with("`beaconctl profile unlock work`"));
+        assert!(locked("my work").to_string().ends_with(&format!("`beaconctl profile unlock {id}`")));
     }
 
     #[test]

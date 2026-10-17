@@ -13,6 +13,7 @@ use std::sync::OnceLock;
 static PROFILE: OnceLock<Profile> = OnceLock::new();
 static LOCK: OnceLock<ProfileLock> = OnceLock::new();
 static KEY: OnceLock<Option<ProfileKey>> = OnceLock::new();
+static ENCRYPTED: OnceLock<()> = OnceLock::new();
 
 /// Resolve the profile from `--user-data-dir` / `--profile`, creating or migrating it as
 /// needed. Call early in `main`, after the command line and before the lockdown, which
@@ -95,20 +96,29 @@ pub fn store_key(store: Store) -> anyhow::Result<Option<SqliteKey>> {
 }
 
 fn profile_key() -> anyhow::Result<Option<&'static ProfileKey>> {
-    if let Some(key) = KEY.get() {
-        return Ok(key.as_ref());
+    let key = match KEY.get() {
+        Some(key) => key.as_ref(),
+        None => {
+            anyhow::ensure!(LOCK.get().is_some(), "the profile key is only read with the profile locked");
+            // A copy: unlocking may write `[crypto]` into the manifest, and nothing else this
+            // process reads depends on it.
+            let mut profile = profile().clone();
+            let keychain = OsKeychain::new();
+            let key = profile.unlock(keychain.as_ref().map(|k| k as &dyn beacon_profile::crypto::KeyStore))?;
+            // Kept before encrypting: the copy above is gone after this call, and a retry
+            // unlocking the stale one would make a second key, stranding whatever the first
+            // already encrypted.
+            KEY.get_or_init(|| key).as_ref()
+        }
+    };
+    if let Some(key) = key {
+        if ENCRYPTED.get().is_none() {
+            encrypt_plaintext(profile(), key)?;
+            let _ = ENCRYPTED.set(());
+            log::info!("profile {:?}: databases encrypted, key in the keychain", profile().name());
+        }
     }
-    anyhow::ensure!(LOCK.get().is_some(), "the profile key is only read with the profile locked");
-    // A copy: unlocking may write `[crypto]` into the manifest, and nothing else this
-    // process reads depends on it.
-    let mut profile = profile().clone();
-    let keychain = OsKeychain::new();
-    let key = profile.unlock(keychain.as_ref().map(|k| k as &dyn beacon_profile::crypto::KeyStore))?;
-    if let Some(key) = &key {
-        encrypt_plaintext(&profile, key)?;
-        log::info!("profile {:?}: databases encrypted, key in the keychain", profile.name());
-    }
-    Ok(KEY.get_or_init(|| key).as_ref())
+    Ok(key)
 }
 
 /// Encrypt every store still in plaintext: the databases of a profile that just got its
