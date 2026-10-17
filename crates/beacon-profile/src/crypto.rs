@@ -155,6 +155,23 @@ impl ProfileKey {
         })
     }
 
+    /// The key as the keychain files it: hex, so every backend sees text. The Secret
+    /// Service stores a secret as a string on some desktops (KWallet), and raw bytes that
+    /// are not UTF-8 may not come back as they went in.
+    fn filed(&self) -> Zeroizing<String> {
+        Zeroizing::new(hex(self.bytes.as_slice()))
+    }
+
+    /// A key read back from the keychain: the hex [`filed`](Self::filed) writes, or the 32
+    /// raw bytes a build before it filed.
+    fn from_filed(profile: Uuid, secret: &[u8]) -> Result<Self> {
+        if secret.len() == 64 {
+            let text = std::str::from_utf8(secret).map_err(|_| anyhow!("the filed profile key is not hex"))?;
+            return Self::from_bytes(profile, &Zeroizing::new(unhex(text)?));
+        }
+        Self::from_bytes(profile, secret)
+    }
+
     /// The key for one store's database. Salted with the profile id, so the same key in two
     /// profiles (a copied folder given a new id) still gives different store keys.
     pub fn store_key(&self, store: Store) -> Zeroizing<[u8; 32]> {
@@ -299,10 +316,18 @@ impl OsKeychain {
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 impl KeyStore for OsKeychain {
     fn get(&self, profile: Uuid) -> Result<Option<ProfileKey>> {
-        match Self::entry(profile)?.get_secret() {
-            Ok(secret) => {
-                let secret = Zeroizing::new(secret);
-                Ok(Some(ProfileKey::from_bytes(profile, &secret)?))
+        let entry = Self::entry(profile)?;
+        // Read as text, the way `set` writes it: on Windows a password is filed as UTF-16,
+        // and the raw blob would not be the hex that went in.
+        match entry.get_password() {
+            Ok(text) => {
+                let text = Zeroizing::new(text);
+                Ok(Some(ProfileKey::from_filed(profile, text.as_bytes())?))
+            }
+            // Not text: the 32 raw bytes a build before this one filed.
+            Err(keyring::Error::BadEncoding(raw)) => {
+                let raw = Zeroizing::new(raw);
+                Ok(Some(ProfileKey::from_filed(profile, &raw)?))
             }
             Err(keyring::Error::NoEntry) => Ok(None),
             Err(e) => Err(e).context("reading the profile key from the keychain"),
@@ -311,7 +336,7 @@ impl KeyStore for OsKeychain {
 
     fn set(&self, key: &ProfileKey) -> Result<()> {
         Self::entry(key.profile)?
-            .set_secret(key.bytes.as_slice())
+            .set_password(&key.filed())
             .context("storing the profile key in the keychain")
     }
 
@@ -374,8 +399,14 @@ impl KeyStore for MemoryKeyStore {
     }
 }
 
+/// Hex, built in place: no per-byte temporaries, since the input may be the key itself.
 fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        s.push(char::from_digit(u32::from(b >> 4), 16).unwrap_or('0'));
+        s.push(char::from_digit(u32::from(b & 0xf), 16).unwrap_or('0'));
+    }
+    s
 }
 
 fn unhex(s: &str) -> Result<Vec<u8>> {
@@ -432,6 +463,19 @@ mod tests {
         wrapped.memory_kib = u32::MAX;
         let err = ProfileKey::unwrap(id, &wrapped, "pw").unwrap_err();
         assert!(err.to_string().contains("beyond what Beacon accepts"), "{err}");
+    }
+
+    #[test]
+    fn a_filed_key_reads_back_from_hex_or_raw_bytes() {
+        let id = Uuid::new_v4();
+        let key = ProfileKey::generate(id);
+        let filed = key.filed();
+        assert_eq!(filed.len(), 64);
+        assert!(filed.is_ascii());
+        assert_eq!(*ProfileKey::from_filed(id, filed.as_bytes()).unwrap().bytes, *key.bytes);
+        assert_eq!(*ProfileKey::from_filed(id, key.bytes.as_slice()).unwrap().bytes, *key.bytes);
+        assert!(ProfileKey::from_filed(id, &[b'z'; 64]).is_err());
+        assert!(ProfileKey::from_filed(id, &[1; 31]).is_err());
     }
 
     #[test]

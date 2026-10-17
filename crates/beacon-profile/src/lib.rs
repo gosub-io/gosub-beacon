@@ -24,7 +24,7 @@
 pub mod crypto;
 
 use anyhow::{anyhow, bail, Context, Result};
-use crypto::{Crypto, KdfParams, KeyStore, ProfileKey, CRYPTO_VERSION};
+use crypto::{Crypto, KdfParams, KeyStore, ProfileKey, Store, CRYPTO_VERSION};
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
@@ -439,9 +439,16 @@ impl Profile {
 impl Profile {
     /// The key this profile's databases are encrypted with. Call with the profile locked.
     ///
-    /// A profile without `[crypto]` gets a new key here, and the caller encrypts the
-    /// plaintext databases already in it. Every profile is encrypted: with no keychain, or
-    /// one that does not keep the key, this is an error and the profile does not open.
+    /// A profile without `[crypto]` gets a key here, and the caller encrypts the plaintext
+    /// databases already in it. Every profile is encrypted: with no keychain, or one that
+    /// does not keep the key, this is an error and the profile does not open.
+    ///
+    /// The key is a new one only when the keychain holds none for this profile. One it
+    /// does hold is adopted as it is: the manifest lost its `[crypto]` (restored from a
+    /// backup, a sync conflict, a crash between filing the key and writing the manifest),
+    /// and a fresh key filed over it would leave the databases it encrypted unopenable
+    /// for good. Databases that are already encrypted with no key anywhere are refused for
+    /// the same reason, rather than written off as something to encrypt around.
     ///
     /// An encrypted profile needs its key from `keys`. When the keychain does not hold it
     /// (a profile copied from another machine), the error is a [`Locked`]: unlock it with
@@ -456,12 +463,23 @@ impl Profile {
                 self.name()
             );
         };
-        let key = ProfileKey::generate(self.id());
-        let kept = file_key(keys, self.id(), &key)
-            .with_context(|| format!("profile {:?} cannot be encrypted: no keychain to keep its key", self.name()))?;
-        if !kept {
-            bail!("profile {:?} cannot be encrypted: the keychain did not keep its key", self.name());
-        }
+        let key = match keys.get(self.id())? {
+            Some(key) => key,
+            None if self.has_encrypted_store() => bail!(
+                "profile {:?} has encrypted databases, but its manifest does not say so and this machine's keychain has no key for it; \
+                 restore {MANIFEST} from the machine that encrypted it",
+                self.name()
+            ),
+            None => {
+                let key = ProfileKey::generate(self.id());
+                let kept = file_key(keys, self.id(), &key)
+                    .with_context(|| format!("profile {:?} cannot be encrypted: no keychain to keep its key", self.name()))?;
+                if !kept {
+                    bail!("profile {:?} cannot be encrypted: the keychain did not keep its key", self.name());
+                }
+                key
+            }
+        };
         self.manifest.crypto = Some(key.manifest_entry());
         self.manifest.schema = self.manifest.schema.max(SCHEMA_CRYPTO);
         self.manifest.write(&self.dir)?;
@@ -542,6 +560,15 @@ impl Profile {
         self.manifest.write(&self.dir)
     }
 
+    /// Whether any store in the folder is a database that is not plaintext SQLite. Judged by
+    /// the file header alone, as the engine judges what to encrypt: this crate does not
+    /// open databases.
+    fn has_encrypted_store(&self) -> bool {
+        Store::ALL
+            .iter()
+            .any(|store| is_encrypted_database(&self.dir.join(store.file_name())))
+    }
+
     fn crypto(&self) -> Result<&Crypto> {
         let Some(crypto) = &self.manifest.crypto else {
             bail!("profile {:?} is not encrypted", self.name());
@@ -612,6 +639,18 @@ pub struct ProfileLock {
 
 fn holds_legacy_files(dir: &Path) -> bool {
     LEGACY_FILES.iter().any(|name| dir.join(name).exists())
+}
+
+/// Whether `path` holds a database that is not plaintext SQLite: a full header that is not
+/// SQLite's. A missing, empty or short file is nothing at all, and an unreadable one is
+/// left for whatever opens it to report.
+fn is_encrypted_database(path: &Path) -> bool {
+    use std::io::Read;
+    let mut header = [0u8; 16];
+    match File::open(path).and_then(|mut f| f.read_exact(&mut header)) {
+        Ok(()) => &header != b"SQLite format 3\0",
+        Err(_) => false,
+    }
 }
 
 /// Create `dir` and make it readable by the owner only: a profile keeps its session file
@@ -781,6 +820,62 @@ mod tests {
         let mut again = roots.open(&Selection::Default, V).unwrap();
         let same = again.unlock(Some(&keys)).unwrap();
         assert_eq!(same.check(), key.check());
+    }
+
+    /// `profile.toml` as it was before the profile got its key: what a backup or a sync
+    /// conflict puts back.
+    fn roll_back_manifest(p: &Profile) {
+        let mut old = p.manifest.clone();
+        old.crypto = None;
+        old.schema = SCHEMA_PLAIN;
+        old.write(&p.dir).unwrap();
+    }
+
+    #[test]
+    fn a_manifest_that_lost_its_crypto_takes_the_keychain_key_back() {
+        let tmp = tempfile::tempdir().unwrap();
+        let roots = roots(&tmp);
+        let keys = crypto::MemoryKeyStore::default();
+        let mut p = roots.open(&Selection::Default, V).unwrap();
+        let key = p.unlock(Some(&keys)).unwrap();
+        // The databases are encrypted with that key by now.
+        fs::write(p.dir.join(Store::Cookies.file_name()), b"not SQLite at all, sixteen bytes and more").unwrap();
+        roll_back_manifest(&p);
+
+        let mut again = roots.open(&Selection::Default, V).unwrap();
+        assert!(again.manifest.crypto.is_none());
+        let same = again.unlock(Some(&keys)).unwrap();
+        assert_eq!(same.check(), key.check());
+        let written = Manifest::read(&p.dir).unwrap().unwrap();
+        assert_eq!(written.crypto.map(|c| c.check), Some(key.check()));
+        assert_eq!(written.schema, SCHEMA_CRYPTO);
+        // The keychain still holds the one key that opens the databases.
+        assert_eq!(keys.get(p.id()).unwrap().unwrap().check(), key.check());
+    }
+
+    #[test]
+    fn encrypted_databases_without_a_key_anywhere_are_not_rekeyed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let roots = roots(&tmp);
+        let mut p = roots.open(&Selection::Default, V).unwrap();
+        p.unlock(Some(&crypto::MemoryKeyStore::default())).unwrap();
+        fs::write(p.dir.join(Store::Places.file_name()), b"not SQLite at all, sixteen bytes and more").unwrap();
+        roll_back_manifest(&p);
+
+        // Another machine: its keychain knows nothing of this profile.
+        let there = crypto::MemoryKeyStore::default();
+        let mut copy = roots.open(&Selection::Default, V).unwrap();
+        let err = copy.unlock(Some(&there)).unwrap_err();
+        assert!(err.to_string().contains("encrypted databases"), "{err}");
+        assert!(Manifest::read(&p.dir).unwrap().unwrap().crypto.is_none());
+        assert!(there.get(p.id()).unwrap().is_none());
+
+        // Plaintext databases, or none, are what a new key is for.
+        fs::write(p.dir.join(Store::Places.file_name()), b"SQLite format 3\0 and a page of plaintext").unwrap();
+        fs::write(p.dir.join(Store::Cookies.file_name()), b"").unwrap();
+        let mut copy = roots.open(&Selection::Default, V).unwrap();
+        copy.unlock(Some(&there)).unwrap();
+        assert!(there.get(p.id()).unwrap().is_some());
     }
 
     #[test]

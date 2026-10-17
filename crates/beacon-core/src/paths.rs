@@ -115,8 +115,8 @@ fn profile_key() -> anyhow::Result<&'static ProfileKey> {
             let keychain = OsKeychain::new();
             let key = profile.unlock(keychain.as_ref().map(|k| k as &dyn beacon_profile::crypto::KeyStore))?;
             // Kept before encrypting: the copy above is gone after this call, and a retry
-            // unlocking the stale one would make a second key, stranding whatever the first
-            // already encrypted.
+            // would unlock the stale copy over again. (The keychain now hands back the key
+            // it holds rather than taking a second one, so nothing is stranded either way.)
             KEY.get_or_init(|| key)
         }
     };
