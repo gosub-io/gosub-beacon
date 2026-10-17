@@ -28,6 +28,10 @@ set -u
 BIN=${1:-target/debug/gosub-beacon-gtk}
 FIXTURE_DIR=$(cd "$(dirname "$0")/.." && pwd)/tests/fixtures/isolation
 OUT=${SMOKE_OUT:-$(mktemp -d /tmp/beacon-smoke.XXXXXX)}
+# Absolute, whatever was passed in: it becomes XDG_DATA_HOME below, and a relative one is
+# ignored by the XDG rules, which would send the keyring daemon to the user's own keyring.
+mkdir -p "$OUT"
+OUT=$(cd "$OUT" && pwd)
 MAX_DIFF=${SMOKE_MAX_DIFF:-0.02}
 EXPECTED_TITLE="Isolation smoke"
 SECOND_TITLE="Isolation smoke, page two"

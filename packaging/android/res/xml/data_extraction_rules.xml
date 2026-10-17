@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Nothing of Beacon's leaves the phone, by cloud backup or by device-to-device transfer.
+     allowBackup=false in the manifest already says so; on Android 12 and later this is the
+     form the system reads first, and some vendors' migration tools read only this one. The
+     profile key is a file in the app's private storage (Android has no keychain Beacon can
+     use), so a transfer that carried the data would carry the key that opens it. -->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="root" />
+        <exclude domain="file" />
+        <exclude domain="database" />
+        <exclude domain="sharedpref" />
+        <exclude domain="external" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="root" />
+        <exclude domain="file" />
+        <exclude domain="database" />
+        <exclude domain="sharedpref" />
+        <exclude domain="external" />
+    </device-transfer>
+</data-extraction-rules>

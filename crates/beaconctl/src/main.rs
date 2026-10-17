@@ -136,7 +136,9 @@ fn profile(command: ProfileCommand) -> Result<()> {
             println!("last opened by  {}", p.manifest.last_opened_by);
             println!("in use          {}", if p.in_use() { "yes" } else { "no" });
             match &p.manifest.crypto {
-                None => println!("encrypted       not yet (Beacon encrypts it on its next start)"),
+                // Plaintext databases get encrypted on the next start; encrypted ones with
+                // no manifest entry and no key here are refused, so promise neither.
+                None => println!("encrypted       nothing in the manifest yet"),
                 Some(crypto) => {
                     let here = OsKeychain::new().map(|k| p.key_from(Some(&k)).is_ok()).unwrap_or(false);
                     println!("encrypted       yes");
@@ -227,11 +229,14 @@ fn profile(command: ProfileCommand) -> Result<()> {
             let key = p.key_from(Some(&keychain()?))?;
             let places = SqlitePlaces::open(path, Some(SqliteKey::from_bytes(*key.store_key(Store::Places))))
                 .map_err(|e| anyhow!("opening the history of {}: {e:?}", p.name()))?;
-            // `query_visited` ranks by visit count; this wants the most recent.
-            let mut pages = places.query_visited("", 100_000);
+            // `query_visited` ranks by visit count and cuts there; this wants the most
+            // recent, so it takes every row (the limit is bound as an i64) and sorts itself.
+            let mut pages = places.query_visited("", i64::MAX as usize);
             pages.sort_by_key(|page| std::cmp::Reverse(page.last_visit));
             for page in pages.into_iter().take(limit) {
-                println!("{}\t{}", page.title, page.url);
+                // Titles come from pages: one record per line, and nothing that a terminal
+                // would act on.
+                println!("{}\t{}", printable(&page.title), printable(&page.url));
             }
         }
         ProfileCommand::Unlock { profile, input } => {
@@ -248,6 +253,12 @@ fn profile(command: ProfileCommand) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// `text` with every control character (newlines, tabs, escape sequences) replaced by a
+/// space, so one record stays one line and a page title cannot drive the terminal.
+fn printable(text: &str) -> String {
+    text.chars().map(|c| if c.is_control() { ' ' } else { c }).collect()
 }
 
 fn keychain() -> Result<impl KeyStore> {
@@ -275,8 +286,12 @@ fn rekey_store(path: &Path, old: &Zeroizing<[u8; 32]>, new: &Zeroizing<[u8; 32]>
         .apply(&conn)
         .map_err(|e| anyhow!("{} opens with neither the profile's key nor the new one: {e}", path.display()))?;
     // Frames a crashed Beacon left in the WAL go into the file first, so the rekey
-    // rewrites everything there is and nothing on the old key is left beside it.
-    conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
+    // rewrites everything there is and nothing on the old key is left beside it. The first
+    // column says whether a reader kept the checkpoint from finishing.
+    let busy: i64 = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| row.get(0))?;
+    if busy != 0 {
+        bail!("{} is being read by another process; close it and try again", path.display());
+    }
     let mut sql = Zeroizing::new(String::from("PRAGMA rekey = \"x'"));
     for b in new.iter() {
         sql.push(char::from_digit(u32::from(b >> 4), 16).unwrap_or('0'));

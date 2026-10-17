@@ -28,7 +28,7 @@ use security_framework_sys::item::{
     kSecAttrAccount, kSecAttrLabel, kSecAttrService, kSecClass, kSecClassGenericPassword, kSecUseKeychain, kSecValueData,
 };
 use security_framework_sys::keychain::SecKeychainSetUserInteractionAllowed;
-use security_framework_sys::keychain_item::SecItemAdd;
+use security_framework_sys::keychain_item::{SecItemAdd, SecKeychainItemDelete};
 use std::ffi::CString;
 use std::os::raw::c_char;
 use std::os::unix::ffi::OsStrExt;
@@ -163,7 +163,11 @@ impl KeyStore for MacKeychain {
 
     fn delete(&self, profile: Uuid, slot: Slot) -> Result<()> {
         if let Some((_, item)) = self.find(&Self::account(profile, slot))? {
-            item.delete();
+            // Not the wrapper's `delete`, which drops the status: a `Next` key that stays
+            // behind would keep reporting a rotation in progress.
+            // SAFETY: a live item reference from `find`.
+            let status = unsafe { SecKeychainItemDelete(item.as_CFTypeRef() as *mut _) };
+            cvt(status).map_err(|e| describe(e, "removing the profile key from the keychain"))?;
         }
         Ok(())
     }

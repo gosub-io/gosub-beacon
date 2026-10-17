@@ -485,6 +485,9 @@ impl Profile {
                 self.name()
             );
         };
+        // A rotation that stopped partway leaves the stores split across two keys; a
+        // manifest rolled back to before `[crypto]` must not quietly settle on one of them.
+        self.ensure_not_rotating(keys)?;
         let key = match keys.get(self.id(), Slot::Current)? {
             Some(key) => key,
             None if self.has_encrypted_store() => bail!(
@@ -1245,6 +1248,25 @@ mod tests {
         assert!(crypto::is_sealed(&fs::read(p.dir.join("picker-swatches.txt")).unwrap()));
         assert_eq!(p.read_sealed(&second, "picker-swatches.txt").unwrap().unwrap(), b"#ff0000\n");
         assert_eq!(p.read_sealed(&second, "picker-clock.txt").unwrap(), None);
+    }
+
+    #[test]
+    fn a_rolled_back_manifest_does_not_settle_an_interrupted_rotation() {
+        let tmp = tempfile::tempdir().unwrap();
+        let roots = roots(&tmp);
+        let keys = crypto::MemoryKeyStore::default();
+        let mut p = roots.open(&Selection::Default, V).unwrap();
+        let first = p.unlock(Some(&keys)).unwrap();
+        seal_fake_stores(&p, &first);
+        p.set_passphrase(&first, "pw", crypto::TEST_KDF).unwrap();
+        let mut failing = |_: &Path, _: &Zeroizing<[u8; 32]>, _: &Zeroizing<[u8; 32]>| -> Result<()> { bail!("disk full") };
+        p.rotate_key(&keys, Some("pw2"), crypto::TEST_KDF, &mut failing).unwrap_err();
+        // The manifest from before encryption comes back while the next key still waits.
+        roll_back_manifest(&p);
+        let mut again = roots.open(&Selection::Default, V).unwrap();
+        let err = again.unlock(Some(&keys)).unwrap_err();
+        assert!(err.downcast_ref::<Rotating>().is_some(), "{err}");
+        assert!(Manifest::read(&p.dir).unwrap().unwrap().crypto.is_none());
     }
 
     #[test]

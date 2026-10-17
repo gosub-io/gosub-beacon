@@ -96,8 +96,8 @@ One Beacon process opens a profile at a time; a second one on the same profile i
 
 A profile's databases are always encrypted, with a key kept in the system keychain (Secret
 Service on Linux, Keychain on macOS, Credential Manager on Windows); the first start
-encrypts the ones already on disk. Without a keychain Beacon does not start: on Linux that
-means a running Secret Service such as GNOME Keyring or KWallet.
+encrypts the ones already on disk. Without a keychain Beacon does not start, Android aside
+(see below): on Linux that means a running Secret Service such as GNOME Keyring or KWallet.
 
 That key never leaves the machine, so an encrypted profile copied elsewhere opens there
 only once it has a passphrase:
