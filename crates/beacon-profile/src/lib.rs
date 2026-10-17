@@ -15,19 +15,30 @@
 //! <cache>/gosub-beacon/<id>/                  disposable, never exported
 //! ```
 //!
+//! The databases are encrypted when the machine has a keychain; see [`crypto`].
+//!
 //! The engine never sees any of this: Beacon opens the stores in the profile folder and
 //! hands the engine the handles and the zone id. This crate has no engine or toolkit
 //! dependency, so `beaconctl` can share it.
 
+pub mod crypto;
+
 use anyhow::{anyhow, bail, Context, Result};
+use crypto::{Crypto, KdfParams, KeyStore, ProfileKey, CRYPTO_VERSION};
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 /// The newest manifest layout this build understands. A profile written by a newer Beacon
-/// is refused rather than opened, so an older build cannot quietly damage it.
-pub const SCHEMA: u32 = 1;
+/// is refused rather than opened, so an older build cannot quietly damage it. Layout 2 adds
+/// `[crypto]`: a Beacon that predates it would open the encrypted databases as empty ones.
+pub const SCHEMA: u32 = 2;
+
+/// The layout of a profile with no `[crypto]`, which every Beacon with profiles can open.
+const SCHEMA_PLAIN: u32 = 1;
+/// The layout of an encrypted profile.
+const SCHEMA_CRYPTO: u32 = 2;
 
 /// The zone id every Beacon before profiles used, compiled in. A profile adopted from that
 /// layout keeps it, or its cookies and localStorage rows would no longer match.
@@ -69,6 +80,9 @@ pub struct Manifest {
     /// The Beacon version that last opened it.
     pub last_opened_by: String,
     pub zones: Vec<ZoneEntry>,
+    /// How the databases are encrypted; absent when they are not.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crypto: Option<Crypto>,
 }
 
 /// One zone in a profile. Beacon runs one today.
@@ -81,7 +95,7 @@ pub struct ZoneEntry {
 impl Manifest {
     fn new(name: &str, zone: Uuid, version: &str) -> Self {
         Self {
-            schema: SCHEMA,
+            schema: SCHEMA_PLAIN,
             id: Uuid::new_v4(),
             name: name.to_string(),
             created_by: version.to_string(),
@@ -90,6 +104,7 @@ impl Manifest {
                 id: zone,
                 name: "Default".to_string(),
             }],
+            crypto: None,
         }
     }
 
@@ -406,6 +421,161 @@ impl Profile {
     }
 }
 
+/// Unlocking: what the databases are encrypted with.
+impl Profile {
+    /// The key this profile's databases are encrypted with, or `None` when they are not.
+    /// Call with the profile locked.
+    ///
+    /// A profile without `[crypto]` gets a new key here when `keys` can store one, and is
+    /// from then on encrypted; the caller encrypts the existing plaintext databases. With no
+    /// keychain, or one that refuses the key, it stays plaintext and `Ok(None)` comes back.
+    ///
+    /// An encrypted profile needs its key from `keys`. When the keychain does not hold it
+    /// (a profile copied from another machine), the error is a [`Locked`]: unlock it with
+    /// the passphrase first ([`Profile::unlock_with_passphrase`]).
+    pub fn unlock(&mut self, keys: Option<&dyn KeyStore>) -> Result<Option<ProfileKey>> {
+        if self.manifest.crypto.is_some() {
+            return self.key_from(keys).map(Some);
+        }
+        let Some(keys) = keys else { return Ok(None) };
+        let key = ProfileKey::generate(self.id());
+        // Read back before trusting it: a keychain that accepts a key and loses it would
+        // leave databases nothing can open.
+        let stored = keys.set(&key).and_then(|()| keys.get(self.id()));
+        match stored {
+            Ok(Some(back)) if back.check() == key.check() => {}
+            Ok(_) => {
+                log::warn!(
+                    "the keychain did not keep the key for profile {:?}; it stays unencrypted",
+                    self.name()
+                );
+                return Ok(None);
+            }
+            Err(e) => {
+                log::warn!("no keychain for profile {:?}, it stays unencrypted: {e:#}", self.name());
+                return Ok(None);
+            }
+        }
+        self.manifest.crypto = Some(key.manifest_entry());
+        self.manifest.schema = self.manifest.schema.max(SCHEMA_CRYPTO);
+        self.manifest.write(&self.dir)?;
+        Ok(Some(key))
+    }
+
+    /// The key of an encrypted profile, from the keychain, checked against the manifest.
+    pub fn key_from(&self, keys: Option<&dyn KeyStore>) -> Result<ProfileKey> {
+        let crypto = self.crypto()?;
+        let found = match keys {
+            Some(keys) => keys.get(self.id())?,
+            None => None,
+        };
+        match found {
+            Some(key) if key.check() == crypto.check => Ok(key),
+            Some(_) => Err(anyhow!(Locked {
+                name: self.name().to_string(),
+                passphrase: crypto.passphrase.is_some(),
+                stale: true,
+            })),
+            None => Err(anyhow!(Locked {
+                name: self.name().to_string(),
+                passphrase: crypto.passphrase.is_some(),
+                stale: false,
+            })),
+        }
+    }
+
+    /// Unwrap the profile key with `passphrase` and file it in `keys`, so later runs open
+    /// the profile without asking. Call with the profile locked.
+    pub fn unlock_with_passphrase(&self, keys: &dyn KeyStore, passphrase: &str) -> Result<ProfileKey> {
+        let crypto = self.crypto()?;
+        let Some(wrapped) = &crypto.passphrase else {
+            bail!("profile {:?} has no passphrase to unlock it with", self.name());
+        };
+        let key = ProfileKey::unwrap(self.id(), wrapped, passphrase)?;
+        if key.check() != crypto.check {
+            bail!("profile {:?}: the passphrase opens a key that is not this profile's", self.name());
+        }
+        keys.set(&key)?;
+        Ok(key)
+    }
+
+    /// Wrap `key` with `passphrase` into the manifest, replacing any passphrase it had.
+    /// The profile can then be opened on another machine. Call with the profile locked.
+    pub fn set_passphrase(&mut self, key: &ProfileKey, passphrase: &str, params: KdfParams) -> Result<()> {
+        if passphrase.is_empty() {
+            bail!("an empty passphrase protects nothing");
+        }
+        let crypto = self.crypto()?;
+        if key.check() != crypto.check {
+            bail!("that key is not profile {:?}'s", self.name());
+        }
+        let wrapped = key.wrap(passphrase, params)?;
+        if let Some(crypto) = &mut self.manifest.crypto {
+            crypto.passphrase = Some(wrapped);
+        }
+        self.manifest.write(&self.dir)
+    }
+
+    /// Drop the passphrase: the profile opens only where the keychain holds its key.
+    pub fn remove_passphrase(&mut self) -> Result<()> {
+        self.crypto()?;
+        if let Some(crypto) = &mut self.manifest.crypto {
+            crypto.passphrase = None;
+        }
+        self.manifest.write(&self.dir)
+    }
+
+    fn crypto(&self) -> Result<&Crypto> {
+        let Some(crypto) = &self.manifest.crypto else {
+            bail!("profile {:?} is not encrypted", self.name());
+        };
+        if crypto.version > CRYPTO_VERSION {
+            bail!(
+                "profile {:?} is encrypted with a newer scheme ({}) than this Beacon knows ({CRYPTO_VERSION})",
+                self.name(),
+                crypto.version
+            );
+        }
+        Ok(crypto)
+    }
+}
+
+/// An encrypted profile whose key this machine's keychain does not have (or has a stale
+/// one of). Find it with `err.downcast_ref::<Locked>()`.
+#[derive(Debug)]
+pub struct Locked {
+    pub name: String,
+    /// The profile carries a passphrase-wrapped key, so the passphrase can unlock it.
+    pub passphrase: bool,
+    /// The keychain holds a key under this profile's id, but not this profile's.
+    pub stale: bool,
+}
+
+impl std::fmt::Display for Locked {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let held = if self.stale {
+            "the keychain holds a different key for it"
+        } else {
+            "its key is not in this machine's keychain"
+        };
+        if self.passphrase {
+            write!(
+                f,
+                "profile {:?} is encrypted and {held}; unlock it with `beaconctl profile unlock {}`",
+                self.name, self.name
+            )
+        } else {
+            write!(
+                f,
+                "profile {:?} is encrypted, {held}, and it has no passphrase: it can only be opened on the machine that made it",
+                self.name
+            )
+        }
+    }
+}
+
+impl std::error::Error for Locked {}
+
 /// Held for as long as a process uses a profile.
 #[derive(Debug)]
 pub struct ProfileLock {
@@ -416,8 +586,8 @@ fn holds_legacy_files(dir: &Path) -> bool {
     LEGACY_FILES.iter().any(|name| dir.join(name).exists())
 }
 
-/// Create `dir` and make it readable by the owner only: a profile holds cookies in plain
-/// text, and the folder mode is what keeps other users out of every file inside.
+/// Create `dir` and make it readable by the owner only: an unencrypted profile holds cookies
+/// in plain text, and even an encrypted one its session file and picker history; the folder mode is what keeps other users out of every file inside.
 fn make_private_dir(dir: &Path) -> Result<()> {
     fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     #[cfg(unix)]
@@ -566,6 +736,84 @@ mod tests {
         roots.open(&Selection::Default, V).unwrap();
         assert!(!p.cache_dir.join("old-entry").exists());
         assert_eq!(fs::read_to_string(p.cache_dir.join("VERSION")).unwrap(), CACHE_VERSION);
+    }
+
+    #[test]
+    fn a_profile_gets_a_key_once_and_keeps_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let roots = roots(&tmp);
+        let keys = crypto::MemoryKeyStore::default();
+        let mut p = roots.open(&Selection::Default, V).unwrap();
+        let key = p.unlock(Some(&keys)).unwrap().expect("a key");
+        let written = Manifest::read(&p.dir).unwrap().unwrap();
+        assert_eq!(written.schema, SCHEMA_CRYPTO);
+        assert!(written.crypto.is_some());
+
+        let mut again = roots.open(&Selection::Default, V).unwrap();
+        let same = again.unlock(Some(&keys)).unwrap().expect("a key");
+        assert_eq!(same.check(), key.check());
+    }
+
+    #[test]
+    fn no_keychain_leaves_the_profile_plain() {
+        let tmp = tempfile::tempdir().unwrap();
+        let roots = roots(&tmp);
+        let mut p = roots.open(&Selection::Default, V).unwrap();
+        assert!(p.unlock(None).unwrap().is_none());
+        let refusing = crypto::MemoryKeyStore::refusing();
+        assert!(p.unlock(Some(&refusing)).unwrap().is_none());
+        let written = Manifest::read(&p.dir).unwrap().unwrap();
+        assert_eq!((written.schema, written.crypto), (SCHEMA_PLAIN, None));
+    }
+
+    #[test]
+    fn a_copied_profile_needs_its_passphrase_once() {
+        let tmp = tempfile::tempdir().unwrap();
+        let roots = roots(&tmp);
+        let here = crypto::MemoryKeyStore::default();
+        let mut p = roots.open(&Selection::Default, V).unwrap();
+        let key = p.unlock(Some(&here)).unwrap().unwrap();
+
+        // Another machine, no passphrase yet: nothing opens it.
+        let there = crypto::MemoryKeyStore::default();
+        let mut copy = roots.open(&Selection::Default, V).unwrap();
+        let err = copy.unlock(Some(&there)).unwrap_err();
+        let locked = err.downcast_ref::<Locked>().expect("a Locked error");
+        assert!(!locked.passphrase && !locked.stale, "{locked}");
+
+        p.set_passphrase(&key, "hunter2", crypto::TEST_KDF).unwrap();
+        let mut copy = roots.open(&Selection::Default, V).unwrap();
+        assert!(copy.unlock(Some(&there)).unwrap_err().downcast_ref::<Locked>().unwrap().passphrase);
+        assert!(copy.unlock_with_passphrase(&there, "wrong").is_err());
+        copy.unlock_with_passphrase(&there, "hunter2").unwrap();
+        assert_eq!(copy.unlock(Some(&there)).unwrap().unwrap().check(), key.check());
+    }
+
+    #[test]
+    fn a_stale_keychain_key_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let roots = roots(&tmp);
+        let keys = crypto::MemoryKeyStore::default();
+        let mut p = roots.open(&Selection::Default, V).unwrap();
+        p.unlock(Some(&keys)).unwrap().unwrap();
+        keys.set(&ProfileKey::generate(p.id())).unwrap();
+        let err = p.unlock(Some(&keys)).unwrap_err();
+        assert!(err.downcast_ref::<Locked>().unwrap().stale);
+    }
+
+    #[test]
+    fn removing_the_passphrase_keeps_the_keychain_key() {
+        let tmp = tempfile::tempdir().unwrap();
+        let roots = roots(&tmp);
+        let keys = crypto::MemoryKeyStore::default();
+        let mut p = roots.open(&Selection::Default, V).unwrap();
+        let key = p.unlock(Some(&keys)).unwrap().unwrap();
+        assert!(p.set_passphrase(&key, "", crypto::TEST_KDF).is_err());
+        p.set_passphrase(&key, "pw", crypto::TEST_KDF).unwrap();
+        p.remove_passphrase().unwrap();
+        let written = Manifest::read(&p.dir).unwrap().unwrap();
+        assert!(written.crypto.unwrap().passphrase.is_none());
+        assert!(p.unlock(Some(&keys)).unwrap().is_some());
     }
 
     #[cfg(unix)]

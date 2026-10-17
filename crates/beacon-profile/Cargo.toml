@@ -8,10 +8,21 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+argon2 = "0.5.3"
+chacha20poly1305 = "0.10.1"
 dirs.workspace = true
+hkdf = "0.12.4"
+log.workspace = true
 serde.workspace = true
 toml.workspace = true
+sha2 = "0.10.9"
 uuid = { workspace = true, features = ["serde"] }
+zeroize = "1.8.2"
+
+# The OS keychain. Secret Service through zbus with its own executor, so it needs no
+# libdbus and works whether or not the caller is inside a tokio runtime.
+[target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))'.dependencies]
+keyring = { version = "3.6.3", features = ["apple-native", "windows-native", "async-secret-service", "async-io", "crypto-rust"] }
 
 [dev-dependencies]
 tempfile.workspace = true

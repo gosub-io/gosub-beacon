@@ -73,8 +73,8 @@ cargo run --bin gosub-beacon-egui -- https://example.com  # the other frontend
 ## Profiles
 
 Everything Beacon keeps about you (settings, cookies, bookmarks, history, site storage, open
-tabs) lives in one profile folder, which can be copied to another machine as is. Its cache
-lives outside it and is rebuilt when missing.
+tabs) lives in one profile folder, which can be copied to another machine (see Encryption
+below). Its cache lives outside it and is rebuilt when missing.
 
 | | Linux | macOS |
 | --- | --- | --- |
@@ -91,6 +91,25 @@ cargo run -p beaconctl -- profile list                      # list, show, create
 ```
 
 One Beacon process opens a profile at a time; a second one on the same profile is refused.
+
+### Encryption
+
+Where the system has a keychain (Secret Service on Linux, Keychain on macOS, Credential
+Manager on Windows), a profile's databases are encrypted with a key kept there; the first
+start encrypts the ones already on disk. Without a keychain the profile stays unencrypted.
+
+That key never leaves the machine, so a copied profile opens elsewhere only once it has a
+passphrase:
+
+```bash
+cargo run -p beaconctl -- profile passphrase              # set or change it (the default profile)
+cargo run -p beaconctl -- profile unlock work             # on the new machine: passphrase -> keychain
+cargo run -p beaconctl -- profile forget work             # drop this machine's key (needs a passphrase)
+cargo run -p beaconctl -- profile remove-passphrase work  # back to this machine only
+```
+
+The session file and the picker history are not encrypted, nor is the isolated build's
+localStorage (`--isolated` keeps it in file areas, not SQLite).
 
 ## Building and running on macOS
 

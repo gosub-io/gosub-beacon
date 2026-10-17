@@ -4,12 +4,15 @@
 //! the `beacon-profile` crate's. This module picks the profile from the command line, once
 //! per process, and hands out its folders.
 
+use beacon_profile::crypto::{OsKeychain, ProfileKey, Store};
 use beacon_profile::{Profile, ProfileLock, Roots, Selection};
+use gosub_engine::storage::{is_plaintext_database, SqliteKey};
 use std::path::Path;
 use std::sync::OnceLock;
 
 static PROFILE: OnceLock<Profile> = OnceLock::new();
 static LOCK: OnceLock<ProfileLock> = OnceLock::new();
+static KEY: OnceLock<Option<ProfileKey>> = OnceLock::new();
 
 /// Resolve the profile from `--user-data-dir` / `--profile`, creating or migrating it as
 /// needed. Call early in `main`, after the command line and before the lockdown, which
@@ -81,5 +84,45 @@ pub fn lock_profile() -> anyhow::Result<()> {
     }
     let lock = profile().lock()?;
     let _ = LOCK.set(lock);
+    Ok(())
+}
+
+/// The key each store's database opens with, `None` when the profile is not encrypted.
+/// Resolved once, after [`lock_profile`]: the first call gives a profile without a key one
+/// when the keychain takes it, and encrypts the plaintext databases already in the folder.
+pub fn store_key(store: Store) -> anyhow::Result<Option<SqliteKey>> {
+    Ok(profile_key()?.map(|key| SqliteKey::from_bytes(*key.store_key(store))))
+}
+
+fn profile_key() -> anyhow::Result<Option<&'static ProfileKey>> {
+    if let Some(key) = KEY.get() {
+        return Ok(key.as_ref());
+    }
+    anyhow::ensure!(LOCK.get().is_some(), "the profile key is only read with the profile locked");
+    // A copy: unlocking may write `[crypto]` into the manifest, and nothing else this
+    // process reads depends on it.
+    let mut profile = profile().clone();
+    let keychain = OsKeychain::new();
+    let key = profile.unlock(keychain.as_ref().map(|k| k as &dyn beacon_profile::crypto::KeyStore))?;
+    if let Some(key) = &key {
+        encrypt_plaintext(&profile, key)?;
+        log::info!("profile {:?}: databases encrypted, key in the keychain", profile.name());
+    }
+    Ok(KEY.get_or_init(|| key).as_ref())
+}
+
+/// Encrypt every store still in plaintext: the databases of a profile that just got its
+/// key, or the rest of them after a run that stopped halfway. Judged per file by its
+/// header, so it is safe to run on every start.
+fn encrypt_plaintext(profile: &Profile, key: &ProfileKey) -> anyhow::Result<()> {
+    for store in Store::ALL {
+        let path = profile.dir.join(store.file_name());
+        if is_plaintext_database(&path)? {
+            SqliteKey::from_bytes(*key.store_key(store))
+                .encrypt_file(&path)
+                .map_err(|e| anyhow::anyhow!("encrypting {}: {e}", path.display()))?;
+            log::info!("encrypted {}", path.display());
+        }
+    }
     Ok(())
 }
