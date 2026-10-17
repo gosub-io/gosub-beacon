@@ -10,5 +10,7 @@ license.workspace = true
 anyhow.workspace = true
 beacon-profile = { path = "../beacon-profile" }
 clap.workspace = true
+# Reads the encrypted places database for `profile history`.
+gosub_engine.workspace = true
 rpassword = "7.5.4"
 zeroize = "1.8.2"

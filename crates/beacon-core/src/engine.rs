@@ -81,8 +81,8 @@ impl<C: BeaconConfig> BrowserEngine<C> {
         // One process per profile: a second one would write the same databases.
         crate::paths::lock_profile()?;
         let profile = crate::paths::profile();
-        // Each store's key, or None for an unencrypted profile. Resolved before any store
-        // opens: on a profile's first keyed run this is where its databases get encrypted.
+        // Each store's key. Resolved before any store opens: on a profile's first keyed run
+        // this is where its databases get encrypted, and without a keychain it fails here.
         let key = crate::paths::store_key;
         let data_dir = &profile.dir;
         let isolated = crate::cli::Cli::global().isolated();
@@ -103,7 +103,7 @@ impl<C: BeaconConfig> BrowserEngine<C> {
         // before anything reads or writes settings, so stored values win over defaults.
         // Falls back to the in-memory store if the database cannot be opened.
         let settings_db = data_dir.join(Store::Settings.file_name());
-        match gosub_engine::config_storage::SqliteStorageAdapter::open(&settings_db, key(Store::Settings)?.as_ref()) {
+        match gosub_engine::config_storage::SqliteStorageAdapter::open(&settings_db, Some(&key(Store::Settings)?)) {
             Ok(storage) => engine.settings().set_storage(Box::new(storage)),
             Err(e) => log::warn!(
                 "settings database {} unavailable, settings will not persist: {e:?}",
@@ -173,7 +173,7 @@ impl<C: BeaconConfig> BrowserEngine<C> {
         // Bookmarks + visited history. The engine records visits; Beacon queries the same
         // handle directly (star button, bookmarks bar, URL-bar completion).
         let places: gosub_engine::places::PlacesHandle = Arc::new(
-            SqlitePlaces::open(data_dir.join(Store::Places.file_name()), key(Store::Places)?)
+            SqlitePlaces::open(data_dir.join(Store::Places.file_name()), Some(key(Store::Places)?))
                 .map_err(|e| anyhow::anyhow!("places: {e:?}"))?,
         );
         if !private && places.bookmarks().is_empty() {
@@ -226,7 +226,7 @@ impl<C: BeaconConfig> BrowserEngine<C> {
             }
         } else {
             let cookie_store: gosub_engine::cookies::CookieStoreHandle =
-                SqliteCookieStore::open(data_dir.join(Store::Cookies.file_name()), key(Store::Cookies)?)
+                SqliteCookieStore::open(data_dir.join(Store::Cookies.file_name()), Some(key(Store::Cookies)?))
                     .map_err(|e| anyhow::anyhow!("cookie store: {e:?}"))?
                     .into();
             // Isolated: localStorage lives in file areas served by the engine's storage
@@ -244,11 +244,15 @@ impl<C: BeaconConfig> BrowserEngine<C> {
                         .map_err(|e| anyhow::anyhow!("local store service in {}: {e:?}", dir.display()))?,
                 )
             } else {
-                Arc::new(SqliteLocalStore::open(&local_db, key(Store::LocalStorage)?).map_err(|e| anyhow::anyhow!("local store: {e:?}"))?)
+                Arc::new(
+                    SqliteLocalStore::open(&local_db, Some(key(Store::LocalStorage)?))
+                        .map_err(|e| anyhow::anyhow!("local store: {e:?}"))?,
+                )
             };
             #[cfg(not(target_os = "linux"))]
-            let local: Arc<dyn gosub_engine::storage::LocalStore> =
-                Arc::new(SqliteLocalStore::open(&local_db, key(Store::LocalStorage)?).map_err(|e| anyhow::anyhow!("local store: {e:?}"))?);
+            let local: Arc<dyn gosub_engine::storage::LocalStore> = Arc::new(
+                SqliteLocalStore::open(&local_db, Some(key(Store::LocalStorage)?)).map_err(|e| anyhow::anyhow!("local store: {e:?}"))?,
+            );
             ZoneServices {
                 storage: Arc::new(StorageService::new(local, Arc::new(InMemorySessionStore::new()))),
                 cookie_store: Some(cookie_store),

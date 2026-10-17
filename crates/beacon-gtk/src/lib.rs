@@ -93,8 +93,9 @@ pub fn run() {
     let app = Application::new(&app_id());
     app.connect_startup(|_| {
         // Only the primary instance gets here; a second launch has already handed off. So
-        // this is where a profile another process holds is refused, before any window.
-        if let Err(e) = beacon_core::paths::lock_profile() {
+        // this is where a profile another process holds, or one without a keychain for its
+        // key, is refused, before any window.
+        if let Err(e) = beacon_core::paths::lock_profile().and_then(|()| beacon_core::paths::unlock_profile()) {
             eprintln!("gosub-beacon: {e:#}");
             std::process::exit(1);
         }

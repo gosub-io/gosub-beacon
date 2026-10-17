@@ -12,7 +12,7 @@ use std::sync::OnceLock;
 
 static PROFILE: OnceLock<Profile> = OnceLock::new();
 static LOCK: OnceLock<ProfileLock> = OnceLock::new();
-static KEY: OnceLock<Option<ProfileKey>> = OnceLock::new();
+static KEY: OnceLock<ProfileKey> = OnceLock::new();
 static ENCRYPTED: OnceLock<()> = OnceLock::new();
 
 /// Resolve the profile from `--user-data-dir` / `--profile`, creating or migrating it as
@@ -88,16 +88,25 @@ pub fn lock_profile() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// The key each store's database opens with, `None` when the profile is not encrypted.
-/// Resolved once, after [`lock_profile`]: the first call gives a profile without a key one
-/// when the keychain takes it, and encrypts the plaintext databases already in the folder.
-pub fn store_key(store: Store) -> anyhow::Result<Option<SqliteKey>> {
-    Ok(profile_key()?.map(|key| SqliteKey::from_bytes(*key.store_key(store))))
+/// The key each store's database opens with. Every profile is encrypted: without a
+/// keychain to hold the key this fails, and Beacon does not start. Resolved once, after
+/// [`lock_profile`]: the first call gives a profile without a key one, and encrypts the
+/// plaintext databases already in the folder.
+pub fn store_key(store: Store) -> anyhow::Result<SqliteKey> {
+    Ok(SqliteKey::from_bytes(*profile_key()?.store_key(store)))
 }
 
-fn profile_key() -> anyhow::Result<Option<&'static ProfileKey>> {
+/// Resolve the profile key now, after [`lock_profile`], so a profile that cannot be
+/// encrypted (no keychain) or opened (its key is elsewhere) stops the start with its
+/// reason instead of leaving a window without an engine. [`store_key`] would get there on
+/// the first engine anyway.
+pub fn unlock_profile() -> anyhow::Result<()> {
+    profile_key().map(|_| ())
+}
+
+fn profile_key() -> anyhow::Result<&'static ProfileKey> {
     let key = match KEY.get() {
-        Some(key) => key.as_ref(),
+        Some(key) => key,
         None => {
             anyhow::ensure!(LOCK.get().is_some(), "the profile key is only read with the profile locked");
             // A copy: unlocking may write `[crypto]` into the manifest, and nothing else this
@@ -108,15 +117,13 @@ fn profile_key() -> anyhow::Result<Option<&'static ProfileKey>> {
             // Kept before encrypting: the copy above is gone after this call, and a retry
             // unlocking the stale one would make a second key, stranding whatever the first
             // already encrypted.
-            KEY.get_or_init(|| key).as_ref()
+            KEY.get_or_init(|| key)
         }
     };
-    if let Some(key) = key {
-        if ENCRYPTED.get().is_none() {
-            encrypt_plaintext(profile(), key)?;
-            let _ = ENCRYPTED.set(());
-            log::info!("profile {:?}: databases encrypted, key in the keychain", profile().name());
-        }
+    if ENCRYPTED.get().is_none() {
+        encrypt_plaintext(profile(), key)?;
+        let _ = ENCRYPTED.set(());
+        log::info!("profile {:?}: databases encrypted, key in the keychain", profile().name());
     }
     Ok(key)
 }

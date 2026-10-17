@@ -14,8 +14,9 @@
 # the in-process path uses Skia, so antialiasing differs by a few pixels per glyph edge
 # and the check is a share of differing pixels under a colour fuzz, not an exact match.
 #
-# Needs: a binary built with `--features isolation` (Linux), Xvfb (or a DISPLAY to use),
-# xdotool, ImageMagick (`import`, `compare`), python3. Run it under `xvfb-run -a` in CI.
+# Needs: a binary built with `--features isolation` (Linux) and `beaconctl` next to it,
+# Xvfb (or a DISPLAY to use), xdotool, ImageMagick (`import`, `compare`), python3,
+# dbus-run-session and gnome-keyring-daemon. Run it under `xvfb-run -a` in CI.
 #
 #   scripts/isolation-smoke.sh [path/to/gosub-beacon-gtk]
 #
@@ -43,7 +44,7 @@ pass() { echo "PASS  $*"; }
 fail() { echo "FAIL  $*"; failures=$((failures + 1)); }
 note() { echo "      $*"; }
 
-for tool in xdotool import compare python3; do
+for tool in xdotool import compare python3 dbus-run-session gnome-keyring-daemon; do
     if ! command -v "$tool" >/dev/null; then
         echo "missing tool: $tool" >&2
         exit 2
@@ -54,6 +55,32 @@ if [ ! -x "$BIN" ]; then
     exit 2
 fi
 BIN=$(readlink -f "$BIN")
+BEACONCTL=$(dirname "$BIN")/beaconctl
+if [ ! -x "$BEACONCTL" ]; then
+    echo "no beaconctl at $BEACONCTL; build with: cargo build -p beaconctl" >&2
+    exit 2
+fi
+
+# Every profile is encrypted, so Beacon needs a Secret Service to keep its key in. The
+# run gets a session bus and a keyring of its own, so the desktop's are never touched;
+# the private bus also keeps `io.gosub.beacon`, a single-instance application, from
+# handing the URL to a Beacon already running on the desktop. The runtime folder holds
+# the keyring's socket, so it must be a short path: a socket path has ~100 bytes.
+if [ -z "${SMOKE_PRIVATE_BUS:-}" ]; then
+    runtime=$(mktemp -d)
+    mkdir -p "$OUT/keyring"
+    SMOKE_PRIVATE_BUS=1 SMOKE_OUT="$OUT" XDG_DATA_HOME="$OUT/keyring" XDG_RUNTIME_DIR="$runtime" \
+        dbus-run-session -- "$0" "$@"
+    status=$?
+    # GTK mounts gvfs and the document portal in there; they unmount as the bus goes.
+    for _ in 1 2 3 4 5; do
+        rm -rf "$runtime" 2>/dev/null && break
+        sleep 1
+    done
+    exit $status
+fi
+# An empty password never creates the keyring, so it gets a throwaway one.
+printf smoke | gnome-keyring-daemon --unlock --components=secrets >/dev/null
 
 cleanup_pids=()
 cleanup() {
@@ -99,20 +126,9 @@ URL="http://127.0.0.1:$PORT/"
 note "fixture at $URL"
 
 # The title the page records once it has rendered, read from the profile's places
-# database. Empty until then.
+# database (encrypted, so through beaconctl and the keyring). Empty until then.
 recorded_title() {
-    python3 - "$1" <<'EOF'
-import sqlite3, sys, os
-db = os.path.join(sys.argv[1], "places.db")
-if not os.path.exists(db):
-    sys.exit(0)
-try:
-    con = sqlite3.connect(db)
-    row = con.execute("select title from visits order by last_visit desc limit 1").fetchone()
-    print(row[0] if row else "")
-except sqlite3.Error:
-    pass
-EOF
+    "$BEACONCTL" profile history "$1" --limit 1 2>/dev/null | cut -f1
 }
 
 # Pixels that differ between two captures, as a share of all pixels, under the fuzz.
@@ -186,12 +202,7 @@ run_mode() {
     rm -rf "$profile"
     mkdir -p "$profile"
 
-    # Its own session bus: `io.gosub.beacon` is a single-instance application, and a
-    # Beacon already running on the desktop's bus would otherwise take the URL and
-    # leave this run with nothing.
-    local launcher=()
-    command -v dbus-run-session >/dev/null && launcher=(dbus-run-session --)
-    BEACON_LOG=info GDK_BACKEND=x11 setsid "${launcher[@]}" "$BIN" "$@" --user-data-dir "$profile" "$URL" >"$log" 2>&1 &
+    BEACON_LOG=info GDK_BACKEND=x11 setsid "$BIN" "$@" --user-data-dir "$profile" "$URL" >"$log" 2>&1 &
     pgid=$!
     cleanup_pids+=("$pgid")
 
@@ -208,6 +219,14 @@ run_mode() {
         pass "$mode: page title recorded (the render completed)"
     else
         fail "$mode: title not recorded within 90 s (got '$(recorded_title "$profile")')"
+    fi
+    # Every profile is encrypted: a plaintext SQLite file starts with its format string.
+    if [ ! -f "$profile/places.db" ]; then
+        fail "$mode: no places.db in the profile"
+    elif head -c 16 "$profile/places.db" | grep -q 'SQLite format 3'; then
+        fail "$mode: places.db is not encrypted"
+    else
+        pass "$mode: places.db is encrypted"
     fi
 
     # The caller's checks on the live process tree.

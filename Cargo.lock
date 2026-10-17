@@ -875,6 +875,7 @@ dependencies = [
  "anyhow",
  "beacon-profile",
  "clap",
+ "gosub_engine",
  "rpassword",
  "zeroize",
 ]

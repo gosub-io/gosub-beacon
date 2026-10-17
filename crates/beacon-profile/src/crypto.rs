@@ -283,7 +283,7 @@ pub struct OsKeychain;
 
 impl OsKeychain {
     /// The keychain, or `None` on a platform that has none Beacon can use. Android's
-    /// keystore is not wired up yet; there, profiles stay unencrypted.
+    /// keystore is not wired up yet; there, no profile opens.
     pub fn new() -> Option<Self> {
         cfg!(any(target_os = "linux", target_os = "macos", target_os = "windows")).then_some(Self)
     }

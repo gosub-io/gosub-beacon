@@ -23,6 +23,8 @@ finish-args:
   # GtkGLArea composites the page through GL/EGL.
   - --device=dri
   - --share=network
+  # The profile key lives in the Secret Service; without it no profile opens.
+  - --talk-name=org.freedesktop.secrets
   # No filesystem grant: `gtk4::FileDialog` goes through the portal, so downloads and
   # "save link as" work without one. `file://` browsing does not -- see README.md.
 

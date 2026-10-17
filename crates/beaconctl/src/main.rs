@@ -2,11 +2,16 @@
 //!
 //! Profiles today. Works on the same folders Beacon uses, so it can run while Beacon is
 //! closed or open; anything that would change a profile in use refuses.
+//!
+//! A profile is named by its name, its id, or its folder (a `--user-data-dir`).
 
-use anyhow::{bail, Context, Result};
-use beacon_profile::crypto::{KdfParams, KeyStore, OsKeychain};
+use anyhow::{anyhow, bail, Context, Result};
+use beacon_profile::crypto::{KdfParams, KeyStore, OsKeychain, Store};
 use beacon_profile::{Profile, Roots};
 use clap::{Args as ClapArgs, Parser, Subcommand};
+use gosub_engine::places::{Places, SqlitePlaces};
+use gosub_engine::storage::SqliteKey;
+use std::path::Path;
 use std::path::PathBuf;
 use zeroize::Zeroizing;
 
@@ -58,6 +63,13 @@ enum ProfileCommand {
         profile: Option<String>,
         #[command(flatten)]
         input: PassphraseInput,
+    },
+    /// Print the pages a profile has visited, most recent first, one `title<TAB>url` per
+    /// line. Reads while Beacon has the profile open.
+    History {
+        profile: Option<String>,
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
     },
     /// Open a profile copied from another machine: the passphrase unwraps its key, and this
     /// machine's keychain keeps it from then on.
@@ -114,7 +126,7 @@ fn profile(command: ProfileCommand) -> Result<()> {
             println!("last opened by  {}", p.manifest.last_opened_by);
             println!("in use          {}", if p.in_use() { "yes" } else { "no" });
             match &p.manifest.crypto {
-                None => println!("encrypted       no"),
+                None => println!("encrypted       not yet (Beacon encrypts it on its next start)"),
                 Some(crypto) => {
                     let here = OsKeychain::new().map(|k| p.key_from(Some(&k)).is_ok()).unwrap_or(false);
                     println!("encrypted       yes");
@@ -181,6 +193,23 @@ fn profile(command: ProfileCommand) -> Result<()> {
             keychain.delete(p.id())?;
             println!("forgot the key for {}; `beaconctl profile unlock` brings it back", p.name());
         }
+        ProfileCommand::History { profile, limit } => {
+            let p = existing(&roots, profile)?;
+            let path = p.dir.join(Store::Places.file_name());
+            // Opening it would create it; there is no history yet either way.
+            if !path.exists() {
+                return Ok(());
+            }
+            let key = p.key_from(Some(&keychain()?))?;
+            let places = SqlitePlaces::open(path, Some(SqliteKey::from_bytes(*key.store_key(Store::Places))))
+                .map_err(|e| anyhow!("opening the history of {}: {e:?}", p.name()))?;
+            // `query_visited` ranks by visit count; this wants the most recent.
+            let mut pages = places.query_visited("", 100_000);
+            pages.sort_by_key(|page| std::cmp::Reverse(page.last_visit));
+            for page in pages.into_iter().take(limit) {
+                println!("{}\t{}", page.title, page.url);
+            }
+        }
         ProfileCommand::Unlock { profile, input } => {
             let p = existing(&roots, profile)?;
             let _lock = p.lock()?;
@@ -225,6 +254,7 @@ impl PassphraseInput {
 /// looking it up.
 fn existing(roots: &Roots, key: Option<String>) -> Result<Profile> {
     let key = match key {
+        Some(key) if Path::new(&key).join(beacon_profile::MANIFEST).is_file() => return Profile::at(Path::new(&key), &roots.cache),
         Some(key) => key,
         None => match roots.default_id()? {
             Some(id) => id.to_string(),
