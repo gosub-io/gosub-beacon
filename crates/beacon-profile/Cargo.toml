@@ -22,8 +22,15 @@ zeroize = "1.8.2"
 
 # The OS keychain. Secret Service through zbus with its own executor, so it needs no
 # libdbus and works whether or not the caller is inside a tokio runtime.
-[target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))'.dependencies]
-keyring = { version = "3.6.3", features = ["apple-native", "windows-native", "async-secret-service", "async-io", "crypto-rust"] }
+[target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
+keyring = { version = "3.6.3", features = ["windows-native", "async-secret-service", "async-io", "crypto-rust"] }
+
+# The macOS keychain directly rather than through keyring: an item is created with an access
+# list naming both Beacon.app and beaconctl, which keyring cannot express.
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.9.4"
+security-framework = "2.11.1"
+security-framework-sys = "2.17.0"
 
 [dev-dependencies]
 tempfile.workspace = true

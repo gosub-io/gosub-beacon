@@ -92,6 +92,12 @@ struct PassphraseInput {
 }
 
 fn main() {
+    // Over ssh there is no screen for the keychain's "beaconctl wants to use your
+    // confidential information" dialog, and macOS would wait on it forever. Better a clear
+    // error than a hang; the dialog is answered once, in a terminal on the Mac itself.
+    if std::env::var_os("SSH_CONNECTION").is_some() {
+        OsKeychain::forbid_dialogs();
+    }
     if let Err(e) = run(Args::parse()) {
         eprintln!("beaconctl: {e:#}");
         std::process::exit(1);

@@ -383,9 +383,36 @@ impl OsKeychain {
     pub fn new() -> Option<Self> {
         cfg!(any(target_os = "linux", target_os = "macos", target_os = "windows")).then_some(Self)
     }
+
+    /// Keep the keychain from asking the user anything. On macOS a keychain item trusts the
+    /// application that made it, and asks on screen for any other; with no screen (over
+    /// ssh) that call never returns. After this it fails instead, with an error saying to
+    /// run once on the Mac itself. Nothing elsewhere: the other keychains do not ask.
+    pub fn forbid_dialogs() {
+        #[cfg(target_os = "macos")]
+        mac::MacKeychain::forbid_dialogs();
+    }
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+#[cfg(target_os = "macos")]
+mod mac;
+
+#[cfg(target_os = "macos")]
+impl KeyStore for OsKeychain {
+    fn get(&self, profile: Uuid, slot: Slot) -> Result<Option<ProfileKey>> {
+        mac::MacKeychain::new().get(profile, slot)
+    }
+
+    fn set(&self, key: &ProfileKey, slot: Slot) -> Result<()> {
+        mac::MacKeychain::new().set(key, slot)
+    }
+
+    fn delete(&self, profile: Uuid, slot: Slot) -> Result<()> {
+        mac::MacKeychain::new().delete(profile, slot)
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 impl OsKeychain {
     fn entry(profile: Uuid, slot: Slot) -> Result<keyring::Entry> {
         let account = match slot {
@@ -396,7 +423,7 @@ impl OsKeychain {
     }
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 impl KeyStore for OsKeychain {
     fn get(&self, profile: Uuid, slot: Slot) -> Result<Option<ProfileKey>> {
         let entry = Self::entry(profile, slot)?;

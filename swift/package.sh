@@ -8,12 +8,19 @@
 # looks for it at @executable_path/../Frameworks, and the whole app is signed (ad hoc) so
 # Apple Silicon will run it at all.
 #
-#     ./package.sh            release build, .app and .dmg into swift/build/
-#     ./package.sh --app      stop after the .app
-#     ./package.sh --native   this Mac's architecture only, instead of a universal build
+#     ./package.sh                release build, .app and .dmg into swift/build/
+#     ./package.sh --app          stop after the .app
+#     ./package.sh --native       this Mac's architecture only, instead of a universal build
+#     ./package.sh --no-beaconctl leave beaconctl out of the bundle
 #
 # The default is universal (arm64 + x86_64), which needs the Intel Rust target once:
 # `rustup target add x86_64-apple-darwin`. --native halves the build for local testing.
+#
+# beaconctl ships inside the bundle, at Contents/MacOS/beaconctl, for more than convenience:
+# a keychain item trusts the application that made it, and Beacon creates its profile-key
+# item trusting the beaconctl beside it (and beaconctl, the BeaconMac beside it), so neither
+# gets the "wants to use your confidential information" dialog for the other's key. A
+# beaconctl built elsewhere gets that dialog once; "Always Allow" ends it.
 #
 # What comes out depends on how much of packaging/signing.env is filled in, which
 # packaging/setup-signing.sh writes:
@@ -37,12 +44,14 @@ out="$here/build"
 app="$out/Gosub Beacon.app"
 app_only=false
 universal=true
+with_beaconctl=true
 volume="Gosub Beacon"
 for arg in "$@"; do
     case "$arg" in
-        --app)    app_only=true ;;
-        --native) universal=false ;;
-        *)        echo "usage: $(basename "$0") [--app] [--native]" >&2; exit 2 ;;
+        --app)          app_only=true ;;
+        --native)       universal=false ;;
+        --no-beaconctl) with_beaconctl=false ;;
+        *)              echo "usage: $(basename "$0") [--app] [--native] [--no-beaconctl]" >&2; exit 2 ;;
     esac
 done
 
@@ -199,10 +208,15 @@ if command -v rustup >/dev/null; then
     done
 fi
 dylibs=()
+ctls=()
 for arch in "${archs[@]}"; do
     triple="$(rust_triple "$arch")"
     cargo build --manifest-path "$root/Cargo.toml" -p beacon-ffi --release --target "$triple"
     dylibs+=("$root/target/$triple/release/libbeacon.dylib")
+    if $with_beaconctl; then
+        cargo build --manifest-path "$root/Cargo.toml" -p beaconctl --release --target "$triple"
+        ctls+=("$root/target/$triple/release/beaconctl")
+    fi
 done
 
 # One library holding every slice, at the path Package.swift links release builds against
@@ -244,6 +258,11 @@ mkdir -p "$app/Contents/MacOS" "$app/Contents/Frameworks" "$app/Contents/Resourc
 
 cp "$bin/BeaconMac" "$app/Contents/MacOS/BeaconMac"
 cp "$root/target/release/libbeacon.dylib" "$app/Contents/Frameworks/libbeacon.dylib"
+# Beside BeaconMac, where each finds the other for the keychain's access list (see the top).
+if $with_beaconctl; then
+    lipo -create -output "$app/Contents/MacOS/beaconctl" "${ctls[@]}"
+    strip "$app/Contents/MacOS/beaconctl"
+fi
 
 # SwiftPM keeps the target's resources in a bundle of their own, which has to travel inside
 # the app. Contents/Resources is where an app keeps resources and where Bundle.main looks --
@@ -338,15 +357,22 @@ done
 #
 # Not optional whichever identity is used: install_name_tool invalidates the signature SwiftPM
 # applied, and an arm64 binary with a broken signature is killed on launch rather than merely
-# warned about. Inside out -- the dylib first, then the bundle that contains it.
+# warned about. Inside out -- the dylib and beaconctl first, then the bundle that contains
+# them; notarization refuses a nested executable that is not signed on its own.
 
+nested=("$app/Contents/Frameworks/libbeacon.dylib")
+[[ -f "$app/Contents/MacOS/beaconctl" ]] && nested+=("$app/Contents/MacOS/beaconctl")
 if [[ -n "$identity" ]]; then
     say "signing as $identity"
-    codesign ${sign[@]+"${sign[@]}"} "$app/Contents/Frameworks/libbeacon.dylib"
+    for f in "${nested[@]}"; do
+        codesign ${sign[@]+"${sign[@]}"} "$f"
+    done
     codesign ${sign[@]+"${sign[@]}"} "$app"
 else
     say "signing (ad hoc)"
-    codesign --force --sign - "$app/Contents/Frameworks/libbeacon.dylib"
+    for f in "${nested[@]}"; do
+        codesign --force --sign - "$f"
+    done
     codesign --force --sign - "$app"
 fi
 codesign --verify --deep --strict "$app" && say "signature verifies"

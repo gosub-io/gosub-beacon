@@ -109,6 +109,10 @@ cargo run -p beaconctl -- profile forget work             # drop this machine's 
 cargo run -p beaconctl -- profile remove-passphrase work  # back to this machine only
 ```
 
+On a Mac, `beaconctl` is inside the app: `Gosub Beacon.app/Contents/MacOS/beaconctl`. Use
+that one; the keychain item holding the key trusts it and the app for each other, where a
+`beaconctl` built elsewhere is asked about once per build.
+
 Changing or removing the passphrase re-encrypts the databases under a new key, so an older
 copy of `profile.toml` no longer opens them with the passphrase it carried. If that is
 interrupted, nothing opens the profile until the same command is run again and finishes it.
