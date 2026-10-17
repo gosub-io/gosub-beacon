@@ -120,7 +120,9 @@ the same user, which can ask the keychain like Beacon does. Still in plain text:
 isolated build's localStorage (`--isolated` keeps it in file areas, not SQLite), the cache
 (outside the profile, and never exported), and whatever blocks of the databases from before
 the first encryption the filesystem has not yet reused. On Android, which has no keychain
-Beacon can use, the key is a file in the app's private storage next to the profile.
+Beacon can use, the key is a file in the app's private storage next to the profile, and the
+app opts out of Android's backup (`allowBackup=false`), since that backup would otherwise be
+the one copy of the profile that carries its key.
 
 ## Building and running on macOS
 
