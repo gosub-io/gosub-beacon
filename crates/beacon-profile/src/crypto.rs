@@ -22,6 +22,7 @@
 //!
 //! [crypto.passphrase]        # only when a passphrase is set
 //! kdf = "argon2id"
+//! normalization = "nfc"      # how the passphrase is prepared; absent: the bytes as typed
 //! memory_kib = 65536
 //! iterations = 3
 //! parallelism = 1
@@ -72,12 +73,29 @@ pub struct Crypto {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Wrapped {
     pub kdf: String,
+    /// How the passphrase was prepared before the key derivation. A manifest from before
+    /// Beacon normalised passphrases has none, and its passphrase is the bytes as typed.
+    #[serde(default)]
+    pub normalization: Normalization,
     pub memory_kib: u32,
     pub iterations: u32,
     pub parallelism: u32,
     pub salt: String,
     pub nonce: String,
     pub wrapped: String,
+}
+
+/// What is done to a passphrase before it is hashed. Recorded with the wrap, so a wrap made
+/// one way is never read another.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Normalization {
+    /// The bytes as typed. What every wrap before `normalization` was recorded used.
+    #[default]
+    None,
+    /// Unicode NFC, so the passphrase hashes the same however the machine it is typed on
+    /// composes its characters: a copied profile is meant to open on another one.
+    Nfc,
 }
 
 /// Argon2id cost for wrapping with a passphrase.
@@ -266,9 +284,13 @@ impl ProfileKey {
 
     /// Wrap this key with `passphrase` for `profile.toml`.
     pub(crate) fn wrap(&self, passphrase: &str, params: KdfParams) -> Result<Wrapped> {
+        self.wrap_as(passphrase, params, Normalization::Nfc)
+    }
+
+    fn wrap_as(&self, passphrase: &str, params: KdfParams, normalization: Normalization) -> Result<Wrapped> {
         let mut salt = [0u8; 16];
         salt.copy_from_slice(&XChaCha20Poly1305::generate_nonce(&mut OsRng)[..16]);
-        let kek = kek(passphrase, &salt, params)?;
+        let kek = kek(passphrase, normalization, &salt, params)?;
         let nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
         let wrapped = XChaCha20Poly1305::new(kek.as_slice().into())
             .encrypt(
@@ -281,6 +303,7 @@ impl ProfileKey {
             .map_err(|_| anyhow!("wrapping the profile key failed"))?;
         Ok(Wrapped {
             kdf: "argon2id".into(),
+            normalization,
             memory_kib: params.memory_kib,
             iterations: params.iterations,
             parallelism: params.parallelism,
@@ -300,7 +323,7 @@ impl ProfileKey {
             iterations: wrapped.iterations,
             parallelism: wrapped.parallelism,
         };
-        let kek = kek(passphrase, &unhex(&wrapped.salt)?, params)?;
+        let kek = kek(passphrase, wrapped.normalization, &unhex(&wrapped.salt)?, params)?;
         let nonce = unhex(&wrapped.nonce)?;
         if nonce.len() != 24 {
             bail!("the wrapped key's nonce is {} bytes, not 24", nonce.len());
@@ -328,7 +351,7 @@ fn aad(profile: Uuid) -> Vec<u8> {
     aad
 }
 
-fn kek(passphrase: &str, salt: &[u8], params: KdfParams) -> Result<Zeroizing<[u8; 32]>> {
+fn kek(passphrase: &str, normalization: Normalization, salt: &[u8], params: KdfParams) -> Result<Zeroizing<[u8; 32]>> {
     let max = KdfParams::MAX;
     if params.memory_kib > max.memory_kib || params.iterations > max.iterations || params.parallelism > max.parallelism {
         bail!(
@@ -344,9 +367,10 @@ fn kek(passphrase: &str, salt: &[u8], params: KdfParams) -> Result<Zeroizing<[u8
     let params = argon2::Params::new(params.memory_kib, params.iterations, params.parallelism, Some(32))
         .map_err(|e| anyhow!("argon2 parameters: {e}"))?;
     let argon = argon2::Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params);
-    // NFC, so the passphrase hashes the same however the machine it is typed on composes
-    // its characters: a copied profile is meant to open on another one.
-    let passphrase: Zeroizing<String> = Zeroizing::new(passphrase.nfc().collect());
+    let passphrase: Zeroizing<String> = Zeroizing::new(match normalization {
+        Normalization::None => passphrase.to_string(),
+        Normalization::Nfc => passphrase.nfc().collect(),
+    });
     let mut out = Zeroizing::new([0u8; 32]);
     argon
         .hash_password_into(passphrase.as_bytes(), salt, out.as_mut_slice())
@@ -692,6 +716,18 @@ mod tests {
         let back = ProfileKey::unwrap(id, &wrapped, "cafe\u{301}").unwrap();
         assert_eq!(back.check(), key.check());
         assert!(ProfileKey::unwrap(id, &wrapped, "cafe").is_err());
+        assert_eq!(wrapped.normalization, Normalization::Nfc);
+
+        // A wrap from before normalisation was recorded takes the bytes as typed, and a
+        // manifest without the field reads as one.
+        let legacy = key.wrap_as("cafe\u{301}", TEST_KDF, Normalization::None).unwrap();
+        let mut toml_text = toml::to_string(&legacy).unwrap();
+        assert!(toml_text.contains("normalization = \"none\""));
+        toml_text = toml_text.replace("normalization = \"none\"\n", "");
+        let read: Wrapped = toml::from_str(&toml_text).unwrap();
+        assert_eq!(read, legacy);
+        assert_eq!(ProfileKey::unwrap(id, &read, "cafe\u{301}").unwrap().check(), key.check());
+        assert!(ProfileKey::unwrap(id, &read, "caf\u{e9}").is_err());
     }
 
     #[test]
