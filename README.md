@@ -109,6 +109,10 @@ cargo run -p beaconctl -- profile forget work             # drop this machine's 
 cargo run -p beaconctl -- profile remove-passphrase work  # back to this machine only
 ```
 
+Changing or removing the passphrase re-encrypts the databases under a new key, so an older
+copy of `profile.toml` no longer opens them with the passphrase it carried. If that is
+interrupted, nothing opens the profile until the same command is run again and finishes it.
+
 The session file and the picker history are not encrypted, nor, on Linux, is the isolated
 build's localStorage (`--isolated` keeps it in file areas there, not SQLite).
 

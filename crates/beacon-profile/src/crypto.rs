@@ -10,6 +10,11 @@
 //! folder. On a machine whose keychain does not hold the key yet, the passphrase unwraps it
 //! once and the keychain keeps it from then on.
 //!
+//! Changing or removing the passphrase moves the profile to a new key and re-encrypts the
+//! databases with it (`Profile::rotate_key`): re-wrapping the same key would leave every
+//! earlier copy of `profile.toml` able to open them with the passphrase it carried. While a
+//! rotation is under way the new key waits in the keychain's [`Slot::Next`].
+//!
 //! ```toml
 //! [crypto]
 //! version = 1
@@ -31,6 +36,7 @@ use chacha20poly1305::XChaCha20Poly1305;
 use hkdf::Hkdf;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
+use unicode_normalization::UnicodeNormalization;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
@@ -279,6 +285,9 @@ fn kek(passphrase: &str, salt: &[u8], params: KdfParams) -> Result<Zeroizing<[u8
     let params = argon2::Params::new(params.memory_kib, params.iterations, params.parallelism, Some(32))
         .map_err(|e| anyhow!("argon2 parameters: {e}"))?;
     let argon = argon2::Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params);
+    // NFC, so the passphrase hashes the same however the machine it is typed on composes
+    // its characters: a copied profile is meant to open on another one.
+    let passphrase: Zeroizing<String> = Zeroizing::new(passphrase.nfc().collect());
     let mut out = Zeroizing::new([0u8; 32]);
     argon
         .hash_password_into(passphrase.as_bytes(), salt, out.as_mut_slice())
@@ -286,12 +295,23 @@ fn kek(passphrase: &str, salt: &[u8], params: KdfParams) -> Result<Zeroizing<[u8
     Ok(out)
 }
 
+/// Which of a profile's keys the keychain is asked for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Slot {
+    /// The key the profile is on.
+    Current,
+    /// The key a rotation in progress is moving the profile to. Empty at any other time;
+    /// while it is filled, the databases may be on either key and nothing opens the
+    /// profile until the rotation is finished.
+    Next,
+}
+
 /// Where profile keys are kept on this machine.
 pub trait KeyStore {
-    /// The key filed for `profile`, `Ok(None)` when there is none.
-    fn get(&self, profile: Uuid) -> Result<Option<ProfileKey>>;
-    fn set(&self, key: &ProfileKey) -> Result<()>;
-    fn delete(&self, profile: Uuid) -> Result<()>;
+    /// The key filed for `profile` in `slot`, `Ok(None)` when there is none.
+    fn get(&self, profile: Uuid, slot: Slot) -> Result<Option<ProfileKey>>;
+    fn set(&self, key: &ProfileKey, slot: Slot) -> Result<()>;
+    fn delete(&self, profile: Uuid, slot: Slot) -> Result<()>;
 }
 
 /// The OS keychain: Keychain on macOS, Credential Manager on Windows, the Secret Service
@@ -308,15 +328,19 @@ impl OsKeychain {
 
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 impl OsKeychain {
-    fn entry(profile: Uuid) -> Result<keyring::Entry> {
-        keyring::Entry::new(KEYCHAIN_SERVICE, &format!("profile-{profile}")).context("opening the keychain")
+    fn entry(profile: Uuid, slot: Slot) -> Result<keyring::Entry> {
+        let account = match slot {
+            Slot::Current => format!("profile-{profile}"),
+            Slot::Next => format!("profile-{profile}.next"),
+        };
+        keyring::Entry::new(KEYCHAIN_SERVICE, &account).context("opening the keychain")
     }
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 impl KeyStore for OsKeychain {
-    fn get(&self, profile: Uuid) -> Result<Option<ProfileKey>> {
-        let entry = Self::entry(profile)?;
+    fn get(&self, profile: Uuid, slot: Slot) -> Result<Option<ProfileKey>> {
+        let entry = Self::entry(profile, slot)?;
         // Read as text, the way `set` writes it: on Windows a password is filed as UTF-16,
         // and the raw blob would not be the hex that went in.
         match entry.get_password() {
@@ -334,14 +358,14 @@ impl KeyStore for OsKeychain {
         }
     }
 
-    fn set(&self, key: &ProfileKey) -> Result<()> {
-        Self::entry(key.profile)?
+    fn set(&self, key: &ProfileKey, slot: Slot) -> Result<()> {
+        Self::entry(key.profile, slot)?
             .set_password(&key.filed())
             .context("storing the profile key in the keychain")
     }
 
-    fn delete(&self, profile: Uuid) -> Result<()> {
-        match Self::entry(profile)?.delete_credential() {
+    fn delete(&self, profile: Uuid, slot: Slot) -> Result<()> {
+        match Self::entry(profile, slot)?.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
             Err(e) => Err(e).context("removing the profile key from the keychain"),
         }
@@ -350,15 +374,15 @@ impl KeyStore for OsKeychain {
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 impl KeyStore for OsKeychain {
-    fn get(&self, _profile: Uuid) -> Result<Option<ProfileKey>> {
+    fn get(&self, _profile: Uuid, _slot: Slot) -> Result<Option<ProfileKey>> {
         Ok(None)
     }
 
-    fn set(&self, _key: &ProfileKey) -> Result<()> {
+    fn set(&self, _key: &ProfileKey, _slot: Slot) -> Result<()> {
         bail!("this platform has no keychain Beacon can use")
     }
 
-    fn delete(&self, _profile: Uuid) -> Result<()> {
+    fn delete(&self, _profile: Uuid, _slot: Slot) -> Result<()> {
         Ok(())
     }
 }
@@ -366,7 +390,7 @@ impl KeyStore for OsKeychain {
 /// A keychain in memory, for tests.
 #[derive(Default)]
 pub struct MemoryKeyStore {
-    keys: std::sync::Mutex<std::collections::HashMap<Uuid, ProfileKey>>,
+    keys: std::sync::Mutex<std::collections::HashMap<(Uuid, Slot), ProfileKey>>,
     refuse: bool,
 }
 
@@ -381,26 +405,26 @@ impl MemoryKeyStore {
 }
 
 impl KeyStore for MemoryKeyStore {
-    fn get(&self, profile: Uuid) -> Result<Option<ProfileKey>> {
-        Ok(self.keys.lock().unwrap().get(&profile).cloned())
+    fn get(&self, profile: Uuid, slot: Slot) -> Result<Option<ProfileKey>> {
+        Ok(self.keys.lock().unwrap().get(&(profile, slot)).cloned())
     }
 
-    fn set(&self, key: &ProfileKey) -> Result<()> {
+    fn set(&self, key: &ProfileKey, slot: Slot) -> Result<()> {
         if self.refuse {
             bail!("keychain unavailable");
         }
-        self.keys.lock().unwrap().insert(key.profile, key.clone());
+        self.keys.lock().unwrap().insert((key.profile, slot), key.clone());
         Ok(())
     }
 
-    fn delete(&self, profile: Uuid) -> Result<()> {
-        self.keys.lock().unwrap().remove(&profile);
+    fn delete(&self, profile: Uuid, slot: Slot) -> Result<()> {
+        self.keys.lock().unwrap().remove(&(profile, slot));
         Ok(())
     }
 }
 
 /// Hex, built in place: no per-byte temporaries, since the input may be the key itself.
-fn hex(bytes: &[u8]) -> String {
+pub(crate) fn hex(bytes: &[u8]) -> String {
     let mut s = String::with_capacity(bytes.len() * 2);
     for b in bytes {
         s.push(char::from_digit(u32::from(b >> 4), 16).unwrap_or('0'));
@@ -454,6 +478,17 @@ mod tests {
         let err = ProfileKey::unwrap(id, &wrapped, "wrong").unwrap_err();
         assert!(err.to_string().contains("wrong passphrase"), "{err}");
         assert!(ProfileKey::unwrap(Uuid::new_v4(), &wrapped, "correct horse").is_err());
+    }
+
+    #[test]
+    fn a_passphrase_opens_however_its_characters_are_composed() {
+        let id = Uuid::new_v4();
+        let key = ProfileKey::generate(id);
+        // "café" with a precomposed é, then with e plus a combining acute.
+        let wrapped = key.wrap("caf\u{e9}", TEST_KDF).unwrap();
+        let back = ProfileKey::unwrap(id, &wrapped, "cafe\u{301}").unwrap();
+        assert_eq!(back.check(), key.check());
+        assert!(ProfileKey::unwrap(id, &wrapped, "cafe").is_err());
     }
 
     #[test]
