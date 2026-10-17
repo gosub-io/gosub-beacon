@@ -36,6 +36,8 @@ use chacha20poly1305::XChaCha20Poly1305;
 use hkdf::Hkdf;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
+use std::fs;
+use std::path::{Path, PathBuf};
 use unicode_normalization::UnicodeNormalization;
 use uuid::Uuid;
 use zeroize::Zeroizing;
@@ -46,6 +48,14 @@ pub const CRYPTO_VERSION: u32 = 1;
 
 /// The keychain service every profile key is filed under; the account is `profile-<id>`.
 pub const KEYCHAIN_SERVICE: &str = "gosub-beacon";
+
+/// The first bytes of a file [`ProfileKey::seal`] wrote.
+pub const SEALED_MAGIC: &[u8; 8] = b"GSBSEAL1";
+
+/// Whether `data` is a sealed file, as opposed to one written before Beacon sealed them.
+pub fn is_sealed(data: &[u8]) -> bool {
+    data.starts_with(SEALED_MAGIC)
+}
 
 /// `[crypto]` in `profile.toml`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -178,10 +188,59 @@ impl ProfileKey {
         Self::from_bytes(profile, secret)
     }
 
-    /// The key for one store's database. Salted with the profile id, so the same key in two
-    /// profiles (a copied folder given a new id) still gives different store keys.
+    /// The key for one store's database. Salted with the profile id, so two profiles that
+    /// somehow share key bytes still have different store keys. That makes the id part of
+    /// the key material: it never changes for a folder, or nothing in it would open.
     pub fn store_key(&self, store: Store) -> Zeroizing<[u8; 32]> {
         self.derive(store.info())
+    }
+
+    /// Encrypt one of the profile's small files (the open tabs, the pickers' history): a
+    /// key derived for `name`, XChaCha20-Poly1305 with a random nonce and the name as
+    /// associated data, behind [`SEALED_MAGIC`] so a file from before sealing is told apart.
+    pub fn seal(&self, name: &str, plaintext: &[u8]) -> Result<Vec<u8>> {
+        let key = self.file_key(name);
+        let nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
+        let sealed = XChaCha20Poly1305::new(key.as_slice().into())
+            .encrypt(
+                &nonce,
+                Payload {
+                    msg: plaintext,
+                    aad: name.as_bytes(),
+                },
+            )
+            .map_err(|_| anyhow!("sealing {name} failed"))?;
+        let mut out = Vec::with_capacity(SEALED_MAGIC.len() + nonce.len() + sealed.len());
+        out.extend_from_slice(SEALED_MAGIC);
+        out.extend_from_slice(&nonce);
+        out.extend_from_slice(&sealed);
+        Ok(out)
+    }
+
+    /// The plaintext of a file [`seal`](Self::seal) wrote under this key and `name`.
+    pub fn unseal(&self, name: &str, sealed: &[u8]) -> Result<Vec<u8>> {
+        let Some(body) = sealed.strip_prefix(SEALED_MAGIC) else {
+            bail!("{name} is not a sealed file");
+        };
+        if body.len() < 24 {
+            bail!("{name} is cut short");
+        }
+        let (nonce, sealed) = body.split_at(24);
+        XChaCha20Poly1305::new(self.file_key(name).as_slice().into())
+            .decrypt(
+                nonce.into(),
+                Payload {
+                    msg: sealed,
+                    aad: name.as_bytes(),
+                },
+            )
+            .map_err(|_| anyhow!("{name} was not sealed with this profile's key"))
+    }
+
+    fn file_key(&self, name: &str) -> Zeroizing<[u8; 32]> {
+        let mut info = b"gosub-beacon file v1 ".to_vec();
+        info.extend_from_slice(name.as_bytes());
+        self.derive(&info)
     }
 
     fn derive(&self, info: &[u8]) -> Zeroizing<[u8; 32]> {
@@ -319,8 +378,8 @@ pub trait KeyStore {
 pub struct OsKeychain;
 
 impl OsKeychain {
-    /// The keychain, or `None` on a platform that has none Beacon can use. Android's
-    /// keystore is not wired up yet; there, no profile opens.
+    /// The keychain, or `None` on a platform that has none Beacon can use: Android, where
+    /// the key goes into a [`FileKeyStore`] in the app's private storage instead.
     pub fn new() -> Option<Self> {
         cfg!(any(target_os = "linux", target_os = "macos", target_os = "windows")).then_some(Self)
     }
@@ -384,6 +443,81 @@ impl KeyStore for OsKeychain {
 
     fn delete(&self, _profile: Uuid, _slot: Slot) -> Result<()> {
         Ok(())
+    }
+}
+
+/// Keys in files of their own, for a platform without a keychain Beacon can use: Android,
+/// where the app's private storage, which no other app reads, stands in for one. The folder
+/// is outside every profile, so a copied profile folder still travels without its key.
+/// Owner-only files, each written whole and renamed into place.
+pub struct FileKeyStore {
+    dir: PathBuf,
+}
+
+impl FileKeyStore {
+    pub fn new(dir: impl Into<PathBuf>) -> Self {
+        Self { dir: dir.into() }
+    }
+
+    pub fn dir(&self) -> &Path {
+        &self.dir
+    }
+
+    fn path(&self, profile: Uuid, slot: Slot) -> PathBuf {
+        self.dir.join(match slot {
+            Slot::Current => profile.to_string(),
+            Slot::Next => format!("{profile}.next"),
+        })
+    }
+}
+
+impl KeyStore for FileKeyStore {
+    fn get(&self, profile: Uuid, slot: Slot) -> Result<Option<ProfileKey>> {
+        let path = self.path(profile, slot);
+        match fs::read(&path) {
+            Ok(filed) => {
+                let filed = Zeroizing::new(filed);
+                Ok(Some(ProfileKey::from_filed(profile, &filed)?))
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e).with_context(|| format!("reading the profile key from {}", path.display())),
+        }
+    }
+
+    fn set(&self, key: &ProfileKey, slot: Slot) -> Result<()> {
+        fs::create_dir_all(&self.dir).with_context(|| format!("creating {}", self.dir.display()))?;
+        let path = self.path(key.profile, slot);
+        // Appended, not swapped in for an extension: `<id>` and `<id>.next` must not share
+        // a temp file.
+        let mut tmp = path.clone().into_os_string();
+        tmp.push(".tmp");
+        let tmp = PathBuf::from(tmp);
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+            fs::set_permissions(&self.dir, fs::Permissions::from_mode(0o700))
+                .with_context(|| format!("setting the mode of {}", self.dir.display()))?;
+            options.mode(0o600);
+        }
+        {
+            use std::io::Write;
+            let mut file = options.open(&tmp).with_context(|| format!("writing {}", tmp.display()))?;
+            file.write_all(key.filed().as_bytes())
+                .and_then(|()| file.sync_all())
+                .with_context(|| format!("writing {}", tmp.display()))?;
+        }
+        fs::rename(&tmp, &path).with_context(|| format!("writing {}", path.display()))
+    }
+
+    fn delete(&self, profile: Uuid, slot: Slot) -> Result<()> {
+        let path = self.path(profile, slot);
+        match fs::remove_file(&path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e).with_context(|| format!("removing {}", path.display())),
+        }
     }
 }
 
@@ -478,6 +612,48 @@ mod tests {
         let err = ProfileKey::unwrap(id, &wrapped, "wrong").unwrap_err();
         assert!(err.to_string().contains("wrong passphrase"), "{err}");
         assert!(ProfileKey::unwrap(Uuid::new_v4(), &wrapped, "correct horse").is_err());
+    }
+
+    #[test]
+    fn a_sealed_file_opens_only_under_its_key_and_name() {
+        let id = Uuid::new_v4();
+        let key = ProfileKey::generate(id);
+        let sealed = key.seal("session.tabs", b"*https://example.org/\n").unwrap();
+        assert!(is_sealed(&sealed));
+        assert!(!sealed.windows(7).any(|w| w == b"example"));
+        assert_eq!(key.unseal("session.tabs", &sealed).unwrap(), b"*https://example.org/\n");
+        assert!(key.unseal("picker-clock.txt", &sealed).is_err());
+        assert!(ProfileKey::generate(id).unseal("session.tabs", &sealed).is_err());
+        assert!(key.unseal("session.tabs", b"plain text").is_err());
+        assert!(key.unseal("session.tabs", &sealed[..20]).is_err());
+        // Two seals of the same bytes differ: the nonce is fresh each time.
+        assert_ne!(key.seal("session.tabs", b"x").unwrap(), key.seal("session.tabs", b"x").unwrap());
+    }
+
+    #[test]
+    fn file_key_store_keeps_keys_in_private_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = FileKeyStore::new(tmp.path().join("keys"));
+        let id = Uuid::new_v4();
+        assert!(store.get(id, Slot::Current).unwrap().is_none());
+        let key = ProfileKey::generate(id);
+        store.set(&key, Slot::Current).unwrap();
+        store.set(&ProfileKey::generate(id), Slot::Next).unwrap();
+        assert_eq!(*store.get(id, Slot::Current).unwrap().unwrap().bytes, *key.bytes);
+        assert_ne!(*store.get(id, Slot::Next).unwrap().unwrap().bytes, *key.bytes);
+        let filed = std::fs::read_to_string(tmp.path().join("keys").join(id.to_string())).unwrap();
+        assert_eq!(filed, *key.filed());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode(&tmp.path().join("keys")), 0o700);
+            assert_eq!(mode(&tmp.path().join("keys").join(id.to_string())), 0o600);
+        }
+        store.delete(id, Slot::Next).unwrap();
+        store.delete(id, Slot::Next).unwrap();
+        assert!(store.get(id, Slot::Next).unwrap().is_none());
+        assert!(store.get(id, Slot::Current).unwrap().is_some());
     }
 
     #[test]

@@ -814,15 +814,18 @@ fn color_row(entry: &Named) -> ListBoxRow {
 
 // ── quick-swatch storage ────────────────────────────────────────────────────
 
-fn swatches_path() -> std::path::PathBuf {
-    beacon_core::paths::profile_dir().join("picker-swatches.txt")
-}
+/// Beside the rest of the profile, sealed with its key like every small file there.
+const SWATCHES_FILE: &str = "picker-swatches.txt";
 
 /// The quick swatches, one hex per line beside the rest of the profile. Small enough that a
 /// file is kinder than a settings table, and it survives a profile copy like everything else
 /// there does.
 fn load_swatches() -> Vec<CssColor> {
-    let text = std::fs::read_to_string(swatches_path()).unwrap_or_default();
+    let text = beacon_core::paths::read_profile_file(SWATCHES_FILE)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let text = String::from_utf8_lossy(&text);
     let stored: Vec<CssColor> = text.lines().filter_map(CssColor::parse).collect();
     if stored.is_empty() {
         DEFAULT_SWATCHES.iter().filter_map(|hex| CssColor::parse(hex)).collect()
@@ -833,7 +836,7 @@ fn load_swatches() -> Vec<CssColor> {
 
 fn save_swatches(swatches: &[CssColor]) {
     let text: String = swatches.iter().map(|c| format!("{}\n", c.hex_with_alpha())).collect();
-    if let Err(error) = std::fs::write(swatches_path(), text) {
-        log::warn!(target: "gtk", "could not save the picker's quick swatches: {error}");
+    if let Err(error) = beacon_core::paths::write_profile_file(SWATCHES_FILE, text.as_bytes()) {
+        log::warn!(target: "gtk", "could not save the picker's quick swatches: {error:#}");
     }
 }

@@ -71,10 +71,18 @@ const LEGACY_FILES: &[&str] = &[
 /// Left behind by the shell-side fetcher Beacon dropped; nothing reads it.
 const STALE_FILES: &[&str] = &["fetcher-cookies.db"];
 
+/// The small files beside the databases, each sealed with the profile key
+/// ([`ProfileKey::seal`]): the open tabs and the pickers' history. Read and written through
+/// [`Profile::read_sealed`] and [`Profile::write_sealed`].
+pub const SEALED_FILES: &[&str] = &["session.tabs", "picker-swatches.txt", "picker-clock.txt"];
+
 /// `profile.toml`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Manifest {
     pub schema: u32,
+    /// Never changes for a folder: it salts every key derived from the profile key, binds
+    /// the passphrase-wrapped key, and names the keychain entry. A folder given a new id
+    /// would open nothing.
     pub id: Uuid,
     pub name: String,
     /// The Beacon version that created the profile.
@@ -186,12 +194,17 @@ impl Roots {
             if !dir.is_dir() {
                 continue;
             }
-            if let Some(manifest) = Manifest::read(&dir)? {
-                out.push(Profile {
+            match Manifest::read(&dir)? {
+                Some(manifest) => out.push(Profile {
                     cache_dir: self.cache.join(manifest.id.to_string()),
                     dir,
                     manifest,
-                });
+                }),
+                None if holds_encrypted_stores(&dir) || holds_legacy_files(&dir) => log::warn!(
+                    "{} holds a profile's files but no {MANIFEST}, so it is skipped; restore the manifest from a backup to get the profile back",
+                    dir.display()
+                ),
+                None => {}
             }
         }
         out.sort_by(|a, b| a.manifest.name.cmp(&b.manifest.name));
@@ -352,6 +365,14 @@ impl Profile {
         let manifest = match Manifest::read(dir)? {
             Some(manifest) => manifest,
             None => {
+                // A new manifest is a new id, and the id is key material: the databases
+                // already encrypted here would open under no key after it.
+                if holds_encrypted_stores(dir) {
+                    bail!(
+                        "{} holds encrypted databases but no {MANIFEST}; restore the manifest from a backup, since a new one would give the profile an id its key does not open under",
+                        dir.display()
+                    );
+                }
                 let zone = if holds_legacy_files(dir) { LEGACY_ZONE } else { Uuid::new_v4() };
                 let name = dir.file_name().map_or("profile".into(), |n| n.to_string_lossy().into_owned());
                 let manifest = Manifest::new(&name, zone, version);
@@ -536,11 +557,12 @@ impl Profile {
     /// `rekey` is handed each store file that exists with its old and new store key, and
     /// must make it open with the new one: re-encrypt it when it opens with the old key,
     /// leave it when it already opens with the new one, and fail on one that opens with
-    /// neither. The new key is filed in the keychain's [`Slot::Next`] before the first
-    /// file is touched and the manifest is written before the current slot moves, so a
-    /// rotation that stops partway (a crash, a failing `rekey`) loses nothing: until it is
-    /// called again and finishes, every way into the profile reports [`Rotating`]. Call
-    /// with the profile locked.
+    /// neither. The [`SEALED_FILES`] are re-sealed here, since this crate holds that cipher.
+    /// The new key is filed in the keychain's [`Slot::Next`] before the first file is
+    /// touched and the manifest is written before the current slot moves, so a rotation
+    /// that stops partway (a crash, a failing `rekey`) loses nothing: until it is called
+    /// again and finishes, every way into the profile reports [`Rotating`]. Call with the
+    /// profile locked.
     pub fn rotate_key(
         &mut self,
         keys: &dyn KeyStore,
@@ -576,6 +598,10 @@ impl Profile {
             if path.exists() {
                 rekey(&path, &old.store_key(store), &new.store_key(store)).with_context(|| format!("re-encrypting {}", path.display()))?;
             }
+        }
+        for name in SEALED_FILES {
+            self.reseal(name, &old, &new)
+                .with_context(|| format!("re-encrypting {}", self.dir.join(name).display()))?;
         }
         self.manifest.crypto = Some(Crypto {
             version: CRYPTO_VERSION,
@@ -642,13 +668,69 @@ impl Profile {
         self.manifest.crypto.as_ref().is_some_and(|c| c.passphrase.is_some())
     }
 
-    /// Whether any store in the folder is a database that is not plaintext SQLite. Judged by
-    /// the file header alone, as the engine judges what to encrypt: this crate does not
-    /// open databases.
+    /// Whether any store in the folder is a database that is not plaintext SQLite.
     fn has_encrypted_store(&self) -> bool {
-        Store::ALL
-            .iter()
-            .any(|store| is_encrypted_database(&self.dir.join(store.file_name())))
+        holds_encrypted_stores(&self.dir)
+    }
+}
+
+/// The sealed files: the small ones beside the databases, encrypted with the profile key.
+impl Profile {
+    /// `name`, one of [`SEALED_FILES`], decrypted; `None` when there is none. A file written
+    /// before Beacon sealed these is read as it is, and the next write seals it.
+    pub fn read_sealed(&self, key: &ProfileKey, name: &str) -> Result<Option<Vec<u8>>> {
+        let path = self.dir.join(name);
+        let data = match fs::read(&path) {
+            Ok(data) => data,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+        };
+        if crypto::is_sealed(&data) {
+            return Ok(Some(
+                key.unseal(name, &data).with_context(|| format!("opening {}", path.display()))?,
+            ));
+        }
+        Ok(Some(data))
+    }
+
+    /// Write `name`, one of [`SEALED_FILES`], sealed with `key`.
+    pub fn write_sealed(&self, key: &ProfileKey, name: &str, plaintext: &[u8]) -> Result<()> {
+        write_atomic(&self.dir.join(name), &key.seal(name, plaintext)?)
+    }
+
+    /// Seal every one of [`SEALED_FILES`] still in plaintext: what a profile holds when it
+    /// gets its key, or what a Beacon from before sealing wrote. Safe to run on every start.
+    pub fn seal_plaintext_files(&self, key: &ProfileKey) -> Result<()> {
+        for name in SEALED_FILES {
+            let path = self.dir.join(name);
+            match fs::read(&path) {
+                Ok(data) if !crypto::is_sealed(&data) => write_atomic(&path, &key.seal(name, &data)?)?,
+                Ok(_) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+            }
+        }
+        Ok(())
+    }
+
+    /// Move `name` from `old` to `new` for [`Profile::rotate_key`]: nothing when it is
+    /// missing or already on `new`; a plaintext one is sealed on the way.
+    fn reseal(&self, name: &str, old: &ProfileKey, new: &ProfileKey) -> Result<()> {
+        let path = self.dir.join(name);
+        let data = match fs::read(&path) {
+            Ok(data) => data,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+        };
+        let plaintext = if crypto::is_sealed(&data) {
+            if new.unseal(name, &data).is_ok() {
+                return Ok(());
+            }
+            old.unseal(name, &data)?
+        } else {
+            data
+        };
+        write_atomic(&path, &new.seal(name, &plaintext)?)
     }
 
     fn crypto(&self) -> Result<&Crypto> {
@@ -759,6 +841,12 @@ fn holds_legacy_files(dir: &Path) -> bool {
     LEGACY_FILES.iter().any(|name| dir.join(name).exists())
 }
 
+/// Whether any store in `dir` is a database that is not plaintext SQLite. Judged by the file
+/// header alone, as the engine judges what to encrypt: this crate does not open databases.
+fn holds_encrypted_stores(dir: &Path) -> bool {
+    Store::ALL.iter().any(|store| is_encrypted_database(&dir.join(store.file_name())))
+}
+
 /// Whether `path` holds a database that is not plaintext SQLite: a full header that is not
 /// SQLite's. A missing, empty or short file is nothing at all, and an unreadable one is
 /// left for whatever opens it to report.
@@ -771,9 +859,9 @@ fn is_encrypted_database(path: &Path) -> bool {
     }
 }
 
-/// Create `dir` and make it readable by the owner only: a profile keeps its session file
-/// and picker history in plain text, and its databases too until the first start encrypts
-/// them; the folder mode is what keeps other users out of every file inside.
+/// Create `dir` and make it readable by the owner only: a profile's files are in plain text
+/// until its first keyed start encrypts them, and the lock and manifest always are; the
+/// folder mode is what keeps other users out of every file inside.
 fn make_private_dir(dir: &Path) -> Result<()> {
     fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     #[cfg(unix)]
@@ -785,9 +873,9 @@ fn make_private_dir(dir: &Path) -> Result<()> {
 }
 
 /// Write via a temp file and rename, so a crash leaves the old file or the new one.
-fn write_atomic(path: &Path, text: &str) -> Result<()> {
+fn write_atomic(path: &Path, data: impl AsRef<[u8]>) -> Result<()> {
     let tmp = path.with_extension("tmp");
-    fs::write(&tmp, text).with_context(|| format!("writing {}", tmp.display()))?;
+    fs::write(&tmp, data).with_context(|| format!("writing {}", tmp.display()))?;
     fs::rename(&tmp, path).with_context(|| format!("writing {}", path.display()))
 }
 
@@ -1098,6 +1186,65 @@ mod tests {
         assert!(keys.get(p.id(), Slot::Next).unwrap().is_none());
         assert_eq!(p.unlock(Some(&keys)).unwrap().check(), done.check());
         assert!(!p.has_passphrase());
+    }
+
+    #[test]
+    fn a_folder_whose_manifest_is_gone_is_not_given_a_new_id() {
+        let tmp = tempfile::tempdir().unwrap();
+        let roots = roots(&tmp);
+        let dir = tmp.path().join("copied");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join(Store::Places.file_name()), b"not SQLite at all, sixteen bytes and more").unwrap();
+        let err = roots.open(&Selection::Dir(dir.clone()), V).unwrap_err();
+        assert!(err.to_string().contains(MANIFEST), "{err}");
+        assert!(!dir.join(MANIFEST).exists());
+    }
+
+    #[test]
+    fn the_small_files_are_sealed_and_plaintext_ones_still_read() {
+        let tmp = tempfile::tempdir().unwrap();
+        let roots = roots(&tmp);
+        let keys = crypto::MemoryKeyStore::default();
+        let mut p = roots.open(&Selection::Default, V).unwrap();
+        let key = p.unlock(Some(&keys)).unwrap();
+        assert_eq!(p.read_sealed(&key, "session.tabs").unwrap(), None);
+
+        p.write_sealed(&key, "session.tabs", b"*https://example.org/\n").unwrap();
+        let on_disk = fs::read(p.dir.join("session.tabs")).unwrap();
+        assert!(crypto::is_sealed(&on_disk) && !on_disk.windows(7).any(|w| w == b"example"));
+        assert_eq!(p.read_sealed(&key, "session.tabs").unwrap().unwrap(), b"*https://example.org/\n");
+        assert!(p.read_sealed(&ProfileKey::generate(p.id()), "session.tabs").is_err());
+
+        // A file from before sealing reads as it is, and the first keyed start seals it.
+        fs::write(p.dir.join("picker-clock.txt"), "12\n").unwrap();
+        assert_eq!(p.read_sealed(&key, "picker-clock.txt").unwrap().unwrap(), b"12\n");
+        p.seal_plaintext_files(&key).unwrap();
+        assert!(crypto::is_sealed(&fs::read(p.dir.join("picker-clock.txt")).unwrap()));
+        assert_eq!(p.read_sealed(&key, "picker-clock.txt").unwrap().unwrap(), b"12\n");
+        // Sealed already: left as it is.
+        let before = fs::read(p.dir.join("session.tabs")).unwrap();
+        p.seal_plaintext_files(&key).unwrap();
+        assert_eq!(fs::read(p.dir.join("session.tabs")).unwrap(), before);
+    }
+
+    #[test]
+    fn a_rotation_reseals_the_small_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let roots = roots(&tmp);
+        let keys = crypto::MemoryKeyStore::default();
+        let mut p = roots.open(&Selection::Default, V).unwrap();
+        let first = p.unlock(Some(&keys)).unwrap();
+        seal_fake_stores(&p, &first);
+        p.set_passphrase(&first, "pw", crypto::TEST_KDF).unwrap();
+        p.write_sealed(&first, "session.tabs", b"*https://example.org/\n").unwrap();
+        fs::write(p.dir.join("picker-swatches.txt"), "#ff0000\n").unwrap();
+
+        let second = p.rotate_key(&keys, None, crypto::TEST_KDF, &mut fake_rekey).unwrap();
+        assert!(p.read_sealed(&first, "session.tabs").is_err());
+        assert_eq!(p.read_sealed(&second, "session.tabs").unwrap().unwrap(), b"*https://example.org/\n");
+        assert!(crypto::is_sealed(&fs::read(p.dir.join("picker-swatches.txt")).unwrap()));
+        assert_eq!(p.read_sealed(&second, "picker-swatches.txt").unwrap().unwrap(), b"#ff0000\n");
+        assert_eq!(p.read_sealed(&second, "picker-clock.txt").unwrap(), None);
     }
 
     #[test]

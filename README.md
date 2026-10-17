@@ -113,8 +113,14 @@ Changing or removing the passphrase re-encrypts the databases under a new key, s
 copy of `profile.toml` no longer opens them with the passphrase it carried. If that is
 interrupted, nothing opens the profile until the same command is run again and finishes it.
 
-The session file and the picker history are not encrypted, nor, on Linux, is the isolated
-build's localStorage (`--isolated` keeps it in file areas there, not SQLite).
+The session file and the picker history are sealed with the same key. What this protects is
+a profile folder that is copied, synced or backed up: without the key from the keychain or
+the passphrase, nothing in it opens. It does not protect against another process running as
+the same user, which can ask the keychain like Beacon does. Still in plain text: on Linux the
+isolated build's localStorage (`--isolated` keeps it in file areas, not SQLite), the cache
+(outside the profile, and never exported), and whatever blocks of the databases from before
+the first encryption the filesystem has not yet reused. On Android, which has no keychain
+Beacon can use, the key is a file in the app's private storage next to the profile.
 
 ## Building and running on macOS
 

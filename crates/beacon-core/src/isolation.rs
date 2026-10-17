@@ -17,6 +17,10 @@ use std::path::{Path, PathBuf};
 /// node read-write; Landlock counts that as a file write.
 pub fn lock_down_broker() {
     let mut writable: Vec<PathBuf> = vec![crate::paths::profile_dir().into(), crate::paths::cache_dir().into()];
+    // Where keys are files rather than keychain entries, their folder is outside both.
+    if let Some(keys) = crate::paths::keys_dir() {
+        writable.push(keys.into());
+    }
     // Downloads go wherever the save dialog points; anywhere outside these fails under
     // the lockdown.
     if let Some(downloads) = dirs::download_dir() {
