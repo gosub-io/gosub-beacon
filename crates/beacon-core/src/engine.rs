@@ -42,8 +42,8 @@ impl<C: RenderConfiguration<CompositorSink = DefaultCompositor>> BeaconConfig fo
 pub struct BrowserEngine<C: BeaconConfig> {
     /// Bookmarks + visited history store, shared with the engine's zone.
     places: gosub_engine::places::PlacesHandle,
-    /// Kept alive so the engine keeps running for the lifetime of the window.
-    #[allow(dead_code)]
+    /// Kept alive so the engine keeps running for the lifetime of the window; stopped by
+    /// [`BrowserEngine::shutdown`].
     engine: GosubEngine<C>,
     zone: Zone<C>,
     /// Shared compositor; clone the `Arc` into draw callbacks to read frames.
@@ -279,6 +279,22 @@ impl<C: BeaconConfig> BrowserEngine<C> {
             event_rx: Some(event_rx),
             resource_rx: Some(resource_rx),
         })
+    }
+
+    /// Stop the engine and wait for it: every tab's worker has exited, and the zone's
+    /// fetcher and the I/O thread are down, when this returns. Blocks on the runtime.
+    ///
+    /// Dropping the engine instead leaves the workers winding down on the runtime's
+    /// threads after the caller has moved on. A host that exits right after races them:
+    /// SQLCipher's exit-time cleanup frees what a worker closing its database still uses.
+    pub fn shutdown(self, rt: &Runtime) {
+        let Self { mut engine, zone, .. } = self;
+        rt.block_on(async {
+            engine.close_zone(zone).await;
+            if let Err(e) = engine.shutdown().await {
+                log::warn!("engine shutdown: {e:?}");
+            }
+        });
     }
 
     /// Bookmarks + visited history (star button, bookmarks bar, URL completion).

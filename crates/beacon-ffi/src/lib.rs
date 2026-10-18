@@ -766,12 +766,16 @@ pub unsafe extern "C" fn beacon_new(config: *const BeaconConfig) -> *mut BeaconB
 
 /// Destroy a browser. Safe to call with NULL.
 ///
+/// Returns once the engine has stopped: every tab closed and its storage released. The
+/// host may exit straight after.
+///
 /// # Safety
 /// `browser` must have come from [`beacon_new`] and must not be used afterwards.
 #[no_mangle]
 pub unsafe extern "C" fn beacon_free(browser: *mut BeaconBrowser) {
     if !browser.is_null() {
-        drop(unsafe { Box::from_raw(browser) });
+        let browser = *unsafe { Box::from_raw(browser) };
+        browser.engine.shutdown(runtime());
     }
 }
 

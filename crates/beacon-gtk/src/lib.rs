@@ -15,7 +15,7 @@ mod window;
 
 use crate::application::Application;
 use gtk4::gdk::Display;
-use gtk4::prelude::{ApplicationExt, ApplicationExtManual};
+use gtk4::prelude::{ActionGroupExt, ApplicationExt, ApplicationExtManual, ToVariant};
 use gtk4::{gio, CssProvider};
 use std::sync::OnceLock;
 use tokio::runtime::Runtime;
@@ -106,8 +106,13 @@ pub fn run() {
     });
     // Keep GTK away from argv: it is ours, already parsed, and plain `app.run()` would
     // reject the URLs and flags as unknown options.
-    let _ = cli;
     let argv0: Vec<String> = std::env::args().take(1).collect();
+    // A second launch only presents the running instance, which never sees this argv: its
+    // URLs go over as an action first. Registering is what tells the two apart, and `run`
+    // registers anyway; both D-Bus calls are flushed before it returns.
+    if !cli.urls.is_empty() && app.register(gio::Cancellable::NONE).is_ok() && app.is_remote() {
+        app.activate_action(application::OPEN_URLS, Some(&cli.urls.to_variant()));
+    }
     app.run_with_args(&argv0);
 }
 

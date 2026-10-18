@@ -161,6 +161,19 @@ impl BrowserWindow {
         window
     }
 
+    /// Open `urls` as tabs in this window, as a second launch asks the running Beacon to.
+    pub fn open_urls(&self, urls: Vec<String>) {
+        let sender = self.imp().get_sender();
+        spawn_future_local(async move {
+            for url in urls {
+                if sender.send(Message::OpenTab(url, "New Tab".to_string())).await.is_err() {
+                    return;
+                }
+            }
+            let _ = sender.send(Message::RefreshTabs()).await;
+        });
+    }
+
     fn connect_accelerators(app: &Application, _window: &Self) {
         // Every binding, its title and its group live in one table, which the shortcuts
         // window is built from as well: see `crate::shortcuts`.
