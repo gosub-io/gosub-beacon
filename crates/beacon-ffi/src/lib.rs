@@ -767,7 +767,7 @@ pub unsafe extern "C" fn beacon_new(config: *const BeaconConfig) -> *mut BeaconB
 /// Destroy a browser. Safe to call with NULL.
 ///
 /// Returns once the engine has stopped: every tab closed and its storage released. The
-/// host may exit straight after.
+/// host may exit straight after. Safe to call from any thread, a Tokio task's included.
 ///
 /// # Safety
 /// `browser` must have come from [`beacon_new`] and must not be used afterwards.
@@ -775,7 +775,12 @@ pub unsafe extern "C" fn beacon_new(config: *const BeaconConfig) -> *mut BeaconB
 pub unsafe extern "C" fn beacon_free(browser: *mut BeaconBrowser) {
     if !browser.is_null() {
         let browser = *unsafe { Box::from_raw(browser) };
-        browser.engine.shutdown(runtime());
+        let BeaconBrowser { engine, .. } = browser;
+        // `shutdown` blocks on the runtime, and blocking inside one panics: a host calling
+        // this from a Tokio task would abort. A thread of its own is inside none.
+        std::thread::scope(|s| {
+            s.spawn(|| engine.shutdown(runtime()));
+        });
     }
 }
 

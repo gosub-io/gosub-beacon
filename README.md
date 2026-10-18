@@ -119,7 +119,10 @@ interrupted, nothing opens the profile until the same command is run again and f
 
 The session file and the picker history are sealed with the same key. What this protects is
 a profile folder that is copied, synced or backed up: without the key from the keychain or
-the passphrase, nothing in it opens. It does not protect against another process running as
+the passphrase, none of its databases or sealed files opens. `profile.toml` itself stays
+readable: the profile's name, id, zones, the Beacon versions that made and last opened it,
+and the encryption metadata (the key check, and the passphrase-wrapped key with its salt and
+Argon2 cost). It does not protect against another process running as
 the same user, which can ask the keychain like Beacon does. Still in plain text: on Linux the
 isolated build's localStorage (`--isolated` keeps it in file areas, not SQLite), the cache
 (outside the profile, and never exported), and whatever blocks of the databases from before

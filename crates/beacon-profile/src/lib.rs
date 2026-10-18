@@ -52,6 +52,8 @@ const CACHE_VERSION: &str = "1";
 pub const MANIFEST: &str = "profile.toml";
 const LOCK: &str = "lock";
 const DEFAULTS: &str = "profiles.toml";
+/// At the data root: held while a profile is picked, created or migrated.
+const ROOTS_LOCK: &str = "profiles.lock";
 
 /// What Beacon wrote into its data directory before profiles existed. Moved into the
 /// first profile on migration, and the sign that a folder without a manifest is a profile.
@@ -129,7 +131,22 @@ impl Manifest {
         Ok(Some(manifest))
     }
 
+    /// Refuse a manifest from a newer Beacon: this build would write it back with only
+    /// the fields it knows, dropping the rest.
+    fn ensure_understood(&self) -> Result<()> {
+        if self.schema > SCHEMA {
+            bail!(
+                "profile {:?} was written by a newer Beacon ({}, profile layout {}); this build understands layout {SCHEMA}",
+                self.name,
+                self.last_opened_by,
+                self.schema
+            );
+        }
+        Ok(())
+    }
+
     fn write(&self, dir: &Path) -> Result<()> {
+        self.ensure_understood()?;
         let text = toml::to_string_pretty(self)?;
         write_atomic(&dir.join(MANIFEST), &text)
     }
@@ -238,8 +255,31 @@ impl Roots {
             .find(|p| Some(p.manifest.id) == id || p.manifest.name.eq_ignore_ascii_case(key)))
     }
 
-    /// A new, empty profile. The first one made becomes the default.
+    /// A new, empty profile. The first one made becomes the default. The old flat layout is
+    /// migrated first, so it still becomes the profile it was.
     pub fn create(&self, name: &str, version: &str) -> Result<Profile> {
+        let _lock = self.lock()?;
+        self.migrate_legacy(version)?;
+        self.create_locked(name, version)
+    }
+
+    /// Hold the data root while a profile is picked, created or migrated. Two Beacons
+    /// started at once would otherwise each make a "default" and run apart. Blocks: the
+    /// other side holds it for a moment only.
+    fn lock(&self) -> Result<File> {
+        make_private_dir(&self.data)?;
+        let path = self.data.join(ROOTS_LOCK);
+        let file = File::options()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&path)
+            .with_context(|| format!("opening {}", path.display()))?;
+        file.lock().with_context(|| format!("locking {}", path.display()))?;
+        Ok(file)
+    }
+
+    fn create_locked(&self, name: &str, version: &str) -> Result<Profile> {
         let name = name.trim();
         if name.is_empty() {
             bail!("a profile needs a name");
@@ -270,36 +310,67 @@ impl Roots {
     }
 
     /// Move the flat layout every Beacon before profiles wrote straight into the data root
-    /// into a profile named "default", keeping the old zone id. Does nothing once a
-    /// profiles folder exists, or when there is nothing to move.
-    pub fn migrate_legacy(&self, version: &str) -> Result<Option<Profile>> {
-        if self.profiles_dir().exists() || !holds_legacy_files(&self.data) {
+    /// into a profile named "default", keeping the old zone id, and make it the default.
+    /// Judged by the old files alone: a profiles folder can exist before Beacon first starts
+    /// (`beaconctl profile create`). A move that stopped partway is finished into the
+    /// profile it started, the one on the old zone id. Call with the roots locked.
+    fn migrate_legacy(&self, version: &str) -> Result<Option<Profile>> {
+        if !holds_legacy_files(&self.data) {
             return Ok(None);
         }
-        let profile = self.place(Manifest::new("default", LEGACY_ZONE, version))?;
+        let started = self.list()?.into_iter().find(|p| p.zone_id() == LEGACY_ZONE);
+        let fresh = started.is_none();
+        let profile = match started {
+            Some(profile) => profile,
+            None => {
+                let name = if self.find("default")?.is_some() {
+                    "default (migrated)"
+                } else {
+                    "default"
+                };
+                self.place(Manifest::new(name, LEGACY_ZONE, version))?
+            }
+        };
         for name in LEGACY_FILES {
             let from = self.data.join(name);
-            if from.exists() {
-                fs::rename(&from, profile.dir.join(name))
-                    .with_context(|| format!("moving {} into {}", from.display(), profile.dir.display()))?;
+            let to = profile.dir.join(name);
+            if !from.exists() {
+                continue;
             }
+            // The profile's own copy is the newer one; the old file stays where it is.
+            if to.exists() {
+                log::warn!("{} is left where it is: {} has one already", from.display(), profile.dir.display());
+                continue;
+            }
+            fs::rename(&from, &to).with_context(|| format!("moving {} into {}", from.display(), profile.dir.display()))?;
         }
         for name in STALE_FILES {
             let _ = fs::remove_file(self.data.join(name));
         }
-        self.set_default(profile.manifest.id)?;
+        // A move that stopped before the default was written still makes it, or the next
+        // profile created would take the default over the old data.
+        if fresh || self.default_id()?.is_none() {
+            self.set_default(profile.manifest.id)?;
+        }
         Ok(Some(profile))
     }
 
     /// The profile `selection` names, made ready to use: folders private, cache in place,
     /// `last_opened_by` updated. Does not take the lock; see [`Profile::lock`].
     pub fn open(&self, selection: &Selection, version: &str) -> Result<Profile> {
+        let _lock = match selection {
+            Selection::Dir(_) => None,
+            _ => Some(self.lock()?),
+        };
         let mut profile = match selection {
             Selection::Dir(dir) => Profile::adopt(dir, &self.cache, version)?,
-            Selection::Named(key) => match self.find(key)? {
-                Some(profile) => profile,
-                None => self.create(key, version)?,
-            },
+            Selection::Named(key) => {
+                self.migrate_legacy(version)?;
+                match self.find(key)? {
+                    Some(profile) => profile,
+                    None => self.create_locked(key, version)?,
+                }
+            }
             Selection::Default => {
                 self.migrate_legacy(version)?;
                 let by_default = match self.default_id()? {
@@ -313,7 +384,7 @@ impl Roots {
                             self.set_default(profile.manifest.id)?;
                             profile
                         }
-                        None => self.create("default", version)?,
+                        None => self.create_locked("default", version)?,
                     },
                 }
             }
@@ -369,7 +440,7 @@ impl Profile {
                 // already encrypted here would open under no key after it.
                 if holds_encrypted_stores(dir) {
                     bail!(
-                        "{} holds encrypted databases but no {MANIFEST}; restore the manifest from a backup, since a new one would give the profile an id its key does not open under",
+                        "{} holds encrypted files but no {MANIFEST}; restore the manifest from a backup, since a new one would give the profile an id its key does not open under",
                         dir.display()
                     );
                 }
@@ -390,14 +461,7 @@ impl Profile {
     /// Refuse a newer profile, make the folders private, set up the cache and record this
     /// version as the last to open it.
     fn prepare(&mut self, version: &str) -> Result<()> {
-        if self.manifest.schema > SCHEMA {
-            bail!(
-                "profile {:?} was written by a newer Beacon ({}, profile layout {}); this build understands layout {SCHEMA}",
-                self.manifest.name,
-                self.manifest.last_opened_by,
-                self.manifest.schema
-            );
-        }
+        self.manifest.ensure_understood()?;
         make_private_dir(&self.dir)?;
         self.prepare_cache()?;
         if self.manifest.last_opened_by != version {
@@ -479,6 +543,7 @@ impl Profile {
         if self.manifest.crypto.is_some() {
             return self.key_from(keys);
         }
+        self.manifest.ensure_understood()?;
         let Some(keys) = keys else {
             bail!(
                 "profile {:?} cannot be encrypted: this platform has no keychain Beacon can use",
@@ -576,6 +641,8 @@ impl Profile {
         if passphrase == Some("") {
             bail!("an empty passphrase protects nothing");
         }
+        // Before any store is touched: the manifest written at the end would be refused.
+        self.manifest.ensure_understood()?;
         // A manifest with `[crypto]` must be one this build understands. One without is
         // only acceptable while a rotation waits to be finished: rolled back to before the
         // profile was encrypted, it gets its `[crypto]` back below, from the new key.
@@ -667,6 +734,7 @@ impl Profile {
         if passphrase.is_empty() {
             bail!("an empty passphrase protects nothing");
         }
+        self.manifest.ensure_understood()?;
         let crypto = self.crypto()?;
         if crypto.passphrase.is_some() {
             bail!("profile {:?} has a passphrase; changing it means a new key", self.name());
@@ -686,7 +754,7 @@ impl Profile {
         self.manifest.crypto.as_ref().is_some_and(|c| c.passphrase.is_some())
     }
 
-    /// Whether any store in the folder is a database that is not plaintext SQLite.
+    /// Whether anything in the folder is encrypted under a profile key.
     fn has_encrypted_store(&self) -> bool {
         holds_encrypted_stores(&self.dir)
     }
@@ -859,10 +927,20 @@ fn holds_legacy_files(dir: &Path) -> bool {
     LEGACY_FILES.iter().any(|name| dir.join(name).exists())
 }
 
-/// Whether any store in `dir` is a database that is not plaintext SQLite. Judged by the file
-/// header alone, as the engine judges what to encrypt: this crate does not open databases.
+/// Whether anything in `dir` is encrypted under the profile key: a store that is not
+/// plaintext SQLite, or a sealed small file. Judged by the file header alone, as the engine
+/// judges what to encrypt: this crate does not open databases.
 fn holds_encrypted_stores(dir: &Path) -> bool {
     Store::ALL.iter().any(|store| is_encrypted_database(&dir.join(store.file_name())))
+        || SEALED_FILES.iter().any(|name| is_sealed_file(&dir.join(name)))
+}
+
+/// Whether `path` starts with the sealed-file magic. Only the magic is read: a leftover
+/// file can be any size.
+fn is_sealed_file(path: &Path) -> bool {
+    use std::io::Read;
+    let mut magic = [0u8; crypto::SEALED_MAGIC.len()];
+    File::open(path).and_then(|mut f| f.read_exact(&mut magic)).is_ok() && crypto::is_sealed(&magic)
 }
 
 /// Whether `path` holds a database that is not plaintext SQLite: a full header that is not
@@ -991,9 +1069,100 @@ mod tests {
         let roots = roots(&tmp);
         let mut p = roots.open(&Selection::Default, V).unwrap();
         p.manifest.schema = SCHEMA + 1;
-        p.manifest.write(&p.dir).unwrap();
+        // This build will not write such a manifest; a newer one did.
+        assert!(p.manifest.write(&p.dir).is_err());
+        let newer = toml::to_string_pretty(&p.manifest).unwrap();
+        fs::write(p.dir.join(MANIFEST), &newer).unwrap();
         let err = roots.open(&Selection::Default, V).unwrap_err();
         assert!(err.to_string().contains("newer Beacon"), "{err}");
+        // Listed and read as it is, but nothing that would write it back goes ahead.
+        let mut listed = roots.list().unwrap().remove(0);
+        let err = listed.unlock(Some(&crypto::MemoryKeyStore::default())).unwrap_err();
+        assert!(err.to_string().contains("newer Beacon"), "{err}");
+        let mut at = Profile::at(&p.dir, &roots.cache).unwrap();
+        let err = at
+            .rotate_key(&crypto::MemoryKeyStore::default(), None, crypto::TEST_KDF, &mut |_, _, _| Ok(()))
+            .unwrap_err();
+        assert!(err.to_string().contains("newer Beacon"), "{err}");
+        assert_eq!(fs::read_to_string(p.dir.join(MANIFEST)).unwrap(), newer);
+    }
+
+    #[test]
+    fn a_profile_made_before_the_first_start_does_not_block_migration() {
+        let tmp = tempfile::tempdir().unwrap();
+        let roots = roots(&tmp);
+        fs::create_dir_all(&roots.data).unwrap();
+        fs::write(roots.data.join("cookies.db"), "c").unwrap();
+        // `beaconctl profile create` before Beacon ever ran under profiles.
+        let work = roots.create("work", V).unwrap();
+        assert!(!roots.data.join("cookies.db").exists());
+        let p = roots.open(&Selection::Default, V).unwrap();
+        assert_ne!(p.id(), work.id());
+        assert_eq!(p.zone_id(), LEGACY_ZONE);
+        assert_eq!(fs::read_to_string(p.dir.join("cookies.db")).unwrap(), "c");
+        assert_eq!(roots.default_id().unwrap(), Some(p.id()));
+    }
+
+    #[test]
+    fn a_migration_that_stopped_partway_finishes_into_the_same_profile() {
+        let tmp = tempfile::tempdir().unwrap();
+        let roots = roots(&tmp);
+        fs::create_dir_all(&roots.data).unwrap();
+        fs::write(roots.data.join("cookies.db"), "c").unwrap();
+        let p = roots.open(&Selection::Default, V).unwrap();
+        // As if the move had stopped before this file, or an old Beacon ran again since.
+        fs::write(roots.data.join("places.db"), "p").unwrap();
+        fs::write(roots.data.join("cookies.db"), "older").unwrap();
+        let again = roots.open(&Selection::Named("default".into()), V).unwrap();
+        assert_eq!(again.id(), p.id());
+        assert_eq!(roots.list().unwrap().len(), 1);
+        assert_eq!(fs::read_to_string(p.dir.join("places.db")).unwrap(), "p");
+        // The profile's own copy is kept over the stray one.
+        assert_eq!(fs::read_to_string(p.dir.join("cookies.db")).unwrap(), "c");
+    }
+
+    #[test]
+    fn a_migration_that_stopped_before_the_default_still_becomes_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let roots = roots(&tmp);
+        fs::create_dir_all(&roots.data).unwrap();
+        fs::write(roots.data.join("cookies.db"), "c").unwrap();
+        let p = roots.open(&Selection::Default, V).unwrap();
+        // As if it had stopped after the profile was placed, before `profiles.toml`.
+        fs::remove_file(roots.data.join(DEFAULTS)).unwrap();
+        fs::write(roots.data.join("places.db"), "p").unwrap();
+        let work = roots.create("work", V).unwrap();
+        assert_eq!(roots.default_id().unwrap(), Some(p.id()));
+        assert_ne!(work.id(), p.id());
+    }
+
+    #[test]
+    fn a_folder_with_sealed_files_and_no_manifest_is_not_adopted() {
+        let tmp = tempfile::tempdir().unwrap();
+        let roots = roots(&tmp);
+        let dir = tmp.path().join("copied");
+        fs::create_dir_all(&dir).unwrap();
+        let mut sealed = crypto::SEALED_MAGIC.to_vec();
+        sealed.extend_from_slice(&[7; 40]);
+        fs::write(dir.join("session.tabs"), sealed).unwrap();
+        let err = roots.open(&Selection::Dir(dir.clone()), V).unwrap_err();
+        assert!(err.to_string().contains("encrypted files"), "{err}");
+        assert!(!dir.join(MANIFEST).exists());
+    }
+
+    #[test]
+    fn opening_waits_for_another_process_picking_a_profile() {
+        let tmp = tempfile::tempdir().unwrap();
+        let roots = roots(&tmp);
+        let held = roots.lock().unwrap();
+        let other = roots.clone();
+        let opener = std::thread::spawn(move || other.open(&Selection::Default, V).unwrap().id());
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert!(!opener.is_finished());
+        assert!(roots.list().unwrap().is_empty());
+        drop(held);
+        let id = opener.join().unwrap();
+        assert_eq!(roots.open(&Selection::Default, V).unwrap().id(), id);
     }
 
     #[test]

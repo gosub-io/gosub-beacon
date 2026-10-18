@@ -107,7 +107,9 @@ impl BrowserWindow {
                     let mut initial_urls: Vec<String> = beacon_core::cli::Cli::global().urls.clone();
                     let mut session = Vec::new();
                     if private {
-                        initial_urls = vec!["gosub://home".to_string()];
+                        // One opened for another launch's URLs starts on those alone.
+                        let handed = window_clone.imp().startup_urls.borrow().as_ref().is_some_and(|u| !u.is_empty());
+                        initial_urls = if handed { Vec::new() } else { vec!["gosub://home".to_string()] };
                     } else if initial_urls.is_empty() {
                         session = beacon_core::session::load();
                         initial_urls = if session.is_empty() {
@@ -124,6 +126,17 @@ impl BrowserWindow {
                             .imp()
                             .get_sender()
                             .send(Message::OpenTab(url.to_string(), "New Tab".to_string()))
+                            .await
+                            .unwrap();
+                    }
+
+                    // What another launch handed over meanwhile, after the startup tabs.
+                    // From here on `open_urls` opens them directly.
+                    for url in window_clone.imp().startup_urls.take().unwrap_or_default() {
+                        window_clone
+                            .imp()
+                            .get_sender()
+                            .send(Message::OpenTab(url, "New Tab".to_string()))
                             .await
                             .unwrap();
                     }
@@ -163,6 +176,12 @@ impl BrowserWindow {
 
     /// Open `urls` as tabs in this window, as a second launch asks the running Beacon to.
     pub fn open_urls(&self, urls: Vec<String>) {
+        // Until the startup tabs are open the content area may still be 0x0, and tabs made
+        // now would get the fallback viewport; these wait for the startup path instead.
+        if let Some(waiting) = self.imp().startup_urls.borrow_mut().as_mut() {
+            waiting.extend(urls);
+            return;
+        }
         let sender = self.imp().get_sender();
         spawn_future_local(async move {
             for url in urls {

@@ -109,12 +109,17 @@ pub struct KdfParams {
 impl KdfParams {
     /// The most a wrapped key may ask for. The cost comes from the manifest, which travels
     /// with a copied profile; without a ceiling a crafted one makes `unlock` claim all the
-    /// memory there is, or spin for hours. Sixteen times the default memory is plenty.
+    /// memory there is, or spin for hours. Four times the default memory, and with
+    /// [`Self::MAX_WORK`] no more than sixteen times its work.
     pub const MAX: Self = Self {
-        memory_kib: 1024 * 1024,
-        iterations: 64,
-        parallelism: 16,
+        memory_kib: 256 * 1024,
+        iterations: 16,
+        parallelism: 8,
     };
+
+    /// The most memory times passes a wrapped key may ask for, in KiB: sixteen times the
+    /// default's. Each limit in [`Self::MAX`] alone still allows four times this.
+    pub const MAX_WORK: u64 = 16 * 64 * 1024 * 3;
 }
 
 impl Default for KdfParams {
@@ -353,15 +358,21 @@ fn aad(profile: Uuid) -> Vec<u8> {
 
 fn kek(passphrase: &str, normalization: Normalization, salt: &[u8], params: KdfParams) -> Result<Zeroizing<[u8; 32]>> {
     let max = KdfParams::MAX;
-    if params.memory_kib > max.memory_kib || params.iterations > max.iterations || params.parallelism > max.parallelism {
+    let work = u64::from(params.memory_kib) * u64::from(params.iterations);
+    if params.memory_kib > max.memory_kib
+        || params.iterations > max.iterations
+        || params.parallelism > max.parallelism
+        || work > KdfParams::MAX_WORK
+    {
         bail!(
-            "argon2 cost {} KiB x {} passes x {} lanes is beyond what Beacon accepts ({} KiB x {} x {})",
+            "argon2 cost {} KiB x {} passes x {} lanes is beyond what Beacon accepts ({} KiB x {} x {}, {} KiB x passes in all)",
             params.memory_kib,
             params.iterations,
             params.parallelism,
             max.memory_kib,
             max.iterations,
-            max.parallelism
+            max.parallelism,
+            KdfParams::MAX_WORK
         );
     }
     let params = argon2::Params::new(params.memory_kib, params.iterations, params.parallelism, Some(32))
@@ -559,7 +570,14 @@ impl KeyStore for FileKeyStore {
                 .and_then(|()| file.sync_all())
                 .with_context(|| format!("writing {}", tmp.display()))?;
         }
-        fs::rename(&tmp, &path).with_context(|| format!("writing {}", path.display()))
+        fs::rename(&tmp, &path).with_context(|| format!("writing {}", path.display()))?;
+        // The rename lives in the folder: until that is on disk too, a power cut can leave
+        // the profile encrypted and its key file gone.
+        #[cfg(unix)]
+        fs::File::open(&self.dir)
+            .and_then(|dir| dir.sync_all())
+            .with_context(|| format!("syncing {}", self.dir.display()))?;
+        Ok(())
     }
 
     fn delete(&self, profile: Uuid, slot: Slot) -> Result<()> {
@@ -619,13 +637,14 @@ pub(crate) fn hex(bytes: &[u8]) -> String {
 }
 
 fn unhex(s: &str) -> Result<Vec<u8>> {
-    // Byte offsets below: anything but ASCII could split a character and panic.
+    // Byte offsets below: anything but ASCII could split a character and panic. The errors
+    // never quote `s`: it may be a key with one digit damaged.
     if !s.is_ascii() || !s.len().is_multiple_of(2) {
         bail!("not even-length ASCII hex");
     }
     (0..s.len())
         .step_by(2)
-        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).map_err(|_| anyhow!("not hex: {s:?}")))
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).map_err(|_| anyhow!("not hex")))
         .collect()
 }
 
@@ -737,6 +756,18 @@ mod tests {
         wrapped.memory_kib = u32::MAX;
         let err = ProfileKey::unwrap(id, &wrapped, "pw").unwrap_err();
         assert!(err.to_string().contains("beyond what Beacon accepts"), "{err}");
+        // Each part within its limit, the two together not.
+        wrapped.memory_kib = KdfParams::MAX.memory_kib;
+        wrapped.iterations = KdfParams::MAX.iterations;
+        let err = ProfileKey::unwrap(id, &wrapped, "pw").unwrap_err();
+        assert!(err.to_string().contains("beyond what Beacon accepts"), "{err}");
+    }
+
+    #[test]
+    fn a_damaged_filed_key_is_not_quoted_in_the_error() {
+        let filed = "0".repeat(63) + "g";
+        let err = unhex(&filed).unwrap_err();
+        assert!(!err.to_string().contains("000"), "{err}");
     }
 
     #[test]

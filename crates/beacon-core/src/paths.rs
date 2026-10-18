@@ -70,8 +70,9 @@ fn key_store() -> Option<Box<dyn KeyStore>> {
 }
 
 /// The profile this process runs. Resolves it on first use for hosts that never call
-/// [`init`] (the C ABI); a profile that cannot be opened ends the process, since running
-/// without one would write the databases somewhere unintended.
+/// [`init`]; a profile that cannot be opened ends the process, since running without one
+/// would write the databases somewhere unintended. The engine and the profile files reach
+/// it only after [`lock_profile`] or [`profile_key`], which report that error instead.
 pub fn profile() -> &'static Profile {
     match init() {
         Ok(profile) => profile,
@@ -110,7 +111,9 @@ pub fn lock_profile() -> anyhow::Result<()> {
     if LOCK.get().is_some() {
         return Ok(());
     }
-    let lock = profile().lock()?;
+    // `init`, not `profile`: a host on the C ABI gets here first, and a profile that cannot
+    // be opened must come back as an error (`beacon_new` returns NULL), not end its process.
+    let lock = init()?.lock()?;
     let _ = LOCK.set(lock);
     Ok(())
 }
@@ -175,10 +178,14 @@ fn encrypt_plaintext(profile: &Profile, key: &ProfileKey) -> anyhow::Result<()> 
 /// One of the profile's small files (`beacon_profile::SEALED_FILES`), decrypted; `None`
 /// when there is none. Only once the profile is locked and unlocked, like the stores.
 pub fn read_profile_file(name: &str) -> anyhow::Result<Option<Vec<u8>>> {
-    profile().read_sealed(profile_key()?, name)
+    // The key first: it fails while the profile is not locked, where `profile()` would
+    // end the process of a C ABI host.
+    let key = profile_key()?;
+    profile().read_sealed(key, name)
 }
 
 /// Write one of the profile's small files, sealed with the profile key.
 pub fn write_profile_file(name: &str, plaintext: &[u8]) -> anyhow::Result<()> {
-    profile().write_sealed(profile_key()?, name, plaintext)
+    let key = profile_key()?;
+    profile().write_sealed(key, name, plaintext)
 }

@@ -7,8 +7,8 @@ use gtk4::{gio, glib, prelude::*, subclass::prelude::*, Settings};
 use gtk_macros::action;
 use log::info;
 
-/// The app action a second launch hands its URLs to the running instance with: a string
-/// array, each opened as a tab.
+/// The app action a second launch hands its URLs to the running instance with: whether it
+/// was started `--private`, and a string array, each opened as a tab.
 pub(crate) const OPEN_URLS: &str = "open-urls";
 
 mod imp {
@@ -77,16 +77,24 @@ impl Application {
     }
 
     fn setup_actions(&self) {
-        let open_urls = gio::SimpleAction::new(OPEN_URLS, Some(glib::VariantTy::STRING_ARRAY));
+        let open_urls = gio::SimpleAction::new(OPEN_URLS, Some(&glib::VariantType::new("(bas)").unwrap()));
         open_urls.connect_activate(clone!(
             #[weak(rename_to=app)]
             self,
             move |_, param| {
-                let Some(urls) = param.and_then(|p| p.get::<Vec<String>>()) else {
+                let Some((private, urls)) = param.and_then(|p| p.get::<(bool, Vec<String>)>()) else {
                     return;
                 };
                 info!(target: "gtk", "Opening {} URL(s) from another launch", urls.len());
-                app.window().open_urls(urls);
+                if private {
+                    // Never in a regular window: that would load them with its cookies and
+                    // keep them in its session.
+                    let window = BrowserWindow::new(&app, true);
+                    window.open_urls(urls);
+                    window.present();
+                } else {
+                    app.window().open_urls(urls);
+                }
             }
         ));
         self.add_action(&open_urls);

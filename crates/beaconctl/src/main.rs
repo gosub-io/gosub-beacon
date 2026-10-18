@@ -6,10 +6,9 @@
 //! A profile is named by its name, its id, or its folder (a `--user-data-dir`).
 
 use anyhow::{anyhow, bail, Context, Result};
-use beacon_profile::crypto::{KdfParams, KeyStore, OsKeychain, Slot, Store};
+use beacon_profile::crypto::{KdfParams, KeyStore, OsKeychain, ProfileKey, Slot, Store};
 use beacon_profile::{Profile, Roots, MANIFEST};
 use clap::{Args as ClapArgs, Parser, Subcommand};
-use gosub_engine::places::{Places, SqlitePlaces};
 use gosub_engine::storage::{is_plaintext_database, SqliteKey};
 use rusqlite::Connection;
 use std::path::Path;
@@ -122,18 +121,20 @@ fn profile(command: ProfileCommand) -> Result<()> {
             for p in profiles {
                 let mark = if Some(p.id()) == default { '*' } else { ' ' };
                 let busy = if p.in_use() { "  in use" } else { "" };
-                println!("{mark} {:<20} {}{busy}", p.name(), p.id());
+                println!("{mark} {:<20} {}{busy}", printable(p.name()), p.id());
             }
         }
         ProfileCommand::Show { profile } => {
             let p = existing(&roots, profile)?;
-            println!("name            {}", p.name());
+            // The manifest travels with a copied profile: what it says is printed, never acted
+            // on by the terminal.
+            println!("name            {}", printable(p.name()));
             println!("id              {}", p.id());
             println!("folder          {}", p.dir.display());
             println!("cache           {}", p.cache_dir.display());
             println!("layout          {}", p.manifest.schema);
-            println!("created by      {}", p.manifest.created_by);
-            println!("last opened by  {}", p.manifest.last_opened_by);
+            println!("created by      {}", printable(&p.manifest.created_by));
+            println!("last opened by  {}", printable(&p.manifest.last_opened_by));
             println!("in use          {}", if p.in_use() { "yes" } else { "no" });
             match &p.manifest.crypto {
                 // Plaintext databases get encrypted on the next start; encrypted ones with
@@ -147,17 +148,17 @@ fn profile(command: ProfileCommand) -> Result<()> {
                 }
             }
             for z in &p.manifest.zones {
-                println!("zone            {} {}", z.id, z.name);
+                println!("zone            {} {}", z.id, printable(&z.name));
             }
         }
         ProfileCommand::Create { name } => {
             let p = roots.create(&name, VERSION)?;
-            println!("created {} {}", p.name(), p.id());
+            println!("created {} {}", printable(p.name()), p.id());
         }
         ProfileCommand::SetDefault { profile } => {
             let p = existing(&roots, Some(profile))?;
             roots.set_default(p.id())?;
-            println!("default is now {} {}", p.name(), p.id());
+            println!("default is now {} {}", printable(p.name()), p.id());
         }
         ProfileCommand::Path { profile, cache } => {
             let p = existing(&roots, profile)?;
@@ -173,18 +174,21 @@ fn profile(command: ProfileCommand) -> Result<()> {
             let first = !p.has_passphrase() && !p.rotation_pending(&keychain)?;
             if first {
                 let key = p.key_from(Some(&keychain))?;
+                // The passphrase is what makes a copy of the folder safe to carry; nothing in
+                // it may still be readable without.
+                encrypt_plaintext(&p, &key)?;
                 let passphrase = input.read(true)?;
                 p.set_passphrase(&key, &passphrase, KdfParams::default())?;
                 println!(
                     "passphrase set for {}; it now opens on another machine with `beaconctl profile unlock`",
-                    p.name()
+                    printable(p.name())
                 );
             } else {
                 let passphrase = input.read(true)?;
                 p.rotate_key(&keychain, Some(&passphrase), KdfParams::default(), &mut rekey_store)?;
                 println!(
                     "passphrase changed for {}; its databases are re-encrypted under a new key, so an older copy of {MANIFEST} no longer opens them",
-                    p.name()
+                    printable(p.name())
                 );
             }
         }
@@ -193,12 +197,12 @@ fn profile(command: ProfileCommand) -> Result<()> {
             let _lock = p.lock()?;
             let keychain = keychain()?;
             if !p.has_passphrase() && !p.rotation_pending(&keychain)? {
-                bail!("{} has no passphrase", p.name());
+                bail!("{} has no passphrase", printable(p.name()));
             }
             p.rotate_key(&keychain, None, KdfParams::default(), &mut rekey_store)?;
             println!(
                 "passphrase removed from {}; its databases are re-encrypted under a new key, so it now opens only on this machine, and is lost with this keychain",
-                p.name()
+                printable(p.name())
             );
         }
         ProfileCommand::Forget { profile, input } => {
@@ -207,7 +211,7 @@ fn profile(command: ProfileCommand) -> Result<()> {
             if !p.has_passphrase() {
                 bail!(
                     "{} has no passphrase; without its keychain key nothing could open it again",
-                    p.name()
+                    printable(p.name())
                 );
             }
             let keychain = keychain()?;
@@ -217,7 +221,10 @@ fn profile(command: ProfileCommand) -> Result<()> {
             p.key_from_passphrase(&input.read(false)?)
                 .context("the passphrase must open the profile before its key here is dropped")?;
             keychain.delete(p.id(), Slot::Current)?;
-            println!("forgot the key for {}; `beaconctl profile unlock` brings it back", p.name());
+            println!(
+                "forgot the key for {}; `beaconctl profile unlock` brings it back",
+                printable(p.name())
+            );
         }
         ProfileCommand::History { profile, limit } => {
             let p = existing(&roots, profile)?;
@@ -227,16 +234,12 @@ fn profile(command: ProfileCommand) -> Result<()> {
                 return Ok(());
             }
             let key = p.key_from(Some(&keychain()?))?;
-            let places = SqlitePlaces::open(path, Some(SqliteKey::from_bytes(*key.store_key(Store::Places))))
-                .map_err(|e| anyhow!("opening the history of {}: {e:?}", p.name()))?;
-            // `query_visited` ranks by visit count and cuts there; this wants the most
-            // recent, so it takes every row (the limit is bound as an i64) and sorts itself.
-            let mut pages = places.query_visited("", i64::MAX as usize);
-            pages.sort_by_key(|page| std::cmp::Reverse(page.last_visit));
-            for page in pages.into_iter().take(limit) {
+            for (title, url) in recent_visits(&path, &key.store_key(Store::Places), limit)
+                .with_context(|| format!("reading the history of {}", printable(p.name())))?
+            {
                 // Titles come from pages: one record per line, and nothing that a terminal
                 // would act on.
-                println!("{}\t{}", printable(&page.title), printable(&page.url));
+                println!("{}\t{}", printable(&title), printable(&url));
             }
         }
         ProfileCommand::Unlock { profile, input } => {
@@ -244,12 +247,12 @@ fn profile(command: ProfileCommand) -> Result<()> {
             let _lock = p.lock()?;
             let keychain = keychain()?;
             if p.key_from(Some(&keychain)).is_ok() {
-                println!("{} already opens on this machine", p.name());
+                println!("{} already opens on this machine", printable(p.name()));
                 return Ok(());
             }
             let passphrase = input.read(false)?;
             p.unlock_with_passphrase(&keychain, &passphrase)?;
-            println!("unlocked {}; its key is in this machine's keychain now", p.name());
+            println!("unlocked {}; its key is in this machine's keychain now", printable(p.name()));
         }
     }
     Ok(())
@@ -265,17 +268,45 @@ fn keychain() -> Result<impl KeyStore> {
     OsKeychain::new().context("this platform has no keychain Beacon can use")
 }
 
+/// Encrypt every store still in plaintext and seal the small files, as Beacon does on its
+/// first keyed start: one cut short leaves some behind. Call with the profile locked.
+fn encrypt_plaintext(p: &Profile, key: &ProfileKey) -> Result<()> {
+    for store in Store::ALL {
+        let path = p.dir.join(store.file_name());
+        if is_plaintext_database(&path)? {
+            SqliteKey::from_bytes(*key.store_key(store))
+                .encrypt_file(&path)
+                .map_err(|e| anyhow!("encrypting {}: {e}", path.display()))?;
+        }
+    }
+    p.seal_plaintext_files(key)
+}
+
+/// The `limit` most recently visited pages in the places store at `path`, as `(title,
+/// url)`. Asked of the database directly: the engine's `query_visited` ranks by visit
+/// count, and getting the most recent out of it meant reading every row.
+fn recent_visits(path: &Path, key: &Zeroizing<[u8; 32]>, limit: usize) -> Result<Vec<(String, String)>> {
+    let conn = Connection::open(path)?;
+    SqliteKey::from_bytes(**key).apply(&conn)?;
+    let mut stmt = conn.prepare("SELECT title, url FROM visits ORDER BY last_visit DESC LIMIT ?1")?;
+    let rows = stmt.query_map([i64::try_from(limit).unwrap_or(i64::MAX)], |row| Ok((row.get(0)?, row.get(1)?)))?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
 /// Make the store at `path` open with `new`, for [`Profile::rotate_key`]: re-encrypt it when
 /// it is on `old`, leave it when it is on `new` already (a rotation picking up where it
 /// stopped), and refuse one that is on neither. SQLCipher's `rekey` rewrites every page in
 /// one transaction, so a crash during it leaves the file on one key or the other.
 fn rekey_store(path: &Path, old: &Zeroizing<[u8; 32]>, new: &Zeroizing<[u8; 32]>) -> Result<()> {
-    // A store Beacon has not encrypted yet (its first keyed start was cut short) stays as
-    // it is: that start encrypts it, with the key the rotation ends on.
-    if is_plaintext_database(path)? {
-        return Ok(());
-    }
     let new_key = SqliteKey::from_bytes(**new);
+    // A store Beacon has not encrypted yet (its first keyed start was cut short) is
+    // encrypted here, with the key the rotation ends on: left as it is, it would sit in the
+    // folder in plain text with the passphrase set.
+    if is_plaintext_database(path)? {
+        return new_key
+            .encrypt_file(path)
+            .map_err(|e| anyhow!("encrypting {}: {e}", path.display()));
+    }
     // Each try on a connection of its own: after a key that did not open the file, the
     // connection is not one to set another key on.
     if new_key.apply(&Connection::open(path)?).is_ok() {
@@ -403,11 +434,29 @@ mod tests {
     }
 
     #[test]
-    fn rekey_leaves_a_plaintext_store_for_beacon_to_encrypt() {
+    fn rekey_encrypts_a_plaintext_store_under_the_new_key() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("places.db");
         Connection::open(&path).unwrap().execute_batch("CREATE TABLE t(v);").unwrap();
         rekey_store(&path, &key(1), &key(2)).unwrap();
-        assert!(is_plaintext_database(&path).unwrap());
+        assert!(!is_plaintext_database(&path).unwrap());
+        assert!(opens_with(&path, &key(2)));
+    }
+
+    #[test]
+    fn recent_visits_come_newest_first_and_stop_at_the_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("places.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            SqliteKey::from_bytes(*key(1)).apply(&conn).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE visits (url TEXT PRIMARY KEY, title TEXT, visit_count INTEGER, last_visit INTEGER);
+                 INSERT INTO visits VALUES ('a', 'A', 9, 1), ('b', 'B', 1, 3), ('c', 'C', 5, 2);",
+            )
+            .unwrap();
+        }
+        let got = recent_visits(&path, &key(1), 2).unwrap();
+        assert_eq!(got, [("B".to_string(), "b".to_string()), ("C".to_string(), "c".to_string())]);
     }
 }
