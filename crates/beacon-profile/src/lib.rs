@@ -50,6 +50,9 @@ const CACHE_VERSION: &str = "1";
 
 /// The file that makes a folder a profile.
 pub const MANIFEST: &str = "profile.toml";
+/// How the manifest names the keychain's default collection where it has to name one. It
+/// is the Secret Service's own name for it too, so it is never a collection of its own.
+pub const DEFAULT_COLLECTION: &str = "default";
 const LOCK: &str = "lock";
 const DEFAULTS: &str = "profiles.toml";
 /// At the data root: held while a profile is picked, created or migrated.
@@ -91,6 +94,16 @@ pub struct Manifest {
     pub created_by: String,
     /// The Beacon version that last opened it.
     pub last_opened_by: String,
+    /// The keychain collection holding the profile key, on Linux the label of a Secret
+    /// Service collection; absent for the default one (the login keyring, unlocked when
+    /// the user logs in). A collection of its own, with its own password, asks for that
+    /// password before Beacon gets the key. See [`crypto::OsKeychain::in_collection`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keychain: Option<String>,
+    /// The collection a [`Profile::move_key`] left a copy of the key in, until that copy is
+    /// removed: [`DEFAULT_COLLECTION`] for the default one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keychain_leftover: Option<String>,
     pub zones: Vec<ZoneEntry>,
     /// How the databases are encrypted; absent when they are not.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -112,6 +125,8 @@ impl Manifest {
             name: name.to_string(),
             created_by: version.to_string(),
             last_opened_by: version.to_string(),
+            keychain: None,
+            keychain_leftover: None,
             zones: vec![ZoneEntry {
                 id: zone,
                 name: "Default".to_string(),
@@ -409,6 +424,64 @@ impl Profile {
 
     pub fn name(&self) -> &str {
         &self.manifest.name
+    }
+
+    /// The keychain collection the profile key is kept in; `None` for the default one.
+    pub fn keychain_collection(&self) -> Option<&str> {
+        self.manifest.keychain.as_deref()
+    }
+
+    /// Move the profile key from the collection in `from` to the one in `to`, and record
+    /// `to`'s collection in the manifest. Call with the profile locked. The key is filed
+    /// in `to` and read back before the manifest names it and `from` lets go of it, so a
+    /// move that stops partway leaves the key in both, never in neither. The manifest
+    /// names the copy left in `from` until it is gone; [`Profile::remove_leftover_key`]
+    /// finishes a move that stopped there. A profile without a key yet only records the
+    /// collection, and gets its key there on first open.
+    pub fn move_key(&mut self, from: &dyn KeyStore, to: &dyn KeyStore, collection: Option<&str>) -> Result<()> {
+        if self.manifest.crypto.is_none() {
+            self.manifest.keychain = collection.map(str::to_string);
+            return self.manifest.write(&self.dir);
+        }
+        // The manifest names one leftover copy; a second move would lose the first.
+        if let Some(leftover) = self.leftover_key_collection() {
+            bail!(
+                "profile {:?} still has a copy of its key in the keychain collection {leftover:?}; remove that first",
+                self.name()
+            );
+        }
+        self.ensure_not_rotating(from)?;
+        let key = self.key_from(Some(from))?;
+        to.set(&key, Slot::Current)?;
+        // Checked against the manifest like any key from a keychain.
+        self.key_from(Some(to))
+            .context("the key did not read back from the new keychain collection")?;
+        let old = self.keychain_collection().unwrap_or(DEFAULT_COLLECTION).to_string();
+        self.manifest.keychain = collection.map(str::to_string);
+        self.manifest.keychain_leftover = Some(old);
+        self.manifest.write(&self.dir)?;
+        self.remove_leftover_key(from)
+    }
+
+    /// The collection a [`Profile::move_key`] that stopped partway left a copy of the key
+    /// in, [`DEFAULT_COLLECTION`] for the default one; `None` when there is none.
+    pub fn leftover_key_collection(&self) -> Option<&str> {
+        self.manifest.keychain_leftover.as_deref()
+    }
+
+    /// Remove the copy of the key a [`Profile::move_key`] left in `keys`, the keychain
+    /// looking in [`Profile::leftover_key_collection`]. Call with the profile locked. Never
+    /// removes the key the profile is on: a leftover in the collection the profile has
+    /// since moved back to is that key now, and only the note of it goes.
+    pub fn remove_leftover_key(&mut self, keys: &dyn KeyStore) -> Result<()> {
+        let Some(leftover) = self.leftover_key_collection() else {
+            return Ok(());
+        };
+        if leftover != self.keychain_collection().unwrap_or(DEFAULT_COLLECTION) {
+            keys.delete(self.id(), Slot::Current)?;
+        }
+        self.manifest.keychain_leftover = None;
+        self.manifest.write(&self.dir)
     }
 
     /// The zone Beacon runs the profile's tabs in.
@@ -1213,6 +1286,93 @@ mod tests {
         let mut again = roots.open(&Selection::Default, V).unwrap();
         let same = again.unlock(Some(&keys)).unwrap();
         assert_eq!(same.check(), key.check());
+    }
+
+    #[test]
+    fn a_key_moved_to_another_collection_opens_from_there_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let roots = roots(&tmp);
+        let login = crypto::MemoryKeyStore::default();
+        let private = crypto::MemoryKeyStore::default();
+        let mut p = roots.open(&Selection::Default, V).unwrap();
+        let key = p.unlock(Some(&login)).unwrap();
+
+        p.move_key(&login, &private, Some("private")).unwrap();
+        assert!(login.get(p.id(), Slot::Current).unwrap().is_none());
+        let again = roots.open(&Selection::Default, V).unwrap();
+        assert_eq!(again.keychain_collection(), Some("private"));
+        assert_eq!(again.key_from(Some(&private)).unwrap().check(), key.check());
+    }
+
+    /// A keychain that holds keys but will not let go of them.
+    struct Clinging<'a>(&'a crypto::MemoryKeyStore);
+
+    impl KeyStore for Clinging<'_> {
+        fn get(&self, profile: Uuid, slot: Slot) -> Result<Option<ProfileKey>> {
+            self.0.get(profile, slot)
+        }
+
+        fn set(&self, key: &ProfileKey, slot: Slot) -> Result<()> {
+            self.0.set(key, slot)
+        }
+
+        fn delete(&self, _profile: Uuid, _slot: Slot) -> Result<()> {
+            bail!("keychain locked")
+        }
+    }
+
+    #[test]
+    fn a_move_that_could_not_remove_the_old_copy_is_finished_later() {
+        let tmp = tempfile::tempdir().unwrap();
+        let roots = roots(&tmp);
+        let login = crypto::MemoryKeyStore::default();
+        let private = crypto::MemoryKeyStore::default();
+        let mut p = roots.open(&Selection::Default, V).unwrap();
+        p.unlock(Some(&login)).unwrap();
+
+        assert!(p.move_key(&Clinging(&login), &private, Some("private")).is_err());
+        let mut again = roots.open(&Selection::Default, V).unwrap();
+        assert_eq!(again.keychain_collection(), Some("private"));
+        assert_eq!(again.leftover_key_collection(), Some(DEFAULT_COLLECTION));
+        again.key_from(Some(&private)).unwrap();
+        // A second move would lose track of the first copy.
+        assert!(again.move_key(&private, &login, None).is_err());
+
+        again.remove_leftover_key(&login).unwrap();
+        assert!(login.get(again.id(), Slot::Current).unwrap().is_none());
+        let done = roots.open(&Selection::Default, V).unwrap();
+        assert_eq!(done.leftover_key_collection(), None);
+        done.key_from(Some(&private)).unwrap();
+    }
+
+    #[test]
+    fn a_leftover_in_the_collection_the_profile_is_on_is_kept() {
+        let tmp = tempfile::tempdir().unwrap();
+        let roots = roots(&tmp);
+        let login = crypto::MemoryKeyStore::default();
+        let mut p = roots.open(&Selection::Default, V).unwrap();
+        p.unlock(Some(&login)).unwrap();
+        p.manifest.keychain_leftover = Some(DEFAULT_COLLECTION.to_string());
+
+        p.remove_leftover_key(&login).unwrap();
+        assert_eq!(p.leftover_key_collection(), None);
+        p.key_from(Some(&login)).unwrap();
+    }
+
+    #[test]
+    fn a_profile_without_a_key_only_records_its_collection() {
+        let tmp = tempfile::tempdir().unwrap();
+        let roots = roots(&tmp);
+        let login = crypto::MemoryKeyStore::default();
+        let private = crypto::MemoryKeyStore::default();
+        let mut p = roots.open(&Selection::Default, V).unwrap();
+
+        p.move_key(&login, &private, Some("private")).unwrap();
+        let mut again = roots.open(&Selection::Default, V).unwrap();
+        assert_eq!(again.keychain_collection(), Some("private"));
+        assert!(again.manifest.crypto.is_none());
+        again.unlock(Some(&private)).unwrap();
+        assert!(private.get(again.id(), Slot::Current).unwrap().is_some());
     }
 
     /// `profile.toml` as it was before the profile got its key: what a backup or a sync

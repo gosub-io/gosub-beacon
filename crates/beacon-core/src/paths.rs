@@ -64,7 +64,7 @@ pub fn keys_dir() -> Option<&'static Path> {
 /// every profile is encrypted, so no key store means the profile does not open.
 fn key_store() -> Option<Box<dyn KeyStore>> {
     if let Some(keychain) = OsKeychain::new() {
-        return Some(Box::new(keychain));
+        return Some(Box::new(keychain.in_collection(profile().keychain_collection())));
     }
     keys_dir().map(|dir| Box::new(beacon_profile::crypto::FileKeyStore::new(dir)) as Box<dyn KeyStore>)
 }

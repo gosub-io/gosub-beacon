@@ -410,13 +410,33 @@ pub trait KeyStore {
 
 /// The OS keychain: Keychain on macOS, Credential Manager on Windows, the Secret Service
 /// (GNOME Keyring, KWallet) on Linux.
-pub struct OsKeychain;
+pub struct OsKeychain {
+    // The macOS keychain is reached through `mac`, which has no collections.
+    #[cfg_attr(not(any(target_os = "linux", target_os = "windows")), allow(dead_code))]
+    collection: Option<String>,
+}
 
 impl OsKeychain {
     /// The keychain, or `None` on a platform that has none Beacon can use: Android, where
     /// the key goes into a [`FileKeyStore`] in the app's private storage instead.
     pub fn new() -> Option<Self> {
-        cfg!(any(target_os = "linux", target_os = "macos", target_os = "windows")).then_some(Self)
+        cfg!(any(target_os = "linux", target_os = "macos", target_os = "windows")).then_some(Self { collection: None })
+    }
+
+    /// Keep keys in the collection labelled `collection` rather than the default one (on
+    /// Linux the login keyring, unlocked at login). The Secret Service creates it on the
+    /// first key filed there, asking for its password, and asks for that password again
+    /// whenever a key is read while it is locked. Linux only: the other keychains ignore
+    /// it, and `beaconctl` refuses to set one there.
+    pub fn in_collection(mut self, collection: Option<&str>) -> Self {
+        self.collection = collection.map(str::to_string);
+        self
+    }
+
+    /// Whether this platform's keychain has collections [`OsKeychain::in_collection`] can
+    /// pick.
+    pub fn has_collections() -> bool {
+        cfg!(target_os = "linux")
     }
 
     /// Keep the keychain from asking the user anything. On macOS a keychain item trusts the
@@ -449,19 +469,27 @@ impl KeyStore for OsKeychain {
 
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 impl OsKeychain {
-    fn entry(profile: Uuid, slot: Slot) -> Result<keyring::Entry> {
+    fn entry(&self, profile: Uuid, slot: Slot) -> Result<keyring::Entry> {
         let account = match slot {
             Slot::Current => format!("profile-{profile}"),
             Slot::Next => format!("profile-{profile}.next"),
         };
-        keyring::Entry::new(KEYCHAIN_SERVICE, &account).context("opening the keychain")
+        // On the Secret Service a target names the collection, and is part of what an entry
+        // is found by: a key filed in one collection is not found through another, and
+        // moving it is `Profile::move_key`. On Windows a target is the credential's own
+        // name instead, so it never gets one.
+        let entry = match self.collection.as_deref() {
+            Some(collection) if cfg!(target_os = "linux") => keyring::Entry::new_with_target(collection, KEYCHAIN_SERVICE, &account),
+            _ => keyring::Entry::new(KEYCHAIN_SERVICE, &account),
+        };
+        entry.context("opening the keychain")
     }
 }
 
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 impl KeyStore for OsKeychain {
     fn get(&self, profile: Uuid, slot: Slot) -> Result<Option<ProfileKey>> {
-        let entry = Self::entry(profile, slot)?;
+        let entry = self.entry(profile, slot)?;
         // Read as text, the way `set` writes it: on Windows a password is filed as UTF-16,
         // and the raw blob would not be the hex that went in.
         match entry.get_password() {
@@ -480,13 +508,13 @@ impl KeyStore for OsKeychain {
     }
 
     fn set(&self, key: &ProfileKey, slot: Slot) -> Result<()> {
-        Self::entry(key.profile, slot)?
+        self.entry(key.profile, slot)?
             .set_password(&key.filed())
             .context("storing the profile key in the keychain")
     }
 
     fn delete(&self, profile: Uuid, slot: Slot) -> Result<()> {
-        match Self::entry(profile, slot)?.delete_credential() {
+        match self.entry(profile, slot)?.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
             Err(e) => Err(e).context("removing the profile key from the keychain"),
         }

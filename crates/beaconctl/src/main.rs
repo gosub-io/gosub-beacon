@@ -7,7 +7,7 @@
 
 use anyhow::{anyhow, bail, Context, Result};
 use beacon_profile::crypto::{KdfParams, KeyStore, OsKeychain, ProfileKey, Slot, Store};
-use beacon_profile::{Profile, Roots, MANIFEST};
+use beacon_profile::{Profile, Roots, DEFAULT_COLLECTION, MANIFEST};
 use clap::{Args as ClapArgs, Parser, Subcommand};
 use gosub_engine::storage::{is_plaintext_database, SqliteKey};
 use rusqlite::Connection;
@@ -81,6 +81,18 @@ enum ProfileCommand {
         #[command(flatten)]
         input: PassphraseInput,
     },
+    /// Move the profile key to a keychain collection of its own (Linux), which asks for its
+    /// own password before Beacon gets the key, or back to the default one. The collection
+    /// is created on first use, and the keychain asks for its new password then.
+    Keychain {
+        profile: String,
+        /// The label of the Secret Service collection to keep the key in.
+        #[arg(long, conflicts_with = "default", required_unless_present = "default")]
+        collection: Option<String>,
+        /// Back to the default collection, the login keyring.
+        #[arg(long)]
+        default: bool,
+    },
 }
 
 #[derive(ClapArgs)]
@@ -141,11 +153,17 @@ fn profile(command: ProfileCommand) -> Result<()> {
                 // no manifest entry and no key here are refused, so promise neither.
                 None => println!("encrypted       nothing in the manifest yet"),
                 Some(crypto) => {
-                    let here = OsKeychain::new().map(|k| p.key_from(Some(&k)).is_ok()).unwrap_or(false);
+                    let here = OsKeychain::new()
+                        .map(|k| p.key_from(Some(&k.in_collection(p.keychain_collection()))).is_ok())
+                        .unwrap_or(false);
                     println!("encrypted       yes");
                     println!("passphrase      {}", if crypto.passphrase.is_some() { "yes" } else { "no" });
                     println!("key here        {}", if here { "yes" } else { "no" });
                 }
+            }
+            println!("keychain        {}", p.keychain_collection().unwrap_or(DEFAULT_COLLECTION));
+            if let Some(leftover) = p.leftover_key_collection() {
+                println!("leftover key    {leftover} (`beaconctl profile keychain` removes it)");
             }
             for z in &p.manifest.zones {
                 println!("zone            {} {}", z.id, printable(&z.name));
@@ -168,7 +186,7 @@ fn profile(command: ProfileCommand) -> Result<()> {
         ProfileCommand::Passphrase { profile, input } => {
             let mut p = existing(&roots, profile)?;
             let _lock = p.lock()?;
-            let keychain = keychain()?;
+            let keychain = keychain(&p)?;
             // The first passphrase wraps the key as it is: there is no earlier wrap to
             // revoke. A change, or a change that was interrupted, is a new key.
             let first = !p.has_passphrase() && !p.rotation_pending(&keychain)?;
@@ -195,7 +213,7 @@ fn profile(command: ProfileCommand) -> Result<()> {
         ProfileCommand::RemovePassphrase { profile } => {
             let mut p = existing(&roots, profile)?;
             let _lock = p.lock()?;
-            let keychain = keychain()?;
+            let keychain = keychain(&p)?;
             if !p.has_passphrase() && !p.rotation_pending(&keychain)? {
                 bail!("{} has no passphrase", printable(p.name()));
             }
@@ -214,7 +232,7 @@ fn profile(command: ProfileCommand) -> Result<()> {
                     printable(p.name())
                 );
             }
-            let keychain = keychain()?;
+            let keychain = keychain(&p)?;
             // Mid-rotation the passphrase may wrap a key the databases are not all on yet.
             p.ensure_not_rotating(&keychain)?;
             // That a passphrase is set proves nothing; that it still unwraps the key does.
@@ -233,7 +251,7 @@ fn profile(command: ProfileCommand) -> Result<()> {
             if !path.exists() {
                 return Ok(());
             }
-            let key = p.key_from(Some(&keychain()?))?;
+            let key = p.key_from(Some(&keychain(&p)?))?;
             for (title, url) in recent_visits(&path, &key.store_key(Store::Places), limit)
                 .with_context(|| format!("reading the history of {}", printable(p.name())))?
             {
@@ -245,7 +263,7 @@ fn profile(command: ProfileCommand) -> Result<()> {
         ProfileCommand::Unlock { profile, input } => {
             let p = existing(&roots, profile)?;
             let _lock = p.lock()?;
-            let keychain = keychain()?;
+            let keychain = keychain(&p)?;
             if p.key_from(Some(&keychain)).is_ok() {
                 println!("{} already opens on this machine", printable(p.name()));
                 return Ok(());
@@ -253,6 +271,48 @@ fn profile(command: ProfileCommand) -> Result<()> {
             let passphrase = input.read(false)?;
             p.unlock_with_passphrase(&keychain, &passphrase)?;
             println!("unlocked {}; its key is in this machine's keychain now", printable(p.name()));
+        }
+        ProfileCommand::Keychain {
+            profile,
+            collection,
+            default: _,
+        } => {
+            if !OsKeychain::has_collections() {
+                bail!("this platform's keychain has no collections to pick from");
+            }
+            if collection.as_deref() == Some("") {
+                bail!("a collection needs a name");
+            }
+            if collection.as_deref() == Some(DEFAULT_COLLECTION) {
+                bail!("{DEFAULT_COLLECTION:?} is the default collection; use --default");
+            }
+            let mut p = existing(&roots, Some(profile))?;
+            let _lock = p.lock()?;
+            // A move that stopped before the old copy went: finish it first.
+            if let Some(leftover) = p.leftover_key_collection().map(str::to_string) {
+                let old = (leftover != DEFAULT_COLLECTION).then_some(leftover.as_str());
+                let keys = OsKeychain::new()
+                    .context("this platform has no keychain Beacon can use")?
+                    .in_collection(old);
+                p.remove_leftover_key(&keys)?;
+                println!("removed the copy of the key {} left in {leftover:?}", printable(p.name()));
+            }
+            if p.keychain_collection() == collection.as_deref() {
+                println!("{} already keeps its key there", printable(p.name()));
+                return Ok(());
+            }
+            let from = keychain(&p)?;
+            let to = OsKeychain::new()
+                .context("this platform has no keychain Beacon can use")?
+                .in_collection(collection.as_deref());
+            p.move_key(&from, &to, collection.as_deref())?;
+            match &collection {
+                Some(c) => println!(
+                    "{} keeps its key in the keychain collection {c:?}; lock that collection and Beacon asks for its password",
+                    printable(p.name())
+                ),
+                None => println!("{} keeps its key in the default keychain collection", printable(p.name())),
+            }
         }
     }
     Ok(())
@@ -264,8 +324,11 @@ fn printable(text: &str) -> String {
     text.chars().map(|c| if c.is_control() { ' ' } else { c }).collect()
 }
 
-fn keychain() -> Result<impl KeyStore> {
-    OsKeychain::new().context("this platform has no keychain Beacon can use")
+/// The keychain, looking in the collection `p` keeps its key in.
+fn keychain(p: &Profile) -> Result<impl KeyStore> {
+    Ok(OsKeychain::new()
+        .context("this platform has no keychain Beacon can use")?
+        .in_collection(p.keychain_collection()))
 }
 
 /// Encrypt every store still in plaintext and seal the small files, as Beacon does on its
