@@ -161,9 +161,12 @@ fn profile(command: ProfileCommand) -> Result<()> {
                     println!("key here        {}", if here { "yes" } else { "no" });
                 }
             }
-            println!("keychain        {}", p.keychain_collection().unwrap_or(DEFAULT_COLLECTION));
+            println!(
+                "keychain        {}",
+                printable(p.keychain_collection().unwrap_or(DEFAULT_COLLECTION))
+            );
             if let Some(leftover) = p.leftover_key_collection() {
-                println!("leftover key    {leftover} (`beaconctl profile keychain` removes it)");
+                println!("leftover key    {} (`beaconctl profile keychain` removes it)", printable(leftover));
             }
             for z in &p.manifest.zones {
                 println!("zone            {} {}", z.id, printable(&z.name));
