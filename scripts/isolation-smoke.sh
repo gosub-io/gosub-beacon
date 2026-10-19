@@ -133,9 +133,10 @@ URL="http://127.0.0.1:$PORT/"
 note "fixture at $URL"
 
 # The title the page records once it has rendered, read from the profile's places
-# database (encrypted, so through beaconctl and the keyring). Empty until then.
+# database (encrypted, so through beaconctl and the keyring). Empty until then; a
+# beaconctl error (keychain, key, database) goes to beaconctl.log in the artefacts.
 recorded_title() {
-    "$BEACONCTL" profile history "$1" --limit 1 2>/dev/null | cut -f1
+    "$BEACONCTL" profile history "$1" --limit 1 2>>"$OUT/beaconctl.log" | cut -f1
 }
 
 # Pixels that differ between two captures, as a share of all pixels, under the fuzz.
