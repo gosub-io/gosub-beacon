@@ -859,7 +859,7 @@ impl Profile {
     /// `name`, one of [`SEALED_FILES`], decrypted; `None` when there is none. A file written
     /// before Beacon sealed these is read as it is, and the next write seals it.
     pub fn read_sealed(&self, key: &ProfileKey, name: &str) -> Result<Option<Vec<u8>>> {
-        let path = self.dir.join(name);
+        let path = self.sealed_path(name)?;
         let data = match fs::read(&path) {
             Ok(data) => data,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -875,7 +875,16 @@ impl Profile {
 
     /// Write `name`, one of [`SEALED_FILES`], sealed with `key`.
     pub fn write_sealed(&self, key: &ProfileKey, name: &str, plaintext: &[u8]) -> Result<()> {
-        write_atomic(&self.dir.join(name), &key.seal(name, plaintext)?)
+        write_atomic(&self.sealed_path(name)?, &key.seal(name, plaintext)?)
+    }
+
+    /// Where `name` lives; an error for a name not in [`SEALED_FILES`], so no caller reaches
+    /// outside the profile folder or over one of its databases.
+    fn sealed_path(&self, name: &str) -> Result<PathBuf> {
+        if !SEALED_FILES.contains(&name) {
+            bail!("{name:?} is not one of the profile's sealed files");
+        }
+        Ok(self.dir.join(name))
     }
 
     /// Seal every one of [`SEALED_FILES`] still in plaintext: what a profile holds when it
@@ -1645,6 +1654,12 @@ mod tests {
         assert!(crypto::is_sealed(&on_disk) && !on_disk.windows(7).any(|w| w == b"example"));
         assert_eq!(p.read_sealed(&key, "session.tabs").unwrap().unwrap(), b"*https://example.org/\n");
         assert!(p.read_sealed(&ProfileKey::generate(p.id()), "session.tabs").is_err());
+        // Only the sealed files: no other name, and nothing outside the folder.
+        for name in ["places.db", "../escape", "/tmp/escape"] {
+            assert!(p.write_sealed(&key, name, b"x").is_err());
+            assert!(p.read_sealed(&key, name).is_err());
+        }
+        assert!(!tmp.path().join("escape").exists());
 
         // A file from before sealing reads as it is, and the first keyed start seals it.
         fs::write(p.dir.join("picker-clock.txt"), "12\n").unwrap();
