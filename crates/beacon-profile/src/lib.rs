@@ -371,7 +371,8 @@ impl Roots {
     }
 
     /// The profile `selection` names, made ready to use: folders private, cache in place,
-    /// `last_opened_by` updated. Does not take the lock; see [`Profile::lock`].
+    /// `last_opened_by` updated, unless another process holds it. Does not take the lock;
+    /// see [`Profile::lock`].
     pub fn open(&self, selection: &Selection, version: &str) -> Result<Profile> {
         let _lock = match selection {
             Selection::Dir(_) => None,
@@ -404,7 +405,13 @@ impl Roots {
                 }
             }
         };
-        profile.prepare(version)?;
+        // Another process has it open: its cache and manifest are that process's. This one
+        // only gets as far as handing over to it, or being refused the lock.
+        if profile.in_use() {
+            profile.manifest.ensure_understood()?;
+        } else {
+            profile.prepare(version)?;
+        }
         Ok(profile)
     }
 }
@@ -1286,6 +1293,19 @@ mod tests {
         roots.open(&Selection::Default, V).unwrap();
         assert!(!p.cache_dir.join("old-entry").exists());
         assert_eq!(fs::read_to_string(p.cache_dir.join("VERSION")).unwrap(), CACHE_VERSION);
+    }
+
+    #[test]
+    fn a_profile_in_use_is_left_as_it_is() {
+        let tmp = tempfile::tempdir().unwrap();
+        let roots = roots(&tmp);
+        let p = roots.open(&Selection::Default, V).unwrap();
+        let _held = p.lock().unwrap();
+        fs::write(p.cache_dir.join("VERSION"), "0").unwrap();
+        fs::write(p.cache_dir.join("entry"), "x").unwrap();
+        roots.open(&Selection::Default, "9.9.9").unwrap();
+        assert!(p.cache_dir.join("entry").exists());
+        assert_eq!(Manifest::read(&p.dir).unwrap().unwrap().last_opened_by, V);
     }
 
     #[test]
