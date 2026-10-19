@@ -153,7 +153,7 @@ fn profile_key() -> anyhow::Result<&'static ProfileKey> {
     if ENCRYPTED.get().is_none() {
         encrypt_plaintext(profile(), key)?;
         let _ = ENCRYPTED.set(());
-        log::info!("profile {:?}: databases encrypted, key in the keychain", profile().name());
+        log::info!("profile {:?}: databases encrypted, key in the key store", profile().name());
     }
     Ok(key)
 }
