@@ -120,7 +120,9 @@ pub fn run() {
 
 /// One GTK instance per profile. A second launch hands its URLs to the instance with the
 /// same id, so a shared id would open `--profile work` as a window of whichever profile is
-/// already running. The default profile keeps the plain id the desktop file and Flatpak use.
+/// already running. The default profile keeps the plain id the desktop file and Flatpak use;
+/// `beaconctl` refuses to move the default while either profile runs, so an id never goes
+/// stale under a running instance.
 fn app_id() -> String {
     if beacon_core::paths::is_default() {
         return APP_ID.to_string();

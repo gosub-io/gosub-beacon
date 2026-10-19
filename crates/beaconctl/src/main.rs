@@ -175,6 +175,24 @@ fn profile(command: ProfileCommand) -> Result<()> {
         }
         ProfileCommand::SetDefault { profile } => {
             let p = existing(&roots, Some(profile))?;
+            // A running Beacon took its GTK id from whether it is the default: the default
+            // has the plain one. Moving the default under it would hand the next plain
+            // launch to the wrong profile's window.
+            let old_id = roots.default_id()?;
+            if old_id != Some(p.id()) {
+                let old = match old_id {
+                    Some(id) => roots.find(&id.to_string())?,
+                    None => None,
+                };
+                for running in [Some(&p), old.as_ref()].into_iter().flatten() {
+                    if running.in_use() {
+                        bail!(
+                            "profile {} is open in Beacon; close it before changing the default",
+                            printable(running.name())
+                        );
+                    }
+                }
+            }
             roots.set_default(p.id())?;
             println!("default is now {} {}", printable(p.name()), p.id());
         }
