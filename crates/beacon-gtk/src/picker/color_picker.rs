@@ -818,13 +818,13 @@ fn color_row(entry: &Named) -> ListBoxRow {
 /// Beside the rest of the profile, sealed with its key like every small file there.
 const SWATCHES_FILE: &str = "picker-swatches.txt";
 
-/// The quick swatches, one hex per line beside the rest of the profile. Small enough that a
-/// file is kinder than a settings table, and it survives a profile copy like everything else
-/// there does.
 /// Set when the stored swatches could not be read: the picker shows the defaults, and no
 /// save writes them over the file that is still there.
 static SWATCHES_UNREADABLE: AtomicBool = AtomicBool::new(false);
 
+/// The quick swatches, one hex per line beside the rest of the profile. Small enough that a
+/// file is kinder than a settings table, and it survives a profile copy like everything else
+/// there does.
 fn load_swatches() -> Vec<CssColor> {
     let text = match beacon_core::paths::read_profile_file(SWATCHES_FILE) {
         Ok(text) => text.unwrap_or_default(),
