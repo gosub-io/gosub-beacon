@@ -496,8 +496,6 @@ impl Profile {
         self.manifest.zones.first().map_or(LEGACY_ZONE, |z| z.id)
     }
 
-    /// `dir` as a profile, writing a manifest when it has none. A folder already holding
-    /// the old flat layout keeps the old zone id, so its cookies and storage still match.
     /// The profile already in `dir`, as it is: nothing is created or written, so it is safe
     /// to read one Beacon has open.
     pub fn at(dir: &Path, cache_root: &Path) -> Result<Self> {
@@ -511,6 +509,8 @@ impl Profile {
         })
     }
 
+    /// `dir` as a profile, writing a manifest when it has none. A folder already holding
+    /// the old flat layout keeps the old zone id, so its cookies and storage still match.
     fn adopt(dir: &Path, cache_root: &Path, version: &str) -> Result<Self> {
         make_private_dir(dir)?;
         let manifest = match Manifest::read(dir)? {
