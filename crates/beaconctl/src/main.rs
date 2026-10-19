@@ -166,7 +166,16 @@ fn profile(command: ProfileCommand) -> Result<()> {
                 printable(p.keychain_collection().unwrap_or(DEFAULT_COLLECTION))
             );
             if let Some(leftover) = p.leftover_key_collection() {
-                println!("leftover key    {} (`beaconctl profile keychain` removes it)", printable(leftover));
+                // Asking for the collection the key is in already only clears the leftover.
+                let here = match p.keychain_collection() {
+                    Some(collection) => format!("--collection {}", shell_quote(&printable(collection))),
+                    None => "--default".to_string(),
+                };
+                println!(
+                    "leftover key    {} (`beaconctl profile keychain {} {here}` removes it)",
+                    printable(leftover),
+                    p.id()
+                );
             }
             for z in &p.manifest.zones {
                 println!("zone            {} {}", z.id, printable(&z.name));
@@ -343,6 +352,15 @@ fn profile(command: ProfileCommand) -> Result<()> {
 /// space, so one record stays one line and a page title cannot drive the terminal.
 fn printable(text: &str) -> String {
     text.chars().map(|c| if c.is_control() { ' ' } else { c }).collect()
+}
+
+/// `text` as one shell word: single-quoted unless it is plain.
+fn shell_quote(text: &str) -> String {
+    if !text.is_empty() && text.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c)) {
+        text.to_string()
+    } else {
+        format!("'{}'", text.replace('\'', "'\\''"))
+    }
 }
 
 /// The keychain, looking in the collection `p` keeps its key in.
