@@ -410,7 +410,9 @@ impl Roots {
         if profile.in_use() {
             profile.manifest.ensure_understood()?;
         } else {
-            profile.prepare(version)?;
+            // A folder named on the command line is the user's: its mode is set only when
+            // this made it.
+            profile.prepare(version, !matches!(selection, Selection::Dir(_)))?;
         }
         Ok(profile)
     }
@@ -511,8 +513,14 @@ impl Profile {
 
     /// `dir` as a profile, writing a manifest when it has none. A folder already holding
     /// the old flat layout keeps the old zone id, so its cookies and storage still match.
+    /// A folder this makes is private; one that exists keeps its mode, since it may be
+    /// shared or the user's own, and only gets a warning when others can read it.
     fn adopt(dir: &Path, cache_root: &Path, version: &str) -> Result<Self> {
-        make_private_dir(dir)?;
+        if dir.exists() {
+            warn_unless_private(dir);
+        } else {
+            make_private_dir(dir)?;
+        }
         let manifest = match Manifest::read(dir)? {
             Some(manifest) => manifest,
             None => {
@@ -538,11 +546,13 @@ impl Profile {
         })
     }
 
-    /// Refuse a newer profile, make the folders private, set up the cache and record this
-    /// version as the last to open it.
-    fn prepare(&mut self, version: &str) -> Result<()> {
+    /// Refuse a newer profile, make the folders private (the profile folder itself only
+    /// when `own_dir`), set up the cache and record this version as the last to open it.
+    fn prepare(&mut self, version: &str, own_dir: bool) -> Result<()> {
         self.manifest.ensure_understood()?;
-        make_private_dir(&self.dir)?;
+        if own_dir {
+            make_private_dir(&self.dir)?;
+        }
         self.prepare_cache()?;
         if self.manifest.last_opened_by != version {
             self.manifest.last_opened_by = version.to_string();
@@ -1052,6 +1062,25 @@ fn make_private_dir(dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Log when users other than the owner can get into `dir`.
+fn warn_unless_private(dir: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = fs::metadata(dir) {
+            if meta.permissions().mode() & 0o077 != 0 {
+                log::warn!(
+                    "{} is open to other users (mode {:o}); its lock and manifest are readable to them",
+                    dir.display(),
+                    meta.permissions().mode() & 0o777
+                );
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = dir;
+}
+
 /// Write via a temp file and rename, so a crash leaves the old file or the new one.
 fn write_atomic(path: &Path, data: impl AsRef<[u8]>) -> Result<()> {
     let tmp = path.with_extension("tmp");
@@ -1134,6 +1163,25 @@ mod tests {
         let p = roots.open(&Selection::Dir(old.clone()), V).unwrap();
         assert_eq!(p.zone_id(), LEGACY_ZONE);
         assert_eq!(roots.open(&Selection::Dir(old), V).unwrap().id(), p.id());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_exact_dir_that_exists_keeps_its_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let roots = roots(&tmp);
+        let mode = |dir: &Path| fs::metadata(dir).unwrap().permissions().mode() & 0o777;
+        let shared = tmp.path().join("shared");
+        fs::create_dir_all(&shared).unwrap();
+        fs::set_permissions(&shared, fs::Permissions::from_mode(0o755)).unwrap();
+        roots.open(&Selection::Dir(shared.clone()), V).unwrap();
+        roots.open(&Selection::Dir(shared.clone()), V).unwrap();
+        assert_eq!(mode(&shared), 0o755);
+
+        let fresh = tmp.path().join("fresh");
+        roots.open(&Selection::Dir(fresh.clone()), V).unwrap();
+        assert_eq!(mode(&fresh), 0o700);
     }
 
     #[test]
