@@ -169,12 +169,16 @@ impl<C: BeaconConfig> BrowserEngine<C> {
             .map_err(|e| anyhow::anyhow!("ZoneConfig: {e:?}"))?;
 
         // The engine's local store takes a `&str`; a lossy conversion would name another
-        // file and open an empty store there, so a path that is not UTF-8 is an error.
-        let local_db = data_dir.join(Store::LocalStorage.file_name());
-        let local_db = local_db
-            .to_str()
-            .ok_or_else(|| anyhow::anyhow!("local store: {} is not a UTF-8 path", local_db.display()))?
-            .to_string();
+        // file and open an empty store there, so a path that is not UTF-8 is an error. Only
+        // where the SQLite store is opened: a private window or the storage process do not
+        // need the path.
+        let open_local_db = || -> anyhow::Result<SqliteLocalStore> {
+            let path = data_dir.join(Store::LocalStorage.file_name());
+            let path = path
+                .to_str()
+                .ok_or_else(|| anyhow::anyhow!("local store: {} is not a UTF-8 path", path.display()))?;
+            SqliteLocalStore::open(path, Some(key(Store::LocalStorage)?)).map_err(|e| anyhow::anyhow!("local store: {e:?}"))
+        };
 
         // Bookmarks + visited history. The engine records visits; Beacon queries the same
         // handle directly (star button, bookmarks bar, URL-bar completion).
@@ -250,15 +254,10 @@ impl<C: BeaconConfig> BrowserEngine<C> {
                         .map_err(|e| anyhow::anyhow!("local store service in {}: {e:?}", dir.display()))?,
                 )
             } else {
-                Arc::new(
-                    SqliteLocalStore::open(&local_db, Some(key(Store::LocalStorage)?))
-                        .map_err(|e| anyhow::anyhow!("local store: {e:?}"))?,
-                )
+                Arc::new(open_local_db()?)
             };
             #[cfg(not(target_os = "linux"))]
-            let local: Arc<dyn gosub_engine::storage::LocalStore> = Arc::new(
-                SqliteLocalStore::open(&local_db, Some(key(Store::LocalStorage)?)).map_err(|e| anyhow::anyhow!("local store: {e:?}"))?,
-            );
+            let local: Arc<dyn gosub_engine::storage::LocalStore> = Arc::new(open_local_db()?);
             ZoneServices {
                 storage: Arc::new(StorageService::new(local, Arc::new(InMemorySessionStore::new()))),
                 cookie_store: Some(cookie_store),
