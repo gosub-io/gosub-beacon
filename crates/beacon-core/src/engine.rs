@@ -168,7 +168,13 @@ impl<C: BeaconConfig> BrowserEngine<C> {
             .build()
             .map_err(|e| anyhow::anyhow!("ZoneConfig: {e:?}"))?;
 
-        let local_db = data_dir.join(Store::LocalStorage.file_name()).to_string_lossy().into_owned();
+        // The engine's local store takes a `&str`; a lossy conversion would name another
+        // file and open an empty store there, so a path that is not UTF-8 is an error.
+        let local_db = data_dir.join(Store::LocalStorage.file_name());
+        let local_db = local_db
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("local store: {} is not a UTF-8 path", local_db.display()))?
+            .to_string();
 
         // Bookmarks + visited history. The engine records visits; Beacon queries the same
         // handle directly (star button, bookmarks bar, URL-bar completion).
