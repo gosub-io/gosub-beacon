@@ -8,6 +8,7 @@
 
 use beacon_core::event::PickerKind;
 use chrono::{Datelike, Days, Local, NaiveDate, NaiveTime, Timelike, Weekday};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Enough calendar fields for every kind, formatted per kind. A picker holds one of these
 /// whatever it is editing, so a `datetime-local` can move between its Date and Time sections
@@ -183,7 +184,13 @@ fn stored_clock_format() -> Option<u32> {
     let text = match beacon_core::paths::read_profile_file(CLOCK_FORMAT_FILE) {
         Ok(text) => text?,
         Err(error) => {
-            log::warn!(target: "gtk", "could not read the picker's clock format: {error:#}");
+            // Read on every picker render: warn the first time only.
+            static WARNED: AtomicBool = AtomicBool::new(false);
+            if WARNED.swap(true, Ordering::Relaxed) {
+                log::debug!(target: "gtk", "could not read the picker's clock format: {error:#}");
+            } else {
+                log::warn!(target: "gtk", "could not read the picker's clock format: {error:#}");
+            }
             return None;
         }
     };
