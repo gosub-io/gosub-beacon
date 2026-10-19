@@ -611,13 +611,14 @@ impl Profile {
         }
     }
 
-    /// Whether another process holds the lock right now. A lock file that is missing or
-    /// cannot be opened is no holder: a running Beacon has it open.
+    /// Whether another process holds the lock right now. A missing lock file is no holder:
+    /// a running Beacon has it open. A lock file that cannot be opened or tried counts as
+    /// held, since its callers then leave the profile alone, which is the safe side.
     pub fn in_use(&self) -> bool {
-        let Ok(file) = File::options().write(true).open(self.dir.join(LOCK)) else {
-            return false;
-        };
-        matches!(file.try_lock(), Err(fs::TryLockError::WouldBlock))
+        match File::options().write(true).open(self.dir.join(LOCK)) {
+            Ok(file) => file.try_lock().is_err(),
+            Err(e) => e.kind() != std::io::ErrorKind::NotFound,
+        }
     }
 }
 
@@ -1335,7 +1336,7 @@ mod tests {
     }
 
     #[test]
-    fn only_a_held_lock_is_in_use() {
+    fn a_lock_held_or_unreadable_is_in_use() {
         let tmp = tempfile::tempdir().unwrap();
         let roots = roots(&tmp);
         let p = roots.open(&Selection::Default, V).unwrap();
@@ -1344,6 +1345,18 @@ mod tests {
         assert!(p.in_use());
         drop(held);
         assert!(!p.in_use());
+
+        // A lock file that cannot be tried is taken as held.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let lock = p.dir.join(LOCK);
+            fs::set_permissions(&lock, fs::Permissions::from_mode(0o400)).unwrap();
+            if File::options().write(true).open(&lock).is_err() {
+                assert!(p.in_use());
+            }
+            fs::set_permissions(&lock, fs::Permissions::from_mode(0o600)).unwrap();
+        }
     }
 
     #[test]
