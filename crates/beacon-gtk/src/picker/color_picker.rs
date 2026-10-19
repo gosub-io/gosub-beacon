@@ -13,6 +13,7 @@ use gtk4::{
 };
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::color::{named, system_colors, CssColor, Named};
 use super::shell::{Metrics, NavIcon, NavItem, PickerShell, Rect, ShellConfig};
@@ -820,11 +821,19 @@ const SWATCHES_FILE: &str = "picker-swatches.txt";
 /// The quick swatches, one hex per line beside the rest of the profile. Small enough that a
 /// file is kinder than a settings table, and it survives a profile copy like everything else
 /// there does.
+/// Set when the stored swatches could not be read: the picker shows the defaults, and no
+/// save writes them over the file that is still there.
+static SWATCHES_UNREADABLE: AtomicBool = AtomicBool::new(false);
+
 fn load_swatches() -> Vec<CssColor> {
-    let text = beacon_core::paths::read_profile_file(SWATCHES_FILE)
-        .ok()
-        .flatten()
-        .unwrap_or_default();
+    let text = match beacon_core::paths::read_profile_file(SWATCHES_FILE) {
+        Ok(text) => text.unwrap_or_default(),
+        Err(error) => {
+            log::warn!(target: "gtk", "could not read the picker's quick swatches: {error:#}");
+            SWATCHES_UNREADABLE.store(true, Ordering::Relaxed);
+            Vec::new()
+        }
+    };
     let text = String::from_utf8_lossy(&text);
     let stored: Vec<CssColor> = text.lines().filter_map(CssColor::parse).collect();
     if stored.is_empty() {
@@ -835,6 +844,10 @@ fn load_swatches() -> Vec<CssColor> {
 }
 
 fn save_swatches(swatches: &[CssColor]) {
+    if SWATCHES_UNREADABLE.load(Ordering::Relaxed) {
+        log::warn!(target: "gtk", "not saving the picker's quick swatches: the stored ones could not be read");
+        return;
+    }
     let text: String = swatches.iter().map(|c| format!("{}\n", c.hex_with_alpha())).collect();
     if let Err(error) = beacon_core::paths::write_profile_file(SWATCHES_FILE, text.as_bytes()) {
         log::warn!(target: "gtk", "could not save the picker's quick swatches: {error:#}");

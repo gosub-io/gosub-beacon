@@ -180,7 +180,13 @@ const CLOCK_FORMAT_FILE: &str = "picker-clock.txt";
 
 #[allow(dead_code)] // the time pickers, next pass
 fn stored_clock_format() -> Option<u32> {
-    let text = beacon_core::paths::read_profile_file(CLOCK_FORMAT_FILE).ok().flatten()?;
+    let text = match beacon_core::paths::read_profile_file(CLOCK_FORMAT_FILE) {
+        Ok(text) => text?,
+        Err(error) => {
+            log::warn!(target: "gtk", "could not read the picker's clock format: {error:#}");
+            return None;
+        }
+    };
     match String::from_utf8_lossy(&text).trim() {
         "12" => Some(12),
         "24" => Some(24),
