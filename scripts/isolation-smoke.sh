@@ -84,7 +84,10 @@ if [ -z "${SMOKE_PRIVATE_BUS:-}" ]; then
     exit $status
 fi
 # An empty password never creates the keyring, so it gets a throwaway one.
-printf smoke | gnome-keyring-daemon --unlock --components=secrets >/dev/null
+printf smoke | gnome-keyring-daemon --unlock --components=secrets >/dev/null || {
+    echo "gnome-keyring-daemon could not unlock a keyring; no Secret Service for Beacon" >&2
+    exit 2
+}
 
 cleanup_pids=()
 cleanup() {
