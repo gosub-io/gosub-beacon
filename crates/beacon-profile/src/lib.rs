@@ -34,12 +34,16 @@ use zeroize::Zeroizing;
 /// The newest manifest layout this build understands. A profile written by a newer Beacon
 /// is refused rather than opened, so an older build cannot quietly damage it. Layout 2 adds
 /// `[crypto]`: a Beacon that predates it would open the encrypted databases as empty ones.
-pub const SCHEMA: u32 = 2;
+/// Layout 3 adds `keychain` and `keychain_leftover`: a Beacon that predates it would drop
+/// them on its next manifest write and look for the key in the default collection only.
+pub const SCHEMA: u32 = 3;
 
 /// The layout of a profile with no `[crypto]`, which every Beacon with profiles can open.
 const SCHEMA_PLAIN: u32 = 1;
 /// The layout of an encrypted profile.
 const SCHEMA_CRYPTO: u32 = 2;
+/// The layout of a profile whose key is, or was, in a keychain collection of its own.
+const SCHEMA_KEYCHAIN: u32 = 3;
 
 /// The zone id every Beacon before profiles used, compiled in. A profile adopted from that
 /// layout keeps it, or its cookies and localStorage rows would no longer match.
@@ -450,6 +454,7 @@ impl Profile {
     pub fn move_key(&mut self, from: &dyn KeyStore, to: &dyn KeyStore, collection: Option<&str>) -> Result<()> {
         if self.manifest.crypto.is_none() {
             self.manifest.keychain = collection.map(str::to_string);
+            self.manifest.schema = self.manifest.schema.max(SCHEMA_KEYCHAIN);
             return self.manifest.write(&self.dir);
         }
         // The manifest names one leftover copy; a second move would lose the first.
@@ -468,6 +473,7 @@ impl Profile {
         let old = self.keychain_collection().unwrap_or(DEFAULT_COLLECTION).to_string();
         self.manifest.keychain = collection.map(str::to_string);
         self.manifest.keychain_leftover = Some(old);
+        self.manifest.schema = self.manifest.schema.max(SCHEMA_KEYCHAIN);
         self.manifest.write(&self.dir)?;
         self.remove_leftover_key(from)
     }
@@ -1395,6 +1401,8 @@ mod tests {
         let again = roots.open(&Selection::Default, V).unwrap();
         assert_eq!(again.keychain_collection(), Some("private"));
         assert_eq!(again.key_from(Some(&private)).unwrap().check(), key.check());
+        // A Beacon from before collections would drop the field and look in the login one.
+        assert_eq!(again.manifest.schema, SCHEMA_KEYCHAIN);
     }
 
     /// A keychain that holds keys but will not let go of them.
