@@ -85,6 +85,8 @@ find "$ROOT/packaging/android/java" -name '*.java' -print0 |
 
 (cd "$ROOT" && cargo run -q --release -p beacon-icon -- 192 "$STAGE/res/mipmap-xxxhdpi/ic_launcher.png")
 unzip -q -o "$AAR" 'res/xml/*' -d "$STAGE"
+# Beacon's own XML resources (the backup and transfer rules the manifest names).
+cp "$ROOT"/packaging/android/res/xml/*.xml "$STAGE/res/xml/"
 "$BUILD_TOOLS/aapt2" compile --dir "$STAGE/res" -o "$STAGE/res.zip"
 "$BUILD_TOOLS/aapt2" link -o "$STAGE/unaligned.apk" \
     -I "$PLATFORM/android.jar" \

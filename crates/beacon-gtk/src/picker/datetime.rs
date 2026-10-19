@@ -8,6 +8,7 @@
 
 use beacon_core::event::PickerKind;
 use chrono::{Datelike, Days, Local, NaiveDate, NaiveTime, Timelike, Weekday};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Enough calendar fields for every kind, formatted per kind. A picker holds one of these
 /// whatever it is editing, so a `datetime-local` can move between its Date and Time sections
@@ -175,15 +176,25 @@ pub fn uses_12_hour() -> bool {
     super::locale::uses_12_hour()
 }
 
-#[allow(dead_code)] // the time pickers, next pass
-fn clock_format_path() -> std::path::PathBuf {
-    beacon_core::paths::data_dir().join("picker-clock.txt")
-}
+/// Beside the rest of the profile, sealed with its key like every small file there.
+const CLOCK_FORMAT_FILE: &str = "picker-clock.txt";
 
 #[allow(dead_code)] // the time pickers, next pass
 fn stored_clock_format() -> Option<u32> {
-    let text = std::fs::read_to_string(clock_format_path()).ok()?;
-    match text.trim() {
+    let text = match beacon_core::paths::read_profile_file(CLOCK_FORMAT_FILE) {
+        Ok(text) => text?,
+        Err(error) => {
+            // Read on every picker render: warn the first time only.
+            static WARNED: AtomicBool = AtomicBool::new(false);
+            if WARNED.swap(true, Ordering::Relaxed) {
+                log::debug!(target: "gtk", "could not read the picker's clock format: {error:#}");
+            } else {
+                log::warn!(target: "gtk", "could not read the picker's clock format: {error:#}");
+            }
+            return None;
+        }
+    };
+    match String::from_utf8_lossy(&text).trim() {
         "12" => Some(12),
         "24" => Some(24),
         _ => None,
@@ -193,8 +204,8 @@ fn stored_clock_format() -> Option<u32> {
 /// Remember the toggle's choice for the next picker, as the Mac does.
 #[allow(dead_code)] // the time pickers, next pass
 pub fn set_clock_format(hours: u32) {
-    if let Err(error) = std::fs::write(clock_format_path(), format!("{hours}\n")) {
-        log::warn!(target: "gtk", "could not save the picker's clock format: {error}");
+    if let Err(error) = beacon_core::paths::write_profile_file(CLOCK_FORMAT_FILE, format!("{hours}\n").as_bytes()) {
+        log::warn!(target: "gtk", "could not save the picker's clock format: {error:#}");
     }
 }
 

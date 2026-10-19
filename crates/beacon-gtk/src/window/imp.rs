@@ -224,6 +224,10 @@ pub struct BrowserWindow {
     tab_zoom: RefCell<HashMap<TabId, Rc<Cell<f64>>>>,
     /// Whether this is a private-browsing window (ephemeral engine, no history recording).
     pub private: Cell<bool>,
+    /// URLs another launch handed over before the startup tabs were open, when the content
+    /// area may not have its size yet; they open after the startup tabs. `None` once those
+    /// are open.
+    pub startup_urls: RefCell<Option<Vec<String>>>,
     /// Whether the user wants the bookmarks bar. Per window, as on the Mac: fullscreen hides
     /// the whole chrome, and this says whether the bar comes back with it.
     pub bookmarks_bar_wanted: Cell<bool>,
@@ -336,6 +340,7 @@ impl Default for BrowserWindow {
             completion: RefCell::new(None),
             tab_zoom: RefCell::new(HashMap::new()),
             private: Cell::new(false),
+            startup_urls: RefCell::new(Some(Vec::new())),
             bookmarks_bar_wanted: Cell::new(true),
             bookmark_opened: RefCell::new(HashMap::new()),
             picker: RefCell::new(None),

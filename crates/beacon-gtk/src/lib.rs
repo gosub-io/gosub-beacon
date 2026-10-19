@@ -15,7 +15,7 @@ mod window;
 
 use crate::application::Application;
 use gtk4::gdk::Display;
-use gtk4::prelude::{ApplicationExt, ApplicationExtManual};
+use gtk4::prelude::{ActionGroupExt, ApplicationExt, ApplicationExtManual, ToVariant};
 use gtk4::{gio, CssProvider};
 use std::sync::OnceLock;
 use tokio::runtime::Runtime;
@@ -38,6 +38,13 @@ pub fn run() {
     // the lockdown below needs `--user-data-dir`. Everything downstream reads the parsed
     // result rather than re-scanning argv.
     let cli = beacon_core::cli::Cli::init();
+
+    // The profile next: creating or migrating it writes outside the folders the lockdown
+    // leaves open, and the lockdown needs to know which profile those are.
+    if let Err(e) = beacon_core::paths::init() {
+        eprintln!("gosub-beacon: cannot open the profile: {e:#}");
+        std::process::exit(1);
+    }
 
     // Before any thread, the logger or the engine exist: confine this process to what it
     // writes. In every mode: single-process is where page content runs in this process.
@@ -83,8 +90,15 @@ pub fn run() {
 
     gio::resources_register_include!("gosub.gresource").expect("Failed to register resources.");
 
-    let app = Application::new();
+    let app = Application::new(&app_id());
     app.connect_startup(|_| {
+        // Only the primary instance gets here; a second launch has already handed off. So
+        // this is where a profile another process holds, or one without a keychain for its
+        // key, is refused, before any window.
+        if let Err(e) = beacon_core::paths::lock_profile().and_then(|()| beacon_core::paths::unlock_profile()) {
+            eprintln!("gosub-beacon: {e:#}");
+            std::process::exit(1);
+        }
         load_css();
         // Chrome follows the desktop light/dark preference; the manual toggle overrides it
         // until the desktop preference next changes.
@@ -92,9 +106,46 @@ pub fn run() {
     });
     // Keep GTK away from argv: it is ours, already parsed, and plain `app.run()` would
     // reject the URLs and flags as unknown options.
-    let _ = cli;
     let argv0: Vec<String> = std::env::args().take(1).collect();
+    // A second launch only presents the running instance, which never sees this argv: its
+    // URLs, and whether it wants a private window, go over as an action first. Registering
+    // is what tells the two apart, and `run` registers anyway; both D-Bus calls are flushed
+    // before it returns.
+    let handover = !cli.urls.is_empty() || cli.private;
+    if handover && app.register(gio::Cancellable::NONE).is_ok() && app.is_remote() {
+        app.activate_action(application::OPEN_URLS, Some(&(cli.private, cli.urls.clone()).to_variant()));
+    }
     app.run_with_args(&argv0);
+}
+
+/// One GTK instance per profile. A second launch hands its URLs to the instance with the
+/// same id, so a shared id would open `--profile work` as a window of whichever profile is
+/// already running. The default profile keeps the plain id the desktop file and Flatpak use;
+/// `beaconctl` refuses to move the default while either profile runs, so an id never goes
+/// stale under a running instance.
+fn app_id() -> String {
+    if beacon_core::paths::is_default() {
+        return APP_ID.to_string();
+    }
+    // D-Bus name elements may not start with a digit, hence the prefixes.
+    let id = format!("{APP_ID}.Profile{}", beacon_core::paths::profile().id().simple());
+    match &beacon_core::cli::Cli::global().user_data_dir {
+        // A copied folder keeps its manifest, id and all: the folder itself tells two
+        // copies apart, or the second would open as a window of the first.
+        Some(dir) => {
+            let dir = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.clone());
+            format!("{id}.Dir{:016x}", fnv1a(dir.as_os_str().as_encoded_bytes()))
+        }
+        None => id,
+    }
+}
+
+/// FNV-1a, 64 bits: the same for a folder in every build, which `DefaultHasher` does not
+/// promise.
+fn fnv1a(bytes: &[u8]) -> u64 {
+    bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, b| {
+        (hash ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3)
+    })
 }
 
 fn load_css() {

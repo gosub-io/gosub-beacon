@@ -105,14 +105,16 @@ jobs:
             libgtk-4-dev libglib2.0-dev libcairo2-dev libgdk-pixbuf-2.0-dev libpango1.0-dev \
             libsqlite3-dev libssl-dev pkg-config \
             clang libclang-dev libgl-dev libegl-dev libfontconfig-dev libfreetype-dev \
-            xvfb xdotool imagemagick dbus
+            xvfb xdotool imagemagick dbus gnome-keyring
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: gosub-beacon
           key: isolation
       - name: Build (isolation feature)
         working-directory: gosub-beacon
-        run: cargo build --verbose --bin gosub-beacon-gtk --no-default-features --features gtk,isolation
+        run: |
+          cargo build --verbose --bin gosub-beacon-gtk --no-default-features --features gtk,isolation
+          cargo build --verbose -p beaconctl
       - name: Smoke test
         working-directory: gosub-beacon
         run: SMOKE_OUT=/tmp/smoke xvfb-run -a -s "-screen 0 1400x900x24" scripts/isolation-smoke.sh

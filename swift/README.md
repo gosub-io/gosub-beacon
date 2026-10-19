@@ -59,6 +59,13 @@ the machine that built it and on no other, so no local test would catch it. The 
 invalidates the signature SwiftPM applied, and macOS kills an arm64 binary with a broken
 signature rather than warning about it.
 
+`beaconctl` goes into `Contents/MacOS` beside the executable (skip it with `--no-beaconctl`).
+That placement is what keeps the keychain quiet: an item trusts the application that made
+it, so Beacon creates its profile-key item trusting the `beaconctl` beside it and vice versa.
+A `beaconctl` built with cargo elsewhere gets the "wants to use your confidential
+information" dialog once per build; "Always Allow" answers it. Over ssh there is no screen
+for that dialog, so `beaconctl` refuses with a message instead of waiting on it.
+
 Two things inside the bundle are easy to get wrong. The SwiftPM resource bundle
 (`BeaconMac_BeaconMac.bundle`) has to be copied into `Contents/Resources`; without it
 `Bundle.module` traps and the About window takes the app down. And `Info.plist` is what

@@ -12,6 +12,7 @@
 
 use std::sync::Arc;
 
+use beacon_profile::crypto::Store;
 use gosub_engine::cookies::SqliteCookieStore;
 use gosub_engine::events::EngineEvent;
 use gosub_engine::html::RenderConfiguration;
@@ -24,9 +25,6 @@ use gosub_render_pipeline::render::DefaultCompositor;
 use tokio::runtime::Runtime;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
-use uuid::uuid;
-
-const DEFAULT_ZONE: uuid::Uuid = uuid!("f1234567-abcd-4000-8000-000000000001");
 
 /// Engine TabId, re-exported for callers that need to key on the engine's identifier.
 pub type EngineTabId = gosub_engine::tab::TabId;
@@ -44,8 +42,8 @@ impl<C: RenderConfiguration<CompositorSink = DefaultCompositor>> BeaconConfig fo
 pub struct BrowserEngine<C: BeaconConfig> {
     /// Bookmarks + visited history store, shared with the engine's zone.
     places: gosub_engine::places::PlacesHandle,
-    /// Kept alive so the engine keeps running for the lifetime of the window.
-    #[allow(dead_code)]
+    /// Kept alive so the engine keeps running for the lifetime of the window; stopped by
+    /// [`BrowserEngine::shutdown`].
     engine: GosubEngine<C>,
     zone: Zone<C>,
     /// Shared compositor; clone the `Arc` into draw callbacks to read frames.
@@ -80,7 +78,13 @@ impl<C: BeaconConfig> BrowserEngine<C> {
 
         let mut engine = GosubEngine::<C>::new(None, backend, compositor.clone());
 
-        let data_dir = crate::paths::data_dir();
+        // One process per profile: a second one would write the same databases.
+        crate::paths::lock_profile()?;
+        let profile = crate::paths::profile();
+        // Each store's key. Resolved before any store opens: on a profile's first keyed run
+        // this is where its databases get encrypted, and without a keychain it fails here.
+        let key = crate::paths::store_key;
+        let data_dir = &profile.dir;
         let isolated = crate::cli::Cli::global().isolated();
 
         // Beacon's own settings, merged into the engine's store under the `useragent`
@@ -98,10 +102,13 @@ impl<C: BeaconConfig> BrowserEngine<C> {
         // Persist settings overrides (edited via gosub://config) across runs. Attached
         // before anything reads or writes settings, so stored values win over defaults.
         // Falls back to the in-memory store if the database cannot be opened.
-        let settings_db = data_dir.join("settings.db").to_string_lossy().into_owned();
-        match gosub_engine::config_storage::SqliteStorageAdapter::try_from(&settings_db) {
+        let settings_db = data_dir.join(Store::Settings.file_name());
+        match gosub_engine::config_storage::SqliteStorageAdapter::open(&settings_db, Some(&key(Store::Settings)?)) {
             Ok(storage) => engine.settings().set_storage(Box::new(storage)),
-            Err(e) => log::warn!("settings database {settings_db} unavailable, settings will not persist: {e:?}"),
+            Err(e) => log::warn!(
+                "settings database {} unavailable, settings will not persist: {e:?}",
+                settings_db.display()
+            ),
         }
 
         // Beacon-branded versions of the engine's built-in gosub://home and gosub://help, and
@@ -161,12 +168,24 @@ impl<C: BeaconConfig> BrowserEngine<C> {
             .build()
             .map_err(|e| anyhow::anyhow!("ZoneConfig: {e:?}"))?;
 
-        let local_db = data_dir.join("local-storage.db").to_string_lossy().into_owned();
+        // The engine's local store takes a `&str`; a lossy conversion would name another
+        // file and open an empty store there, so a path that is not UTF-8 is an error. Only
+        // where the SQLite store is opened: a private window or the storage process do not
+        // need the path.
+        let open_local_db = || -> anyhow::Result<SqliteLocalStore> {
+            let path = data_dir.join(Store::LocalStorage.file_name());
+            let path = path
+                .to_str()
+                .ok_or_else(|| anyhow::anyhow!("local store: {} is not a UTF-8 path", path.display()))?;
+            SqliteLocalStore::open(path, Some(key(Store::LocalStorage)?)).map_err(|e| anyhow::anyhow!("local store: {e:?}"))
+        };
 
         // Bookmarks + visited history. The engine records visits; Beacon queries the same
         // handle directly (star button, bookmarks bar, URL-bar completion).
-        let places: gosub_engine::places::PlacesHandle =
-            Arc::new(SqlitePlaces::new(data_dir.join("places.db")).map_err(|e| anyhow::anyhow!("places: {e:?}"))?);
+        let places: gosub_engine::places::PlacesHandle = Arc::new(
+            SqlitePlaces::open(data_dir.join(Store::Places.file_name()), Some(key(Store::Places)?))
+                .map_err(|e| anyhow::anyhow!("places: {e:?}"))?,
+        );
         if !private && places.bookmarks().is_empty() {
             for (url, title) in [
                 ("https://gosub.io", "Gosub"),
@@ -216,13 +235,15 @@ impl<C: BeaconConfig> BrowserEngine<C> {
                 places: None,
             }
         } else {
-            let cookie_store: gosub_engine::cookies::CookieStoreHandle = SqliteCookieStore::new(data_dir.join("cookies.db"))
-                .map_err(|e| anyhow::anyhow!("cookie store: {e:?}"))?
-                .into();
+            let cookie_store: gosub_engine::cookies::CookieStoreHandle =
+                SqliteCookieStore::open(data_dir.join(Store::Cookies.file_name()), Some(key(Store::Cookies)?))
+                    .map_err(|e| anyhow::anyhow!("cookie store: {e:?}"))?
+                    .into();
             // Isolated: localStorage lives in file areas served by the engine's storage
             // process, the one store kind that process can serve; the SQLite store stays
             // in this process. The two builds therefore keep separate localStorage for the
             // same profile, which is accepted: the isolated build is a different mode.
+            // Those file areas are not encrypted; only the SQLite store takes a key.
             // The storage process is Linux only, like the rest of the tier; elsewhere the
             // isolated mode keeps the SQLite store.
             #[cfg(target_os = "linux")]
@@ -233,11 +254,10 @@ impl<C: BeaconConfig> BrowserEngine<C> {
                         .map_err(|e| anyhow::anyhow!("local store service in {}: {e:?}", dir.display()))?,
                 )
             } else {
-                Arc::new(SqliteLocalStore::new(&local_db).map_err(|e| anyhow::anyhow!("local store: {e:?}"))?)
+                Arc::new(open_local_db()?)
             };
             #[cfg(not(target_os = "linux"))]
-            let local: Arc<dyn gosub_engine::storage::LocalStore> =
-                Arc::new(SqliteLocalStore::new(&local_db).map_err(|e| anyhow::anyhow!("local store: {e:?}"))?);
+            let local: Arc<dyn gosub_engine::storage::LocalStore> = Arc::new(open_local_db()?);
             ZoneServices {
                 storage: Arc::new(StorageService::new(local, Arc::new(InMemorySessionStore::new()))),
                 cookie_store: Some(cookie_store),
@@ -250,7 +270,7 @@ impl<C: BeaconConfig> BrowserEngine<C> {
         let zone = engine
             .zone_builder()
             .config(zone_cfg)
-            .id(ZoneId::from(DEFAULT_ZONE))
+            .id(ZoneId::from(profile.zone_id()))
             .services(zone_services)
             .create()
             .map_err(|e| anyhow::anyhow!("create_zone: {e:?}"))?;
@@ -264,6 +284,22 @@ impl<C: BeaconConfig> BrowserEngine<C> {
             event_rx: Some(event_rx),
             resource_rx: Some(resource_rx),
         })
+    }
+
+    /// Stop the engine and wait for it: every tab's worker has exited, and the zone's
+    /// fetcher and the I/O thread are down, when this returns. Blocks on the runtime.
+    ///
+    /// Dropping the engine instead leaves the workers winding down on the runtime's
+    /// threads after the caller has moved on. A host that exits right after races them:
+    /// SQLCipher's exit-time cleanup frees what a worker closing its database still uses.
+    pub fn shutdown(self, rt: &Runtime) {
+        let Self { mut engine, zone, .. } = self;
+        rt.block_on(async {
+            engine.close_zone(zone).await;
+            if let Err(e) = engine.shutdown().await {
+                log::warn!("engine shutdown: {e:?}");
+            }
+        });
     }
 
     /// Bookmarks + visited history (star button, bookmarks bar, URL completion).

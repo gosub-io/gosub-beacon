@@ -2,10 +2,9 @@
 //! the next start (when no URLs are given on the command line).
 //!
 //! The file is one tab per line in strip order, `[*][!]<url>` — `*` marks the active
-//! tab, `!` a pinned one. Private windows never write. One session covers one window;
+//! tab, `!` a pinned one, sealed with the profile key like the rest of the profile (it
+//! names every open page). Private windows never write. One session covers one window;
 //! with several normal windows open the last writer wins.
-
-use std::path::PathBuf;
 
 /// One open tab, as remembered across restarts.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -15,25 +14,25 @@ pub struct SessionTab {
     pub active: bool,
 }
 
-fn path() -> PathBuf {
-    crate::paths::data_dir().join("session.tabs")
-}
+const FILE: &str = "session.tabs";
 
 /// The previous session's tabs; empty when there is none (or it cannot be read).
 pub fn load() -> Vec<SessionTab> {
-    let Ok(content) = std::fs::read_to_string(path()) else {
-        return Vec::new();
-    };
-    parse(&content)
+    match crate::paths::read_profile_file(FILE) {
+        Ok(Some(content)) => parse(&String::from_utf8_lossy(&content)),
+        Ok(None) => Vec::new(),
+        Err(e) => {
+            log::warn!("cannot read the previous session: {e:#}");
+            Vec::new()
+        }
+    }
 }
 
 /// Persist the current tabs. Written via a temp file so a crash mid-write cannot
 /// truncate the previous session.
 pub fn save(tabs: &[SessionTab]) {
-    let path = path();
-    let tmp = path.with_extension("tabs.tmp");
-    if let Err(e) = std::fs::write(&tmp, serialize(tabs)).and_then(|()| std::fs::rename(&tmp, &path)) {
-        log::warn!("cannot save session to {}: {e}", path.display());
+    if let Err(e) = crate::paths::write_profile_file(FILE, serialize(tabs).as_bytes()) {
+        log::warn!("cannot save the session: {e:#}");
     }
 }
 

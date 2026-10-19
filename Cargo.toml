@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/beacon", "crates/beacon-android", "crates/beacon-core", "crates/beacon-egui", "crates/beacon-ffi", "crates/beacon-gtk", "crates/beacon-icon"]
+members = ["crates/beacon", "crates/beacon-android", "crates/beacon-core", "crates/beacon-egui", "crates/beacon-ffi", "crates/beacon-gtk", "crates/beacon-icon", "crates/beacon-profile", "crates/beaconctl"]
 default-members = ["crates/beacon"]
 
 [workspace.package]
@@ -13,6 +13,9 @@ license = "MIT"
 gosub_engine = { path = "../gosub-engine/crates/gosub_engine", features = [
     "sqlite_cookie_store",
     "sqlite_places",
+    # Encrypted profiles. OpenSSL is built in rather than linked, so no platform needs a
+    # libcrypto at run time.
+    "sqlcipher-vendored-openssl",
     "timing",
 ] }
 gosub_render_pipeline = { path = "../gosub-engine/crates/gosub_render_pipeline" }
@@ -54,7 +57,10 @@ reqwest = { version = "0.12.11", default-features = false, features = ["charset"
 tokio = { version = "1.42.0", features = ["rt-multi-thread", "macros", "sync", "time"] }
 url = "2.5.2"
 # The engine's telemetry events carry their payload as JSON.
+serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0"
+tempfile = "3.27.0"
+toml = "1.1.4"
 uuid = { version = "1.11.0", features = ["v4", "v7"] }
 
 [patch.crates-io]

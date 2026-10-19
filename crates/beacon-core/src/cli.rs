@@ -21,10 +21,16 @@ pub struct Cli {
     #[arg(long)]
     pub private: bool,
 
-    /// Profile directory to use instead of the XDG default (cookies, history, settings,
-    /// session). Useful for a scratch profile that leaves the real one alone.
-    #[arg(long, value_name = "DIR")]
+    /// Use exactly this folder as the profile (cookies, history, settings, session). Useful
+    /// for a scratch profile that leaves the real ones alone. A `profile.toml` is written
+    /// into it if it has none.
+    #[arg(long, value_name = "DIR", conflicts_with = "profile")]
     pub user_data_dir: Option<PathBuf>,
+
+    /// Open the profile with this name (or id), creating it if there is none yet. Without
+    /// it, the default profile; `beaconctl profile` lists and manages them.
+    #[arg(long, value_name = "NAME")]
+    pub profile: Option<String>,
 
     /// Run the engine's component processes (network stack, cookie vault, localStorage
     /// service, image decoders, per-site page renderers). Linux only; elsewhere the engine

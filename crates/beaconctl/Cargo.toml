@@ -1,0 +1,21 @@
+[package]
+name = "beaconctl"
+description = "Command-line control of Gosub Beacon: profiles today"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+beacon-profile = { path = "../beacon-profile" }
+clap.workspace = true
+# Reads the encrypted places database for `profile history`, and brings the SQLCipher-built
+# SQLite that `rusqlite` below re-encrypts the stores with on a key rotation.
+gosub_engine.workspace = true
+rpassword = "7.5.4"
+rusqlite = "0.39.0"
+zeroize = "1.8.2"
+
+[dev-dependencies]
+tempfile.workspace = true

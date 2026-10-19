@@ -11,12 +11,20 @@
 
     <!-- NoActionBar: the default theme reserves an (empty) action bar, and the content rect
          the app keeps clear of the system bars would include it.
-         extractNativeLibs: the library ships compressed, which keeps the APK small. -->
+         extractNativeLibs: the library ships compressed, which keeps the APK small.
+         allowBackup=false, and dataExtractionRules excluding everything from cloud backup
+         and device transfer: the profile (cookies, history, site storage) stays on this
+         phone, as Firefox does it. Android has no keychain Beacon can use, so the profile
+         key is a file in the app's private storage; a backup or transfer would be the one
+         copy of the profile that travels with its key. Moving phones means a passphrase,
+         once the app has a screen for one. -->
     <application
         android:label="Beacon"
         android:icon="@mipmap/ic_launcher"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar"
         android:hasCode="true"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
         android:networkSecurityConfig="@xml/network_security_config"
         android:extractNativeLibs="true">
 
