@@ -588,9 +588,13 @@ impl Profile {
         }
     }
 
-    /// Whether another process holds the lock right now.
+    /// Whether another process holds the lock right now. A lock file that is missing or
+    /// cannot be opened is no holder: a running Beacon has it open.
     pub fn in_use(&self) -> bool {
-        self.lock().is_err()
+        let Ok(file) = File::options().write(true).open(self.dir.join(LOCK)) else {
+            return false;
+        };
+        matches!(file.try_lock(), Err(fs::TryLockError::WouldBlock))
     }
 }
 
@@ -1258,6 +1262,18 @@ mod tests {
         assert!(p.lock().is_err());
         drop(held);
         assert!(p.lock().is_ok());
+    }
+
+    #[test]
+    fn only_a_held_lock_is_in_use() {
+        let tmp = tempfile::tempdir().unwrap();
+        let roots = roots(&tmp);
+        let p = roots.open(&Selection::Default, V).unwrap();
+        assert!(!p.in_use(), "no lock file yet");
+        let held = p.lock().unwrap();
+        assert!(p.in_use());
+        drop(held);
+        assert!(!p.in_use());
     }
 
     #[test]
