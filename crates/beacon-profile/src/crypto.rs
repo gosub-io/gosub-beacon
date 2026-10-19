@@ -666,9 +666,10 @@ pub(crate) fn hex(bytes: &[u8]) -> String {
 
 fn unhex(s: &str) -> Result<Vec<u8>> {
     // Byte offsets below: anything but ASCII could split a character and panic. The errors
-    // never quote `s`: it may be a key with one digit damaged.
-    if !s.is_ascii() || !s.len().is_multiple_of(2) {
-        bail!("not even-length ASCII hex");
+    // never quote `s`: it may be a key with one digit damaged. Digits checked here, since
+    // `from_str_radix` also takes a sign: "+f" would read as 0x0f.
+    if !s.len().is_multiple_of(2) || !s.bytes().all(|b| b.is_ascii_hexdigit()) {
+        bail!("not even-length hex");
     }
     (0..s.len())
         .step_by(2)
@@ -817,5 +818,6 @@ mod tests {
         assert!(unhex("abc").is_err());
         assert!(unhex("zz").is_err());
         assert!(unhex("aéa").is_err());
+        assert!(unhex("+f").is_err());
     }
 }
