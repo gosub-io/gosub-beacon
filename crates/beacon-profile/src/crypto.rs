@@ -85,6 +85,58 @@ pub struct Wrapped {
     pub wrapped: String,
 }
 
+/// A [`Wrapped`] read back: what [`ProfileKey::unwrap`] needs, each part checked.
+struct WrappedParts {
+    params: KdfParams,
+    salt: Vec<u8>,
+    nonce: Vec<u8>,
+    wrapped: Vec<u8>,
+}
+
+impl Wrapped {
+    /// Whether a passphrase could unwrap this at all: a derivation and cost Beacon accepts,
+    /// and a salt, nonce and wrapped key of the right sizes. Says nothing about the
+    /// passphrase; a manifest from elsewhere is checked with it before it is trusted.
+    pub(crate) fn validate(&self) -> Result<()> {
+        self.parts().map(drop)
+    }
+
+    fn parts(&self) -> Result<WrappedParts> {
+        if self.kdf != "argon2id" {
+            bail!("unknown key derivation {:?}", self.kdf);
+        }
+        let params = KdfParams {
+            memory_kib: self.memory_kib,
+            iterations: self.iterations,
+            parallelism: self.parallelism,
+        };
+        params.argon2()?;
+        let salt = unhex(&self.salt).context("the wrapped key's salt")?;
+        if salt.len() < argon2::MIN_SALT_LEN {
+            bail!(
+                "the wrapped key's salt is {} bytes, fewer than {}",
+                salt.len(),
+                argon2::MIN_SALT_LEN
+            );
+        }
+        let nonce = unhex(&self.nonce).context("the wrapped key's nonce")?;
+        if nonce.len() != 24 {
+            bail!("the wrapped key's nonce is {} bytes, not 24", nonce.len());
+        }
+        let wrapped = unhex(&self.wrapped).context("the wrapped key")?;
+        // A 32-byte key and its 16-byte tag.
+        if wrapped.len() != 48 {
+            bail!("the wrapped key is {} bytes, not 48", wrapped.len());
+        }
+        Ok(WrappedParts {
+            params,
+            salt,
+            nonce,
+            wrapped,
+        })
+    }
+}
+
 /// What is done to a passphrase before it is hashed. Recorded with the wrap, so a wrap made
 /// one way is never read another.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -120,6 +172,29 @@ impl KdfParams {
     /// The most memory times passes a wrapped key may ask for, in KiB: sixteen times the
     /// default's. Each limit in [`Self::MAX`] alone still allows four times this.
     pub const MAX_WORK: u64 = 16 * 64 * 1024 * 3;
+
+    /// These as argon2 takes them, if Beacon accepts them.
+    fn argon2(self) -> Result<argon2::Params> {
+        let max = Self::MAX;
+        let work = u64::from(self.memory_kib) * u64::from(self.iterations);
+        if self.memory_kib > max.memory_kib
+            || self.iterations > max.iterations
+            || self.parallelism > max.parallelism
+            || work > Self::MAX_WORK
+        {
+            bail!(
+                "argon2 cost {} KiB x {} passes x {} lanes is beyond what Beacon accepts ({} KiB x {} x {}, {} KiB x passes in all)",
+                self.memory_kib,
+                self.iterations,
+                self.parallelism,
+                max.memory_kib,
+                max.iterations,
+                max.parallelism,
+                Self::MAX_WORK
+            );
+        }
+        argon2::Params::new(self.memory_kib, self.iterations, self.parallelism, Some(32)).map_err(|e| anyhow!("argon2 parameters: {e}"))
+    }
 }
 
 impl Default for KdfParams {
@@ -320,25 +395,14 @@ impl ProfileKey {
 
     /// The key `wrapped` holds, if `passphrase` is the one it was wrapped with.
     pub(crate) fn unwrap(profile: Uuid, wrapped: &Wrapped, passphrase: &str) -> Result<Self> {
-        if wrapped.kdf != "argon2id" {
-            bail!("unknown key derivation {:?}", wrapped.kdf);
-        }
-        let params = KdfParams {
-            memory_kib: wrapped.memory_kib,
-            iterations: wrapped.iterations,
-            parallelism: wrapped.parallelism,
-        };
-        let kek = kek(passphrase, wrapped.normalization, &unhex(&wrapped.salt)?, params)?;
-        let nonce = unhex(&wrapped.nonce)?;
-        if nonce.len() != 24 {
-            bail!("the wrapped key's nonce is {} bytes, not 24", nonce.len());
-        }
+        let parts = wrapped.parts()?;
+        let kek = kek(passphrase, wrapped.normalization, &parts.salt, parts.params)?;
         let bytes = Zeroizing::new(
             XChaCha20Poly1305::new(kek.as_slice().into())
                 .decrypt(
-                    nonce.as_slice().into(),
+                    parts.nonce.as_slice().into(),
                     Payload {
-                        msg: &unhex(&wrapped.wrapped)?,
+                        msg: &parts.wrapped,
                         aad: &aad(profile),
                     },
                 )
@@ -357,26 +421,7 @@ fn aad(profile: Uuid) -> Vec<u8> {
 }
 
 fn kek(passphrase: &str, normalization: Normalization, salt: &[u8], params: KdfParams) -> Result<Zeroizing<[u8; 32]>> {
-    let max = KdfParams::MAX;
-    let work = u64::from(params.memory_kib) * u64::from(params.iterations);
-    if params.memory_kib > max.memory_kib
-        || params.iterations > max.iterations
-        || params.parallelism > max.parallelism
-        || work > KdfParams::MAX_WORK
-    {
-        bail!(
-            "argon2 cost {} KiB x {} passes x {} lanes is beyond what Beacon accepts ({} KiB x {} x {}, {} KiB x passes in all)",
-            params.memory_kib,
-            params.iterations,
-            params.parallelism,
-            max.memory_kib,
-            max.iterations,
-            max.parallelism,
-            KdfParams::MAX_WORK
-        );
-    }
-    let params = argon2::Params::new(params.memory_kib, params.iterations, params.parallelism, Some(32))
-        .map_err(|e| anyhow!("argon2 parameters: {e}"))?;
+    let params = params.argon2()?;
     let argon = argon2::Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params);
     let passphrase: Zeroizing<String> = Zeroizing::new(match normalization {
         Normalization::None => passphrase.to_string(),

@@ -257,9 +257,18 @@ impl Roots {
             manifest: manifest.clone(),
         };
         // Checks the scheme version as well.
-        if !imported.crypto().is_ok_and(|c| c.passphrase.is_some()) {
+        let crypto = imported.crypto().ok();
+        let Some((check, wrapped)) = crypto.and_then(|c| Some((&c.check, c.passphrase.as_ref()?))) else {
             bail!("the archive holds no passphrase-wrapped key, so nothing could open the profile in it");
+        };
+        // What `ProfileKey::check` writes: 16 bytes in lowercase hex.
+        if check.len() != 32 || !check.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
+            bail!("the archive's key check is damaged, so nothing could open the profile in it");
         }
+        // Before it goes anywhere: found out at unlock, a broken key has replaced a good one.
+        wrapped
+            .validate()
+            .context("the archive's passphrase-wrapped key is damaged, so nothing could open the profile in it")?;
         manifest.keychain = None;
         manifest.keychain_leftover = None;
         manifest.last_opened_by = version.to_string();
@@ -861,6 +870,44 @@ mod tests {
         let err = there.import(archive.as_slice(), None, false, V).unwrap_err();
         assert!(err.to_string().contains("passphrase-wrapped key"), "{err}");
         assert_eq!(fs::read_dir(there.profiles_dir()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn a_damaged_wrapped_key_is_refused_before_it_replaces_anything() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (here, there) = (roots(&tmp, "here"), roots(&tmp, "there"));
+        let keys = MemoryKeyStore::default();
+        let (mut p, key) = filled(&here, "Work", &keys);
+        p.set_passphrase(&key, "pw", crypto::TEST_KDF).unwrap();
+        there.import(export(&p, None).unwrap().as_slice(), None, false, V).unwrap();
+
+        type Damage = fn(&mut Crypto);
+        let damages: [(&str, Damage); 7] = [
+            ("kdf", |c| c.passphrase.as_mut().unwrap().kdf = "scrypt".into()),
+            ("cost", |c| c.passphrase.as_mut().unwrap().memory_kib = u32::MAX),
+            ("salt", |c| c.passphrase.as_mut().unwrap().salt = "00".into()),
+            ("nonce", |c| c.passphrase.as_mut().unwrap().nonce.truncate(46)),
+            ("wrapped", |c| c.passphrase.as_mut().unwrap().wrapped.truncate(94)),
+            ("not hex", |c| c.passphrase.as_mut().unwrap().wrapped.replace_range(..2, "zz")),
+            ("check", |c| c.check.truncate(30)),
+        ];
+        for (what, damage) in damages {
+            let mut manifest = p.manifest.clone();
+            damage(manifest.crypto.as_mut().unwrap());
+            let manifest = toml::to_string_pretty(&manifest).unwrap();
+            let m = manifest.as_bytes();
+            let archive = forged_for(p.id(), &[(MANIFEST, m)], &[("profile/profile.toml", m, tar::EntryType::Regular)]);
+            let err = there.import(archive.as_slice(), None, true, V).unwrap_err();
+            assert!(err.to_string().contains("damaged"), "{what}: {err:#}");
+            // The profile it would have replaced is untouched, and still opens.
+            let q = there.find("Work").unwrap().unwrap();
+            assert_eq!(
+                fs::read(q.dir.join("cookies.db")).unwrap(),
+                fs::read(p.dir.join("cookies.db")).unwrap()
+            );
+            q.key_from_passphrase("pw").unwrap();
+            assert_eq!(fs::read_dir(there.profiles_dir()).unwrap().count(), 1, "{what}");
+        }
     }
 
     #[test]
