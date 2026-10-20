@@ -39,6 +39,9 @@ const FLING_DECAY: f32 = 0.998;
 const FLING_MIN: f32 = 150.0;
 /// A fling has stopped once it is slower than this.
 const FLING_STOP: f32 = 20.0;
+/// How far a wheel notch with Ctrl held zooms the page: by e to the power of this times the
+/// notch's distance in points, so about a fifth per notch.
+const WHEEL_ZOOM: f32 = 0.0015;
 /// Upper bound on a release speed, against a stray sample pair a few microseconds apart.
 const FLING_MAX: f32 = 8000.0;
 
@@ -83,13 +86,16 @@ struct TabView {
     /// wider than the screen (a phone showing a desktop page at 980px) is shown scaled down.
     /// `None` while the page is laid out at the screen's size.
     page_scale: Option<f32>,
+    /// The display scale the engine was last told about (`SetDisplayScale`).
+    display_scale: Option<f32>,
     /// The game, while the tab plays it in place of its page (`gosub://dive`).
     dive: Option<crate::dive::DiveView>,
 }
 
 impl TabView {
-    /// Screen points per page CSS px. Positions and scroll deltas the user makes on screen are
-    /// divided by this before they reach the engine, which works in page CSS px.
+    /// Screen points per page CSS px, unzoomed. The engine maps what the user does on screen
+    /// into the page itself; this keeps the frontend's own scroll position, which the CPU path
+    /// composites at, in page px.
     fn scale(&self) -> f32 {
         self.page_scale.unwrap_or(1.0)
     }
@@ -120,8 +126,14 @@ pub struct BeaconApp {
     favicons: Favicons,
     /// Bookmarks, read from the engine's places store once at startup.
     bookmarks: Vec<(String, String)>,
-    /// The finger scrolling the page, and where it was last seen.
-    touch: Option<(egui::TouchId, egui::Pos2)>,
+    /// The fingers on the page, at most two, in the order they went down, and where each was
+    /// last seen. One scrolls the page; two pinch it.
+    touches: Vec<(egui::TouchId, egui::Pos2)>,
+    /// The fingers on the page now, or last, pinched: their gesture ends without a fling or a tap.
+    pinched: bool,
+    /// Zoom asked for with the mouse (Ctrl and the wheel) or a trackpad pinch this frame, as a
+    /// factor; 1 for none.
+    wheel_zoom: f32,
     /// The pointer was last driven by a finger, not a mouse. A finger has no hover, so the
     /// link a tap went down on is not shown as hovered after it lifts.
     finger: bool,
@@ -197,10 +209,12 @@ impl BeaconApp {
         );
         // On a phone, Vello rendering the whole HiDPI viewport takes longer than a frame (~55 ms
         // on a Fairphone 6), so every scroll step lagged. The tile pipeline rasterizes once and
-        // scrolls by compositing (~12 ms). The desktop keeps the scene path for now.
+        // scrolls by compositing (~12 ms). The desktop keeps the scene path for now, unless
+        // `GOSUB_VELLO_GPU_TILES=1` asks for the phone's path, pinch zoom included.
+        let gpu_tiles = cfg!(target_os = "android") || std::env::var("GOSUB_VELLO_GPU_TILES").as_deref() == Ok("1");
         let backend = VelloBackend::new(context.clone())
             .map_err(|e| anyhow::anyhow!("Vello backend: {e:?}"))?
-            .with_gpu_tiles(cfg!(target_os = "android"));
+            .with_gpu_tiles(gpu_tiles);
 
         let mut engine = BrowserEngine::<EguiConfig>::new(rt, false, Arc::new(backend))?;
         // A phone lays pages out as mobile browsers do: at the width their viewport <meta> asks
@@ -252,7 +266,9 @@ impl BeaconApp {
             log: Vec::new(),
             favicons: Favicons::default(),
             bookmarks: Vec::new(),
-            touch: None,
+            touches: Vec::new(),
+            pinched: false,
+            wheel_zoom: 1.0,
             finger: false,
             last_pointer: None,
             touch_trail: Default::default(),
@@ -703,6 +719,7 @@ fn engine_event_name(event: &EngineEvent) -> &'static str {
         EngineEvent::CursorChanged { .. } => "CursorChanged",
         EngineEvent::TabCrashed { .. } => "TabCrashed",
         EngineEvent::PageScaleChanged { .. } => "PageScaleChanged",
+        EngineEvent::VisualViewportChanged { .. } => "VisualViewportChanged",
         _ => "other",
     }
 }
@@ -994,11 +1011,19 @@ impl eframe::App for BeaconApp {
         // Raw wheel events, not egui's smoothed delta: the engine smooths scrolling itself,
         // and forwarding an already-smoothed value double-smooths it into a slow ramp.
         // Trackpad deltas are already smooth and go to the engine as precise, unanimated.
-        let (scroll, precise) = ctx.input(|i| {
+        // Ctrl and the wheel zoom the page instead, as a pinch would, and so does a trackpad pinch.
+        let (scroll, precise, zoom) = ctx.input(|i| {
             let mut acc = egui::Vec2::ZERO;
             let mut precise = true;
+            let mut zoom = 1.0;
             for event in &i.events {
-                if let egui::Event::MouseWheel { unit, delta, .. } = event {
+                if let egui::Event::Zoom(factor) = event {
+                    zoom *= factor;
+                }
+                if let egui::Event::MouseWheel {
+                    unit, delta, modifiers, ..
+                } = event
+                {
                     let scale = match unit {
                         egui::MouseWheelUnit::Line => 134.0,
                         // A wheel notch arrives as a whole-number Point delta; a trackpad
@@ -1012,21 +1037,22 @@ impl eframe::App for BeaconApp {
                         }
                         egui::MouseWheelUnit::Page => 800.0,
                     };
+                    if modifiers.ctrl || modifiers.command {
+                        zoom *= (delta.y * scale * WHEEL_ZOOM).exp();
+                        continue;
+                    }
                     precise &= scale == 1.0;
                     acc += *delta * scale;
                 }
             }
-            (acc, precise)
+            (acc, precise, zoom)
         });
+        self.wheel_zoom *= zoom;
         if scroll != egui::Vec2::ZERO {
-            // A notch moves the page as far on screen at any scale.
-            let scale = self.views.get(&active).map_or(1.0, TabView::scale);
-            let (dx, dy) = (-scroll.x / scale, -scroll.y / scale);
-            if let Some(view) = self.views.get_mut(&active) {
-                let max_y = (view.page_height - view.page_viewport_height()).max(0.0);
-                view.scroll_x = (view.scroll_x + dx).max(0.0);
-                view.scroll_y = (view.scroll_y + dy).clamp(0.0, max_y);
-            }
+            // Screen points: a notch moves the page as far on screen at any scale, and the engine
+            // maps it into the page.
+            let (dx, dy) = (-scroll.x, -scroll.y);
+            self.scroll_view(active, dx, dy);
             self.send_active(TabCommand::MouseScroll {
                 delta_x: dx,
                 delta_y: dy,
@@ -1261,6 +1287,15 @@ impl eframe::App for BeaconApp {
                     });
                 }
             }
+            // The engine draws a frame of composited tiles at the screen's own resolution, so it
+            // is shown pixel for pixel however far the page is zoomed.
+            let ppp = ctx.pixels_per_point();
+            if self.views.get(&active).is_some_and(|v| v.display_scale != Some(ppp)) {
+                if let Some(view) = self.views.get_mut(&active) {
+                    view.display_scale = Some(ppp);
+                }
+                self.send_active_and_draw(TabCommand::SetDisplayScale { scale: ppp });
+            }
 
             // Rasterize at the display's real resolution. Without this the page is drawn at 1x
             // and stretched onto a HiDPI surface, which reads as blurry text rather than as the
@@ -1297,38 +1332,56 @@ impl eframe::App for BeaconApp {
 
             let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
 
-            // A finger dragging the page scrolls it, as on any phone. From the raw touch
-            // events rather than egui's drag, which drops in and out during a swipe. Mouse
-            // drags are left alone: there the wheel above scrolls. The movement is already
-            // in points and tracks the finger, so it goes through as precise.
+            // A finger dragging the page scrolls it, as on any phone, and two fingers pinch it:
+            // they scroll it by their midpoint and zoom it by their distance. From the raw touch
+            // events rather than egui's drag, which drops in and out during a swipe and knows one
+            // finger only. Mouse drags are left alone: there the wheel above scrolls. The
+            // movement is already in points and tracks the fingers, so it goes through as precise.
             let mut drag = egui::Vec2::ZERO;
+            let mut pinch: Option<(egui::Pos2, f32)> = None;
             let now = ctx.input(|i| i.time);
             ctx.input(|i| {
                 for event in &i.events {
                     let egui::Event::Touch { id, phase, pos, .. } = *event else {
                         continue;
                     };
-                    let ours = self.touch.is_some_and(|(touch, _)| touch == id);
-                    match phase {
-                        egui::TouchPhase::Start if rect.contains(pos) => {
-                            self.touch = Some((id, pos));
-                            // A finger on the page catches a fling, as on any phone.
-                            self.fling = None;
-                            self.touch_trail.clear();
-                            self.touch_trail.push_back((now, pos));
-                        }
-                        egui::TouchPhase::Move if ours => {
-                            if let Some((_, last)) = self.touch.as_mut() {
-                                drag += pos - *last;
-                                *last = pos;
+                    let finger = self.touches.iter().position(|(touch, _)| *touch == id);
+                    match (phase, finger) {
+                        (egui::TouchPhase::Start, None) if rect.contains(pos) && self.touches.len() < 2 => {
+                            if self.touches.is_empty() {
+                                // A finger on the page catches a fling, as on any phone.
+                                self.pinched = false;
+                                self.fling = None;
+                                self.touch_trail.clear();
+                                self.touch_trail.push_back((now, pos));
+                            } else {
+                                self.pinched = true;
                             }
-                            self.touch_trail.push_back((now, pos));
+                            self.touches.push((id, pos));
                         }
-                        egui::TouchPhase::End if ours => {
-                            self.touch = None;
-                            self.fling = fling_velocity(&self.touch_trail, now).map(|v| (v, now));
+                        (egui::TouchPhase::Move, Some(n)) => {
+                            let from = std::mem::replace(&mut self.touches[n].1, pos);
+                            if let [_, _] = self.touches.as_slice() {
+                                // Two fingers: the page follows their midpoint and zooms about
+                                // it by how much further apart they moved.
+                                let other = self.touches[1 - n].1;
+                                drag += (pos - from) / 2.0;
+                                let (before, after) = (from.distance(other), pos.distance(other));
+                                if before > 1.0 && after > 1.0 {
+                                    let factor = pinch.map_or(1.0, |(_, f)| f) * after / before;
+                                    pinch = Some((pos.lerp(other, 0.5), factor));
+                                }
+                            } else {
+                                drag += pos - from;
+                                self.touch_trail.push_back((now, pos));
+                            }
                         }
-                        egui::TouchPhase::Cancel if ours => self.touch = None,
+                        (egui::TouchPhase::End | egui::TouchPhase::Cancel, Some(n)) => {
+                            self.touches.remove(n);
+                            if self.touches.is_empty() && phase == egui::TouchPhase::End && !self.pinched {
+                                self.fling = fling_velocity(&self.touch_trail, now).map(|v| (v, now));
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -1339,7 +1392,7 @@ impl eframe::App for BeaconApp {
 
             // A released fling keeps the page going at the finger's speed, slowing down until
             // it stops. Each frame moves it as far as its velocity carried it since the last.
-            if let (None, Some((velocity, last))) = (self.touch, self.fling) {
+            if let (true, Some((velocity, last))) = (self.touches.is_empty(), self.fling) {
                 let dt = (now - last) as f32;
                 drag += velocity * dt;
                 let velocity = velocity * FLING_DECAY.powf(dt * 1000.0);
@@ -1347,18 +1400,29 @@ impl eframe::App for BeaconApp {
                 ctx.request_repaint();
             }
             if drag != egui::Vec2::ZERO {
-                // The page follows the finger on screen, at whatever scale it is shown.
-                let scale = self.views.get(&active).map_or(1.0, TabView::scale);
-                let (dx, dy) = (-drag.x / scale, -drag.y / scale);
-                if let Some(view) = self.views.get_mut(&active) {
-                    let max_y = (view.page_height - view.page_viewport_height()).max(0.0);
-                    view.scroll_x = (view.scroll_x + dx).max(0.0);
-                    view.scroll_y = (view.scroll_y + dy).clamp(0.0, max_y);
-                }
+                // The page follows the finger on screen, at whatever scale it is shown: the
+                // engine maps screen points into the page.
+                let (dx, dy) = (-drag.x, -drag.y);
+                self.scroll_view(active, dx, dy);
                 self.send_active(TabCommand::MouseScroll {
                     delta_x: dx,
                     delta_y: dy,
                     precise: true,
+                });
+            }
+            // After the scroll: the page has followed the fingers' midpoint, and now zooms about
+            // where it is. The mouse zooms about the pointer, or the middle of the page.
+            let wheel_zoom = std::mem::replace(&mut self.wheel_zoom, 1.0);
+            if wheel_zoom != 1.0 {
+                let focus = ctx.pointer_latest_pos().filter(|pos| rect.contains(*pos)).unwrap_or(rect.center());
+                pinch = Some((focus, pinch.map_or(1.0, |(_, f)| f) * wheel_zoom));
+            }
+            if let Some((focus, factor)) = pinch {
+                let focus = focus - rect.min;
+                self.send_active(TabCommand::PinchZoom {
+                    focus_x: focus.x,
+                    focus_y: focus.y,
+                    factor,
                 });
             }
 
@@ -1408,12 +1472,11 @@ impl eframe::App for BeaconApp {
             // and a hover change can restyle and re-layout the page. A finger has no hover, and
             // a swipe forwarded as moves re-laid the page out for every link it crossed. A tap
             // sends its own move below.
-            let touching = self.touch.is_some() || ctx.input(|i| i.any_touches());
+            let touching = !self.touches.is_empty() || ctx.input(|i| i.any_touches());
             let pointer = ctx.pointer_latest_pos().filter(|pos| rect.contains(*pos) && !touching);
-            let scale = self.views.get(&active).map_or(1.0, TabView::scale);
             if let Some(pos) = pointer {
                 if self.last_pointer != Some(pos) {
-                    let rel = (pos - rect.min) / scale;
+                    let rel = pos - rect.min;
                     self.send_active(TabCommand::MouseMove { x: rel.x, y: rel.y });
                 }
                 ui.ctx().set_cursor_icon(match self.cursor {
@@ -1427,13 +1490,15 @@ impl eframe::App for BeaconApp {
 
             // On a phone a tap on the error page starts the game, as space does elsewhere
             // (the page says so). The page has nothing else to tap.
-            if response.clicked() && cfg!(target_os = "android") && showing_error {
+            // The fingers of a pinch lifting are no tap.
+            let tapped = response.clicked() && !self.pinched;
+            if tapped && cfg!(target_os = "android") && showing_error {
                 self.start_dive(active);
-            } else if response.clicked() {
+            } else if tapped {
                 // The click's own position: a finger lifting takes the pointer away with it,
                 // so by now the context may have none.
                 if let Some(pos) = response.interact_pointer_pos() {
-                    let rel = (pos - rect.min) / scale;
+                    let rel = pos - rect.min;
                     // The engine follows the link under the pointer, and for a tap this is the
                     // first it hears of where the finger is. For a mouse it is a no-op.
                     self.send_active(TabCommand::MouseMove { x: rel.x, y: rel.y });
@@ -1578,6 +1643,17 @@ impl BeaconApp {
                 None => {}
             }
         });
+    }
+
+    /// Move the frontend's own copy of a tab's scroll position by a delta in screen points. Only
+    /// the CPU path composites at it; the engine owns the scroll position, and the zoom.
+    fn scroll_view(&mut self, tab_id: TabId, dx: f32, dy: f32) {
+        if let Some(view) = self.views.get_mut(&tab_id) {
+            let scale = view.scale();
+            let max_y = (view.page_height - view.page_viewport_height()).max(0.0);
+            view.scroll_x = (view.scroll_x + dx / scale).max(0.0);
+            view.scroll_y = (view.scroll_y + dy / scale).clamp(0.0, max_y);
+        }
     }
 
     /// Navigate the active tab, running the address through the same parser the GTK
