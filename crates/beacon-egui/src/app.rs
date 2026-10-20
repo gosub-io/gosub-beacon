@@ -129,7 +129,8 @@ pub struct BeaconApp {
     /// The fingers on the page, at most two, in the order they went down, and where each was
     /// last seen. One scrolls the page; two pinch it.
     touches: Vec<(egui::TouchId, egui::Pos2)>,
-    /// The fingers on the page now, or last, pinched: their gesture ends without a fling or a tap.
+    /// The fingers on the page pinched: their gesture ends without a fling or a tap. Cleared once
+    /// the last of them lifts.
     pinched: bool,
     /// Zoom asked for with the mouse (Ctrl and the wheel) or a trackpad pinch this frame, as a
     /// factor; 1 for none.
@@ -1492,6 +1493,11 @@ impl eframe::App for BeaconApp {
             // (the page says so). The page has nothing else to tap.
             // The fingers of a pinch lifting are no tap.
             let tapped = response.clicked() && !self.pinched;
+            // Their release is this frame's click, so once they are all off the pinch is over
+            // and a mouse click after it counts again.
+            if self.touches.is_empty() {
+                self.pinched = false;
+            }
             if tapped && cfg!(target_os = "android") && showing_error {
                 self.start_dive(active);
             } else if tapped {
