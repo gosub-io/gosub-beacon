@@ -22,6 +22,8 @@ pub enum DownloadState {
     Running,
     Finished,
     Failed(String),
+    /// Stopped on request; nothing of it is left on disk.
+    Cancelled,
 }
 
 impl DownloadEntry {

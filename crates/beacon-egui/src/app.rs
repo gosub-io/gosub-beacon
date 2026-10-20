@@ -126,9 +126,13 @@ pub struct BeaconApp {
     /// The native date or time dialog open over a form control, and what it is for.
     #[cfg(target_os = "android")]
     picker: Option<NativePicker>,
-    /// The download the downloads bar shows; dismissed with its close button.
+    /// The download the downloads bar shows; its close button cancels it while it runs,
+    /// and only dismisses it once it has ended.
     #[cfg(target_os = "android")]
     download_bar: Option<u64>,
+    /// The tab each download was started in, which is where a cancel goes.
+    #[cfg(target_os = "android")]
+    download_tabs: std::collections::HashMap<u64, TabId>,
     /// How far each finished download got on its way into the shared Downloads folder. Written
     /// from the thread that copies it.
     #[cfg(target_os = "android")]
@@ -233,6 +237,8 @@ impl BeaconApp {
             picker: None,
             #[cfg(target_os = "android")]
             download_bar: None,
+            #[cfg(target_os = "android")]
+            download_tabs: std::collections::HashMap::new(),
             #[cfg(target_os = "android")]
             published: Default::default(),
             #[cfg(target_os = "android")]
@@ -767,6 +773,7 @@ impl BeaconApp {
         let id = downloads.next_id();
         downloads.start(id, name, path.clone());
         self.download_bar = Some(id);
+        self.download_tabs.insert(id, tab_id);
         self.send_to_tab(
             tab_id,
             vec![TabCommand::StartDownload {
@@ -823,6 +830,7 @@ impl BeaconApp {
                 None => format!("{} KB", entry.received / 1024),
             },
             (DownloadState::Failed(error), _) => format!("failed: {error}"),
+            (DownloadState::Cancelled, _) => "cancelled".to_string(),
             (DownloadState::Finished, Some(Published::Done)) => "in Downloads".to_string(),
             (DownloadState::Finished, Some(Published::Failed)) => "kept in app storage".to_string(),
             (DownloadState::Finished, _) => "saving".to_string(),
@@ -847,6 +855,17 @@ impl BeaconApp {
             self.dispatch(BeaconCommand::OpenDownload(id));
         }
         if close {
+            // A download still arriving is stopped, not just hidden.
+            if entry.state == DownloadState::Running {
+                if let Some(tab_id) = self.download_tabs.get(&id).copied() {
+                    self.send_to_tab(
+                        tab_id,
+                        vec![TabCommand::CancelDownload {
+                            id: gosub_engine::events::DownloadId(id),
+                        }],
+                    );
+                }
+            }
             self.download_bar = None;
         }
     }

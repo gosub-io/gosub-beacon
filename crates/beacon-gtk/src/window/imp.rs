@@ -3768,6 +3768,12 @@ impl BrowserWindow {
                     status.add_css_class("download-failed");
                     row.append(&status);
                 }
+                DownloadState::Cancelled => {
+                    let status = gtk4::Label::new(Some("Cancelled"));
+                    status.set_halign(gtk4::Align::Start);
+                    status.add_css_class("download-status");
+                    row.append(&status);
+                }
             }
             list.append(&row);
         }
