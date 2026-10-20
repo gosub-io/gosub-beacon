@@ -22,6 +22,9 @@
 //! dependency, so `beaconctl` can share it.
 
 pub mod crypto;
+mod export;
+
+pub use export::{EXPORT_FORMAT, EXPORT_MANIFEST};
 
 use anyhow::{anyhow, bail, Context, Result};
 use crypto::{Crypto, KdfParams, KeyStore, ProfileKey, Slot, Store, CRYPTO_VERSION};
@@ -227,7 +230,8 @@ impl Roots {
         };
         for entry in entries {
             let dir = entry?.path();
-            if !dir.is_dir() {
+            // Dot folders are an import on its way in or a profile it replaces.
+            if !dir.is_dir() || dir.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.')) {
                 continue;
             }
             match Manifest::read(&dir)? {
@@ -295,6 +299,7 @@ impl Roots {
             .open(&path)
             .with_context(|| format!("opening {}", path.display()))?;
         file.lock().with_context(|| format!("locking {}", path.display()))?;
+        self.recover_interrupted_import();
         Ok(file)
     }
 

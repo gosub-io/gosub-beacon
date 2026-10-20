@@ -11,6 +11,7 @@ use beacon_profile::{Profile, Roots, DEFAULT_COLLECTION, MANIFEST};
 use clap::{Args as ClapArgs, Parser, Subcommand};
 use gosub_engine::storage::{is_plaintext_database, SqliteKey};
 use rusqlite::Connection;
+use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use zeroize::Zeroizing;
@@ -92,6 +93,29 @@ enum ProfileCommand {
         /// Back to the default collection, the login keyring.
         #[arg(long)]
         default: bool,
+    },
+    /// Write a profile to one file, a .tgz, to bring to another machine with `import`.
+    /// Refused while Beacon has the profile open. The archive carries the key wrapped by
+    /// the profile's passphrase; a profile without one is asked for a passphrase for the
+    /// archive alone.
+    Export {
+        profile: Option<String>,
+        /// Where to write it. Default: `<name>.beacon-profile.tgz` here.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+        #[command(flatten)]
+        input: PassphraseInput,
+    },
+    /// Bring in a profile from a file `export` wrote. It arrives locked: `unlock` with the
+    /// passphrase it was exported with.
+    Import {
+        archive: PathBuf,
+        /// Another name, when one here has its name already.
+        #[arg(long)]
+        name: Option<String>,
+        /// Put it in place of the profile here with the same id, which is lost.
+        #[arg(long)]
+        replace: bool,
     },
 }
 
@@ -344,6 +368,63 @@ fn profile(command: ProfileCommand) -> Result<()> {
                 None => println!("{} keeps its key in the default keychain collection", printable(p.name())),
             }
         }
+        ProfileCommand::Export { profile, output, input } => {
+            let p = existing(&roots, profile)?;
+            let _lock = p.lock()?;
+            if p.manifest.crypto.is_none() {
+                bail!(
+                    "{} is not encrypted yet; start Beacon with it once, which encrypts it",
+                    printable(p.name())
+                );
+            }
+            let output = output.unwrap_or_else(|| PathBuf::from(format!("{}.beacon-profile.tgz", plain_name(&p))));
+            if output.exists() {
+                bail!("{} exists already", output.display());
+            }
+            let keychain = keychain(&p)?;
+            // Mid-rotation the passphrase may wrap a key the databases are not all on yet.
+            p.ensure_not_rotating(&keychain)?;
+            let key = match p.key_from(Some(&keychain)) {
+                Ok(key) => {
+                    // Anything a first start left in plaintext would leave in the archive so.
+                    encrypt_plaintext(&p, &key)?;
+                    Some(key)
+                }
+                // A copied profile not unlocked here still carries its passphrase.
+                Err(_) if p.has_passphrase() => None,
+                Err(e) => return Err(e),
+            };
+            let passphrase = if p.has_passphrase() {
+                None
+            } else {
+                eprintln!("{} has no passphrase; the archive needs one to carry its key", printable(p.name()));
+                Some(input.read(true)?)
+            };
+            let wrap = key.as_ref().zip(passphrase.as_deref().map(String::as_str));
+            write_new(&output, |out| p.export(out, wrap, VERSION))?;
+            println!(
+                "exported {} to {}; on the other machine: `beaconctl profile import {}`",
+                printable(p.name()),
+                output.display(),
+                shell_quote(&output.display().to_string())
+            );
+        }
+        ProfileCommand::Import { archive, name, replace } => {
+            let file = std::fs::File::open(&archive).with_context(|| format!("opening {}", archive.display()))?;
+            let p = roots.import(std::io::BufReader::new(file), name.as_deref(), replace, VERSION)?;
+            println!("imported {} {}", printable(p.name()), p.id());
+            let here = OsKeychain::new()
+                .map(|k| p.key_from(Some(&k.in_collection(p.keychain_collection()))).is_ok())
+                .unwrap_or(false);
+            if here {
+                println!("its key is in this machine's keychain already");
+            } else {
+                println!(
+                    "unlock it with the passphrase it was exported with: `beaconctl profile unlock {}`",
+                    plain_name(&p)
+                );
+            }
+        }
     }
     Ok(())
 }
@@ -361,6 +442,47 @@ fn shell_quote(text: &str) -> String {
     } else {
         format!("'{}'", text.replace('\'', "'\\''"))
     }
+}
+
+/// How a file name or a command names `p`: its name when that is a plain word, which a shell
+/// takes as it is, its id otherwise.
+fn plain_name(p: &Profile) -> String {
+    let name = p.name();
+    if !name.is_empty() && !name.starts_with(['-', '.']) && name.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c)) {
+        name.to_string()
+    } else {
+        p.id().to_string()
+    }
+}
+
+/// Write `path`, which must not exist yet, through `write`: into a private file beside it
+/// that is renamed into place once complete, and removed when it is not.
+fn write_new(path: &Path, write: impl FnOnce(&mut dyn Write) -> Result<()>) -> Result<()> {
+    let mut part = path.as_os_str().to_owned();
+    part.push(".part");
+    let part = PathBuf::from(part);
+    let mut options = std::fs::File::options();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options.open(&part).with_context(|| format!("creating {}", part.display()))?;
+    let result = (|| {
+        let mut out = std::io::BufWriter::new(file);
+        write(&mut out)?;
+        out.into_inner().map_err(|e| e.into_error())?.sync_all()?;
+        // Not over a file that appeared meanwhile.
+        if path.exists() {
+            bail!("{} exists already", path.display());
+        }
+        std::fs::rename(&part, path).with_context(|| format!("writing {}", path.display()))
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&part);
+    }
+    result
 }
 
 /// The keychain, looking in the collection `p` keeps its key in.

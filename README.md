@@ -109,6 +109,22 @@ cargo run -p beaconctl -- profile forget work             # drop this machine's 
 cargo run -p beaconctl -- profile remove-passphrase work  # back to this machine only
 ```
 
+To carry a profile as one file, export it to a `.tgz` and import that on the other machine:
+
+```bash
+cargo run -p beaconctl -- profile export work             # writes work.beacon-profile.tgz (-o to pick)
+cargo run -p beaconctl -- profile import work.beacon-profile.tgz   # --name to rename, --replace to overwrite
+cargo run -p beaconctl -- profile unlock work             # then the passphrase, as for a copied folder
+```
+
+Export refuses a profile Beacon has not encrypted yet, and one Beacon has open. The archive
+holds the encrypted databases and sealed files as they are on disk, plus the key wrapped by a
+passphrase: the profile's own, or, for a profile without one, a passphrase asked for the
+archive alone (the profile itself keeps none). Whoever has the archive and that passphrase
+can open the profile. The cache, the lock and which keychain collection holds the key stay
+behind. Import keeps the profile's id, which its keys are derived from, so a profile with
+that id already on the machine is replaced only with `--replace`.
+
 On a Mac, `beaconctl` is inside the app: `Gosub Beacon.app/Contents/MacOS/beaconctl`. Use
 that one; the keychain item holding the key trusts it and the app for each other, where a
 `beaconctl` built elsewhere is asked about once per build.
