@@ -390,6 +390,14 @@ impl Beacon {
                 ]
             }
 
+            EngineEvent::DownloadCancelled { id, .. } => {
+                self.downloads.update(id.0, |e| e.state = DownloadState::Cancelled);
+                vec![
+                    BeaconEvent::Log(format!("Download #{} cancelled", id.0)),
+                    BeaconEvent::DownloadChanged(id.0),
+                ]
+            }
+
             _ => Vec::new(),
         }
     }
@@ -931,6 +939,22 @@ mod tests {
         assert!(out.is_empty());
         // The frontend only knew which row was clicked; the path came from core.
         assert_eq!(platform.opened.borrow().as_slice(), [std::path::PathBuf::from("/tmp/report.pdf")]);
+    }
+
+    #[test]
+    fn a_cancelled_download_is_marked_so() {
+        let (mut beacon, _platform) = beacon_with_recorder();
+        let id = beacon.downloads_mut().next_id();
+        beacon
+            .downloads_mut()
+            .start(id, "big.iso".into(), std::path::PathBuf::from("/tmp/big.iso"));
+
+        let out = beacon.on_engine_event(EngineEvent::DownloadCancelled {
+            tab_id: EngineTabId::new(),
+            id: gosub_engine::events::DownloadId(id),
+        });
+        assert!(out.contains(&BeaconEvent::DownloadChanged(id)), "got {out:?}");
+        assert_eq!(beacon.downloads().get(id).unwrap().state, DownloadState::Cancelled);
     }
 
     #[test]

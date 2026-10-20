@@ -126,9 +126,13 @@ pub struct BeaconApp {
     /// The native date or time dialog open over a form control, and what it is for.
     #[cfg(target_os = "android")]
     picker: Option<NativePicker>,
-    /// The download the downloads bar shows; dismissed with its close button.
+    /// The download the downloads bar shows; its close button cancels it while it runs,
+    /// and only dismisses it once it has ended.
     #[cfg(target_os = "android")]
     download_bar: Option<u64>,
+    /// The tab each download was started in, which is where a cancel goes.
+    #[cfg(target_os = "android")]
+    download_tabs: std::collections::HashMap<u64, TabId>,
     /// How far each finished download got on its way into the shared Downloads folder. Written
     /// from the thread that copies it.
     #[cfg(target_os = "android")]
@@ -233,6 +237,8 @@ impl BeaconApp {
             picker: None,
             #[cfg(target_os = "android")]
             download_bar: None,
+            #[cfg(target_os = "android")]
+            download_tabs: std::collections::HashMap::new(),
             #[cfg(target_os = "android")]
             published: Default::default(),
             #[cfg(target_os = "android")]
@@ -760,13 +766,22 @@ impl BeaconApp {
         }
         let name = download_name(suggested);
         // A download's file appears only once the engine starts writing it, so the paths of
-        // the ones already handed out count as taken too.
-        let reserved: Vec<_> = self.beacon.downloads().entries().iter().map(|e| e.path.clone()).collect();
+        // the ones already handed out count as taken too. A cancelled one left nothing on
+        // disk, so its name is free again.
+        let reserved: Vec<_> = self
+            .beacon
+            .downloads()
+            .entries()
+            .iter()
+            .filter(|e| e.state != beacon_core::download::DownloadState::Cancelled)
+            .map(|e| e.path.clone())
+            .collect();
         let path = free_path(&dir, &name, &reserved);
         let downloads = self.beacon.downloads_mut();
         let id = downloads.next_id();
         downloads.start(id, name, path.clone());
         self.download_bar = Some(id);
+        self.download_tabs.insert(id, tab_id);
         self.send_to_tab(
             tab_id,
             vec![TabCommand::StartDownload {
@@ -808,7 +823,8 @@ impl BeaconApp {
     }
 
     /// A strip above the page for the latest download: its progress, then Open once it is in
-    /// Downloads. The close button hides it until the next download.
+    /// Downloads. The close button cancels a download still running, and hides the bar until
+    /// the next download.
     fn downloads_bar(&mut self, ui: &mut egui::Ui) {
         use beacon_core::download::DownloadState;
 
@@ -823,6 +839,7 @@ impl BeaconApp {
                 None => format!("{} KB", entry.received / 1024),
             },
             (DownloadState::Failed(error), _) => format!("failed: {error}"),
+            (DownloadState::Cancelled, _) => "cancelled".to_string(),
             (DownloadState::Finished, Some(Published::Done)) => "in Downloads".to_string(),
             (DownloadState::Finished, Some(Published::Failed)) => "kept in app storage".to_string(),
             (DownloadState::Finished, _) => "saving".to_string(),
@@ -847,6 +864,17 @@ impl BeaconApp {
             self.dispatch(BeaconCommand::OpenDownload(id));
         }
         if close {
+            // A download still arriving is stopped, not just hidden.
+            if entry.state == DownloadState::Running {
+                if let Some(tab_id) = self.download_tabs.get(&id).copied() {
+                    self.send_to_tab(
+                        tab_id,
+                        vec![TabCommand::CancelDownload {
+                            id: gosub_engine::events::DownloadId(id),
+                        }],
+                    );
+                }
+            }
             self.download_bar = None;
         }
     }
