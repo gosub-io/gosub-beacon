@@ -875,6 +875,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
             switch download.state {
             case BEACON_DOWNLOAD_FINISHED: detail = "Finished"
             case BEACON_DOWNLOAD_FAILED: detail = "Failed"
+            case BEACON_DOWNLOAD_CANCELLED: detail = "Cancelled"
             default:
                 if let fraction = download.progress {
                     detail = "\(Int(fraction * 100))%"

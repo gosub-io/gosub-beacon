@@ -136,6 +136,7 @@ internal sealed class DownloadsWindow : Window
             {
                 BeaconNative.DownloadState.Finished => $"Finished · {DeveloperPanel.FormatBytes(download.Received)}",
                 BeaconNative.DownloadState.Failed => "Failed",
+                BeaconNative.DownloadState.Cancelled => "Cancelled",
                 _ when download.Indeterminate => $"{DeveloperPanel.FormatBytes(download.Received)} received",
                 _ => $"{download.Progress * 100:0}% · {DeveloperPanel.FormatBytes(download.Received)}",
             },

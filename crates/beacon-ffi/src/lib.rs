@@ -1692,6 +1692,7 @@ pub enum BeaconDownloadState {
     Running = 0,
     Finished = 1,
     Failed = 2,
+    Cancelled = 3,
 }
 
 /// The URL a pending offer would fetch. Free with [`beacon_string_free`]; NULL if the offer
@@ -1827,7 +1828,8 @@ pub unsafe extern "C" fn beacon_download_state(browser: *mut BeaconBrowser, id: 
     match b.beacon.downloads().get(id).map(|e| &e.state) {
         Some(DownloadState::Running) => BeaconDownloadState::Running,
         Some(DownloadState::Finished) => BeaconDownloadState::Finished,
-        _ => BeaconDownloadState::Failed,
+        Some(DownloadState::Cancelled) => BeaconDownloadState::Cancelled,
+        Some(DownloadState::Failed(_)) | None => BeaconDownloadState::Failed,
     }
 }
 

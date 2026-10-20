@@ -766,8 +766,16 @@ impl BeaconApp {
         }
         let name = download_name(suggested);
         // A download's file appears only once the engine starts writing it, so the paths of
-        // the ones already handed out count as taken too.
-        let reserved: Vec<_> = self.beacon.downloads().entries().iter().map(|e| e.path.clone()).collect();
+        // the ones already handed out count as taken too. A cancelled one left nothing on
+        // disk, so its name is free again.
+        let reserved: Vec<_> = self
+            .beacon
+            .downloads()
+            .entries()
+            .iter()
+            .filter(|e| e.state != beacon_core::download::DownloadState::Cancelled)
+            .map(|e| e.path.clone())
+            .collect();
         let path = free_path(&dir, &name, &reserved);
         let downloads = self.beacon.downloads_mut();
         let id = downloads.next_id();
@@ -815,7 +823,8 @@ impl BeaconApp {
     }
 
     /// A strip above the page for the latest download: its progress, then Open once it is in
-    /// Downloads. The close button hides it until the next download.
+    /// Downloads. The close button cancels a download still running, and hides the bar until
+    /// the next download.
     fn downloads_bar(&mut self, ui: &mut egui::Ui) {
         use beacon_core::download::DownloadState;
 

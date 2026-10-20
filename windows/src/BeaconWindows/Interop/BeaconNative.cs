@@ -657,6 +657,7 @@ internal static partial class BeaconNative
         Running = 0,
         Finished = 1,
         Failed = 2,
+        Cancelled = 3,
     }
 
     /// <summary>The URL behind an offer, for a save dialog that wants to show it.</summary>

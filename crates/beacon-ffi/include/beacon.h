@@ -622,7 +622,8 @@ char *beacon_homepage(BeaconBrowser *browser);
 typedef enum {
     BEACON_DOWNLOAD_RUNNING = 0,
     BEACON_DOWNLOAD_FINISHED = 1,
-    BEACON_DOWNLOAD_FAILED = 2
+    BEACON_DOWNLOAD_FAILED = 2,
+    BEACON_DOWNLOAD_CANCELLED = 3
 } BeaconDownloadState;
 
 /* A BEACON_DOWNLOAD_OFFERED event carries a suggested filename in `text` and an offer id
