@@ -1551,6 +1551,10 @@ impl BeaconApp {
             if let Some(mut tab) = tabs.get_tab(active) {
                 tab.set_url(url.clone());
                 tab.set_loading(true);
+                // Typing an address leaves the error page, as in GTK. Core cannot tell: the
+                // url is already the new one when the navigation starts, so the flag would
+                // stay and the next page's taps would start the game.
+                tab.set_showing_error(false);
                 tabs.update_tab(active, &tab);
             }
         }
