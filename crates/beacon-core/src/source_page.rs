@@ -191,7 +191,7 @@ pub fn build(url: &str, source: &str, highlighted: bool) -> String {
     }
 
     format!(
-        "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Source of {title}</title><style>\
+        "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>Source of {title}</title><style>\
          body{{margin:0;padding:16px 20px;font-family:monospace;font-size:13px;color:#1c2333;background:#ffffff}}\
          .ln{{display:flex;line-height:1.45}}\
          .n{{flex:none;width:46px;padding-right:14px;text-align:right;color:#9aa3b2}}\
