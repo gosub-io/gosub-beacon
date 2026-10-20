@@ -212,7 +212,7 @@ impl<C: BeaconConfig> BrowserEngine<C> {
                 }
                 body.push_str("</table>");
                 Some(gosub_engine::internal_pages::PageResponse::html(format!(
-                    "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Bookmarks</title><style>\
+                    "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>Bookmarks</title><style>\
                      body{{margin:0;padding:32px 40px;font-family:sans-serif;font-size:14px}}\
                      h1{{font-size:24px;margin:0 0 4px 0}} .sub{{color:#5c6675;margin:0 0 20px 0}}\
                      table{{border-collapse:collapse}} td{{padding:4px 14px 4px 0}}\

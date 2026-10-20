@@ -79,8 +79,25 @@ struct TabView {
     scroll_y: f32,
     page_height: f32,
     viewport: Option<(u32, u32)>,
+    /// Screen points per page CSS px, from the engine's `PageScaleChanged`: a page laid out
+    /// wider than the screen (a phone showing a desktop page at 980px) is shown scaled down.
+    /// `None` while the page is laid out at the screen's size.
+    page_scale: Option<f32>,
     /// The game, while the tab plays it in place of its page (`gosub://dive`).
     dive: Option<crate::dive::DiveView>,
+}
+
+impl TabView {
+    /// Screen points per page CSS px. Positions and scroll deltas the user makes on screen are
+    /// divided by this before they reach the engine, which works in page CSS px.
+    fn scale(&self) -> f32 {
+        self.page_scale.unwrap_or(1.0)
+    }
+
+    /// The page's viewport height in its own CSS px: what the engine scrolls by.
+    fn page_viewport_height(&self) -> f32 {
+        self.viewport.map(|(_, h)| h as f32).unwrap_or(0.0) / self.scale()
+    }
 }
 
 pub struct BeaconApp {
@@ -186,6 +203,17 @@ impl BeaconApp {
             .with_gpu_tiles(cfg!(target_os = "android"));
 
         let mut engine = BrowserEngine::<EguiConfig>::new(rt, false, Arc::new(backend))?;
+        // A phone lays pages out as mobile browsers do: at the width their viewport <meta> asks
+        // for, or 980px, shown scaled to fit. For this run only, so it never becomes a setting
+        // the desktop inherits. BEACON_MOBILE_VIEWPORT turns it on here too, to try it there.
+        if cfg!(target_os = "android") || std::env::var_os("BEACON_MOBILE_VIEWPORT").is_some() {
+            if let Err(e) = engine
+                .settings()
+                .set_transient("useragent.viewport.mobile", gosub_engine::Setting::Bool(true))
+            {
+                log::warn!("mobile viewport: {e}");
+            }
+        }
         let event_rx = engine
             .take_event_rx()
             .ok_or_else(|| anyhow::anyhow!("engine event stream already taken"))?;
@@ -460,6 +488,15 @@ impl BeaconApp {
                             continue;
                         }
                     }
+                    if let EngineEvent::PageScaleChanged {
+                        tab_id: engine_id, scale, ..
+                    } = &event
+                    {
+                        if let Some(view) = self.beacon.tab_for_engine(*engine_id).and_then(|id| self.views.get_mut(&id)) {
+                            view.page_scale = (*scale != 1.0).then_some(*scale as f32);
+                        }
+                        continue;
+                    }
                     let out = self.beacon.on_engine_event(event);
                     self.absorb(out);
                 }
@@ -665,6 +702,7 @@ fn engine_event_name(event: &EngineEvent) -> &'static str {
         EngineEvent::HoverUrl { .. } => "HoverUrl",
         EngineEvent::CursorChanged { .. } => "CursorChanged",
         EngineEvent::TabCrashed { .. } => "TabCrashed",
+        EngineEvent::PageScaleChanged { .. } => "PageScaleChanged",
         _ => "other",
     }
 }
@@ -981,9 +1019,11 @@ impl eframe::App for BeaconApp {
             (acc, precise)
         });
         if scroll != egui::Vec2::ZERO {
-            let (dx, dy) = (-scroll.x, -scroll.y);
+            // A notch moves the page as far on screen at any scale.
+            let scale = self.views.get(&active).map_or(1.0, TabView::scale);
+            let (dx, dy) = (-scroll.x / scale, -scroll.y / scale);
             if let Some(view) = self.views.get_mut(&active) {
-                let max_y = (view.page_height - view.viewport.map(|(_, h)| h as f32).unwrap_or(0.0)).max(0.0);
+                let max_y = (view.page_height - view.page_viewport_height()).max(0.0);
                 view.scroll_x = (view.scroll_x + dx).max(0.0);
                 view.scroll_y = (view.scroll_y + dy).clamp(0.0, max_y);
             }
@@ -1213,11 +1253,6 @@ impl eframe::App for BeaconApp {
                     if let Some(view) = self.views.get_mut(&active) {
                         view.viewport = Some(wanted);
                     }
-                    // Rasterize at the display's real resolution. Without this the page is
-                    // drawn at 1x and stretched onto a HiDPI surface, which reads as blurry
-                    // text rather than as the scaling bug it is.
-                    let raster_dpr = (ctx.pixels_per_point().max(1.0).ceil() as u32).clamp(1, 4);
-                    gosub_render_pipeline::render::DEVICE_PIXEL_RATIO.store(raster_dpr, std::sync::atomic::Ordering::Relaxed);
                     self.send_active_and_draw(TabCommand::SetViewport {
                         x: 0,
                         y: 0,
@@ -1225,6 +1260,19 @@ impl eframe::App for BeaconApp {
                         height: wanted.1,
                     });
                 }
+            }
+
+            // Rasterize at the display's real resolution. Without this the page is drawn at 1x
+            // and stretched onto a HiDPI surface, which reads as blurry text rather than as the
+            // scaling bug it is. A page shown scaled down needs that many fewer pixels: a desktop
+            // page at 980px on a phone rasterized at the phone's 3x would be seven times what the
+            // screen shows. Checked every frame, so a new scale, a tab switch and a move to
+            // another display all land; the engine re-rasterizes on the redraw this asks for.
+            let scale = self.views.get(&active).map_or(1.0, TabView::scale);
+            let raster_dpr = ((ctx.pixels_per_point().max(1.0) * scale).ceil() as u32).clamp(1, 4);
+            let dpr = &gosub_render_pipeline::render::DEVICE_PIXEL_RATIO;
+            if dpr.swap(raster_dpr, std::sync::atomic::Ordering::Relaxed) != raster_dpr {
+                self.send_active(TabCommand::ResumeDrawing { fps: DRAW_FPS });
             }
 
             if let Some(dive) = self.views.get_mut(&active).and_then(|v| v.dive.as_mut()) {
@@ -1299,9 +1347,11 @@ impl eframe::App for BeaconApp {
                 ctx.request_repaint();
             }
             if drag != egui::Vec2::ZERO {
-                let (dx, dy) = (-drag.x, -drag.y);
+                // The page follows the finger on screen, at whatever scale it is shown.
+                let scale = self.views.get(&active).map_or(1.0, TabView::scale);
+                let (dx, dy) = (-drag.x / scale, -drag.y / scale);
                 if let Some(view) = self.views.get_mut(&active) {
-                    let max_y = (view.page_height - view.viewport.map(|(_, h)| h as f32).unwrap_or(0.0)).max(0.0);
+                    let max_y = (view.page_height - view.page_viewport_height()).max(0.0);
                     view.scroll_x = (view.scroll_x + dx).max(0.0);
                     view.scroll_y = (view.scroll_y + dy).clamp(0.0, max_y);
                 }
@@ -1360,9 +1410,10 @@ impl eframe::App for BeaconApp {
             // sends its own move below.
             let touching = self.touch.is_some() || ctx.input(|i| i.any_touches());
             let pointer = ctx.pointer_latest_pos().filter(|pos| rect.contains(*pos) && !touching);
+            let scale = self.views.get(&active).map_or(1.0, TabView::scale);
             if let Some(pos) = pointer {
                 if self.last_pointer != Some(pos) {
-                    let rel = pos - rect.min;
+                    let rel = (pos - rect.min) / scale;
                     self.send_active(TabCommand::MouseMove { x: rel.x, y: rel.y });
                 }
                 ui.ctx().set_cursor_icon(match self.cursor {
@@ -1382,7 +1433,7 @@ impl eframe::App for BeaconApp {
                 // The click's own position: a finger lifting takes the pointer away with it,
                 // so by now the context may have none.
                 if let Some(pos) = response.interact_pointer_pos() {
-                    let rel = pos - rect.min;
+                    let rel = (pos - rect.min) / scale;
                     // The engine follows the link under the pointer, and for a tap this is the
                     // first it hears of where the finger is. For a mouse it is a no-op.
                     self.send_active(TabCommand::MouseMove { x: rel.x, y: rel.y });
