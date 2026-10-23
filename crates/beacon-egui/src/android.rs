@@ -103,7 +103,7 @@ pub fn keyboard_for(field: &egui::Response) {
 /// per field: moving from one field to another is one losing focus and one gaining it in
 /// the same frame, and handled field by field the keyboard would end up following
 /// whichever was drawn last.
-pub fn sync_keyboard(ctx: &egui::Context) {
+fn sync_keyboard(ctx: &egui::Context) {
     let wanted = ctx.text_edit_focused();
     let tapped = FIELD_TAPPED.swap(false, Ordering::Relaxed);
     let up = KEYBOARD_UP.swap(wanted, Ordering::Relaxed);
@@ -111,6 +111,16 @@ pub fn sync_keyboard(ctx: &egui::Context) {
         show_keyboard(true);
     } else if !wanted && up {
         show_keyboard(false);
+    }
+}
+
+/// Runs [`sync_keyboard`] when dropped: held for the whole of a frame, it reconciles the
+/// keyboard however the frame ends, early returns included.
+pub struct KeyboardSync(pub egui::Context);
+
+impl Drop for KeyboardSync {
+    fn drop(&mut self) {
+        sync_keyboard(&self.0);
     }
 }
 

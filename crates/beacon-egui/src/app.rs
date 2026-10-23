@@ -977,6 +977,8 @@ fn free_path(dir: &std::path::Path, name: &str, reserved: &[std::path::PathBuf])
 impl eframe::App for BeaconApp {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        #[cfg(target_os = "android")]
+        let _keyboard = crate::android::KeyboardSync(ctx.clone());
         // Read once: the panel frames below need this while `ui` is borrowed mutably.
         let faint = ui.visuals().faint_bg_color;
         self.pump_engine();
@@ -1215,6 +1217,9 @@ impl eframe::App for BeaconApp {
                         let count = self.tabs.lock().unwrap().tab_count();
                         if chrome::tab_count_button(ui, count).clicked() {
                             self.tab_list_open = !self.tab_list_open;
+                            // The field being typed into is about to go; so does the keyboard,
+                            // this frame rather than once egui notices the field is gone.
+                            ui.memory_mut(|m| m.stop_text_input());
                         }
                         // Frameless like the other toolbar buttons.
                         let menu = egui::Button::new(egui::RichText::new("\u{2630}").size(18.0))
@@ -1550,9 +1555,6 @@ impl eframe::App for BeaconApp {
                 }
             }
         });
-
-        #[cfg(target_os = "android")]
-        crate::android::sync_keyboard(&ctx);
     }
 }
 
