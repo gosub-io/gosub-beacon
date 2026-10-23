@@ -3210,11 +3210,7 @@ impl BrowserWindow {
     /// (see `beacon_core::dive`). Everything else - home, help, blank, version, history,
     /// unknown pages - goes to the engine.
     fn is_shell_rendered(url: &url::Url) -> bool {
-        matches!(url.scheme(), "gosub" | "about")
-            && matches!(
-                gosub_engine::internal_pages::InternalPages::page_name(url),
-                "config" | beacon_core::dive::PAGE
-            )
+        beacon_core::settings::is_editor_url(url) || beacon_core::dive::is_dive(url)
     }
 
     /// What a shell-rendered page's tab is titled.

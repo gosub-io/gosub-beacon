@@ -10,6 +10,7 @@
 pub mod android;
 mod app;
 mod chrome;
+mod config_page;
 mod context;
 mod dive;
 mod picker_value;

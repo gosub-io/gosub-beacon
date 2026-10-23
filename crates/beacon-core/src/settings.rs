@@ -34,6 +34,12 @@ impl SettingRow {
     }
 }
 
+/// Whether `url` is the settings editor's address (`gosub://config`, `about:config`). The
+/// engine's own page there is a read-only dump; a shell draws its editor in its place.
+pub fn is_editor_url(url: &url::Url) -> bool {
+    matches!(url.scheme(), "gosub" | "about") && gosub_engine::internal_pages::InternalPages::page_name(url) == "config"
+}
+
 /// Every key matching `filter`, sorted, with its schema and current value.
 ///
 /// An empty filter means every key. A filter containing `*` is handed to the store as a
@@ -108,10 +114,24 @@ pub fn set(config: &Config, key: &str, value: Setting) -> bool {
 
 /// Store the text form of a value, typed by the key's schema. What an editor's text box,
 /// dropdown or number field commits.
+///
+/// Text that is no number for a number key is refused, not stored as the 0 `parse_like`
+/// falls back to: a typo in a port is no reason to set it to 0.
 pub fn set_text(config: &Config, key: &str, text: &str) -> bool {
     let Some(info) = config.get_info(key) else {
         return false;
     };
+    let text = text.trim();
+    let number = match info.default {
+        Setting::UInt(_) => Some(text.parse::<usize>().is_ok()),
+        Setting::SInt(_) => Some(text.parse::<isize>().is_ok()),
+        Setting::Float(_) => Some(text.parse::<f64>().is_ok()),
+        _ => None,
+    };
+    if number == Some(false) {
+        log::warn!("settings: {key} rejected: {text:?} is not a number");
+        return false;
+    }
     set(config, key, parse_like(&info.default, text))
 }
 
@@ -137,6 +157,30 @@ mod tests {
             parse_like(&Setting::Map(vec![]), "left, right"),
             Setting::Map(vec!["left".into(), "right".into()])
         );
+    }
+
+    #[test]
+    fn a_typo_in_a_number_is_refused_rather_than_stored_as_zero() {
+        let config = Config::new(vec![SettingInfo {
+            key: "net.port".to_string(),
+            description: String::new(),
+            default: Setting::UInt(8080),
+            constraint: None,
+        }]);
+        assert!(set_text(&config, "net.port", " 9090 "));
+        assert_eq!(config.get("net.port").unwrap(), Some(Setting::UInt(9090)));
+
+        assert!(!set_text(&config, "net.port", "90x0"));
+        assert_eq!(config.get("net.port").unwrap(), Some(Setting::UInt(9090)), "left as it was");
+    }
+
+    #[test]
+    fn the_editor_answers_to_both_url_forms_and_nothing_else() {
+        let url = |s: &str| url::Url::parse(s).unwrap();
+        assert!(is_editor_url(&url("gosub://config")));
+        assert!(is_editor_url(&url("about:config")));
+        assert!(!is_editor_url(&url("gosub://home")));
+        assert!(!is_editor_url(&url("https://config/")));
     }
 
     #[test]

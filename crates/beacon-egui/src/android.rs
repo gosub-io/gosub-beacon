@@ -84,6 +84,18 @@ pub fn show_keyboard(show: bool) {
     }
 }
 
+/// Raise the soft keyboard for a text field that gained focus or was tapped, and lower it
+/// when the field loses focus. The tap counts because Back with the keyboard up is Android's
+/// own: it hides the keyboard without Beacon seeing the key, so the field keeps its focus,
+/// and a second tap on it must bring the keyboard back.
+pub fn keyboard_for(field: &egui::Response) {
+    if field.gained_focus() || (field.clicked() && field.has_focus()) {
+        show_keyboard(true);
+    } else if field.lost_focus() {
+        show_keyboard(false);
+    }
+}
+
 /// Put Beacon in the background, as Back does once there is nothing left to go back to.
 /// winit reports every key it forwards as handled, so Android's own Back (finish the
 /// activity) never runs; Beacon goes to the background with its tabs kept, as other
