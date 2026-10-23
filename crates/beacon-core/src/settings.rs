@@ -125,7 +125,8 @@ pub fn set_text(config: &Config, key: &str, text: &str) -> bool {
     let number = match info.default {
         Setting::UInt(_) => Some(text.parse::<usize>().is_ok()),
         Setting::SInt(_) => Some(text.parse::<isize>().is_ok()),
-        Setting::Float(_) => Some(text.parse::<f64>().is_ok()),
+        // `NaN` and `inf` parse, but no setting means either.
+        Setting::Float(_) => Some(text.parse::<f64>().is_ok_and(f64::is_finite)),
         _ => None,
     };
     if number == Some(false) {
@@ -172,6 +173,21 @@ mod tests {
 
         assert!(!set_text(&config, "net.port", "90x0"));
         assert_eq!(config.get("net.port").unwrap(), Some(Setting::UInt(9090)), "left as it was");
+    }
+
+    #[test]
+    fn a_float_must_be_a_finite_number() {
+        let config = Config::new(vec![SettingInfo {
+            key: "ui.scale".to_string(),
+            description: String::new(),
+            default: Setting::Float(1.0),
+            constraint: None,
+        }]);
+        assert!(set_text(&config, "ui.scale", "1.5"));
+        for text in ["NaN", "inf", "-infinity"] {
+            assert!(!set_text(&config, "ui.scale", text), "{text} refused");
+        }
+        assert_eq!(config.get("ui.scale").unwrap(), Some(Setting::Float(1.5)));
     }
 
     #[test]

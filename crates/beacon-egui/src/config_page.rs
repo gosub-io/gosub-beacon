@@ -32,7 +32,8 @@ enum Edit {
 pub struct ConfigView {
     config: Config,
     filter: String,
-    /// The rows `filter` picks, read again only when the filter or a value changes: reading
+    /// The rows `filter` picks, read again only when the filter or a value changes or the
+    /// page comes back into view: reading
     /// them walks the whole store, which is no thing to do every frame.
     rows: Vec<SettingRow>,
     /// What is being typed into a field, by key. It reaches the store when the field is left
@@ -40,6 +41,9 @@ pub struct ConfigView {
     drafts: HashMap<String, String>,
     /// The last edit the store would not take, shown rather than pretending it landed.
     refused: Option<String>,
+    /// The frame this was last shown in. Shown again after a gap (another tab, another
+    /// page), it reads the rows afresh: another tab's editor may have changed them.
+    shown: u64,
     /// How tall the list was last frame. On a phone it shrinks as the keyboard slides in,
     /// and a field being typed into is scrolled back into view each time it does.
     visible: f32,
@@ -54,11 +58,17 @@ impl ConfigView {
             rows,
             drafts: HashMap::new(),
             refused: None,
+            shown: 0,
             visible: 0.0,
         }
     }
 
     pub fn show(&mut self, ui: &mut egui::Ui) {
+        let frame = ui.ctx().cumulative_frame_nr();
+        if frame > self.shown + 1 {
+            self.rows = settings::rows(&self.config, &self.filter);
+        }
+        self.shown = frame;
         ui.spacing_mut().interact_size.y = CONTROL;
         if cfg!(target_os = "android") {
             ui.spacing_mut().icon_width = 24.0;
@@ -158,9 +168,10 @@ fn show_row(ui: &mut egui::Ui, row: &SettingRow, drafts: &mut HashMap<String, St
                 edit = Some(Edit::Reset);
             }
             ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                if let Some(asked) = show_editor(ui, row, drafts, resized) {
-                    edit = Some(asked);
-                }
+                // A tap on Reset also takes the focus from the field, which then hands in
+                // what was typed into it; the Reset is what was asked for.
+                let asked = show_editor(ui, row, drafts, resized);
+                edit = edit.take().or(asked);
             });
         });
     });

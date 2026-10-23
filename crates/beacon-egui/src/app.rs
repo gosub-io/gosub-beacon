@@ -1052,8 +1052,18 @@ impl eframe::App for BeaconApp {
             }
             (acc, precise, zoom)
         });
-        self.wheel_zoom *= zoom;
-        if scroll != egui::Vec2::ZERO {
+        // The settings editor scrolls itself; the engine page hidden under it must not move
+        // or zoom along, nor keep a zoom to apply to the next page.
+        let on_config = self
+            .tabs
+            .lock()
+            .unwrap()
+            .get_tab(active)
+            .is_some_and(|tab| beacon_core::settings::is_editor_url(tab.url()));
+        if !on_config {
+            self.wheel_zoom *= zoom;
+        }
+        if scroll != egui::Vec2::ZERO && !on_config {
             // Screen points: a notch moves the page as far on screen at any scale, and the engine
             // maps it into the page.
             let (dx, dy) = (-scroll.x, -scroll.y);
@@ -1322,12 +1332,6 @@ impl eframe::App for BeaconApp {
             // The engine's page at gosub://config is a read-only dump; the editor goes in its
             // place, as GTK's does. The engine still navigates there, so the address, history
             // and Back work as for any page.
-            let on_config = self
-                .tabs
-                .lock()
-                .unwrap()
-                .get_tab(active)
-                .is_some_and(|tab| beacon_core::settings::is_editor_url(tab.url()));
             if let Some(view) = self.views.get_mut(&active) {
                 if !on_config {
                     view.config = None;
@@ -1546,6 +1550,9 @@ impl eframe::App for BeaconApp {
                 }
             }
         });
+
+        #[cfg(target_os = "android")]
+        crate::android::sync_keyboard(&ctx);
     }
 }
 
