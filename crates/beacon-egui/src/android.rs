@@ -7,6 +7,7 @@
 //! processes: the engine runs in-process, as it does whenever isolation is off.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 
 use beacon_core::cli::Cli;
@@ -81,6 +82,45 @@ pub fn show_keyboard(show: bool) {
         } else {
             app.hide_soft_input(false);
         }
+    }
+}
+
+/// Whether Beacon last asked for the keyboard, and whether a focused text field was tapped
+/// this frame; [`sync_keyboard`] reads both.
+static KEYBOARD_UP: AtomicBool = AtomicBool::new(false);
+static FIELD_TAPPED: AtomicBool = AtomicBool::new(false);
+
+/// Note a tap on a text field that already has focus. Back with the keyboard up is
+/// Android's own: it hides the keyboard without Beacon seeing the key, so the field keeps
+/// its focus, and a second tap on it must bring the keyboard back.
+pub fn keyboard_for(field: &egui::Response) {
+    if field.clicked() && field.has_focus() {
+        FIELD_TAPPED.store(true, Ordering::Relaxed);
+    }
+}
+
+/// Raise or drop the keyboard by where focus ended up this frame. Once a frame rather than
+/// per field: moving from one field to another is one losing focus and one gaining it in
+/// the same frame, and handled field by field the keyboard would end up following
+/// whichever was drawn last.
+fn sync_keyboard(ctx: &egui::Context) {
+    let wanted = ctx.text_edit_focused();
+    let tapped = FIELD_TAPPED.swap(false, Ordering::Relaxed);
+    let up = KEYBOARD_UP.swap(wanted, Ordering::Relaxed);
+    if wanted && (!up || tapped) {
+        show_keyboard(true);
+    } else if !wanted && up {
+        show_keyboard(false);
+    }
+}
+
+/// Runs [`sync_keyboard`] when dropped: held for the whole of a frame, it reconciles the
+/// keyboard however the frame ends, early returns included.
+pub struct KeyboardSync(pub egui::Context);
+
+impl Drop for KeyboardSync {
+    fn drop(&mut self) {
+        sync_keyboard(&self.0);
     }
 }
 

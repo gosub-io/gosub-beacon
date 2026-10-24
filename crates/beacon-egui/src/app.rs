@@ -90,6 +90,8 @@ struct TabView {
     display_scale: Option<f32>,
     /// The game, while the tab plays it in place of its page (`gosub://dive`).
     dive: Option<crate::dive::DiveView>,
+    /// The settings editor, while the tab is on `gosub://config`.
+    config: Option<crate::config_page::ConfigView>,
 }
 
 impl TabView {
@@ -373,6 +375,8 @@ impl BeaconApp {
     fn tab_title(&self, tab_id: TabId, tab: &GosubTab) -> String {
         if self.is_diving(tab_id) {
             beacon_core::dive::TITLE.to_string()
+        } else if beacon_core::settings::is_editor_url(tab.url()) {
+            "Engine settings".to_string()
         } else if tab.title().is_empty() {
             tab.url().to_string()
         } else {
@@ -973,6 +977,8 @@ fn free_path(dir: &std::path::Path, name: &str, reserved: &[std::path::PathBuf])
 impl eframe::App for BeaconApp {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        #[cfg(target_os = "android")]
+        let _keyboard = crate::android::KeyboardSync(ctx.clone());
         // Read once: the panel frames below need this while `ui` is borrowed mutably.
         let faint = ui.visuals().faint_bg_color;
         self.pump_engine();
@@ -1048,8 +1054,18 @@ impl eframe::App for BeaconApp {
             }
             (acc, precise, zoom)
         });
-        self.wheel_zoom *= zoom;
-        if scroll != egui::Vec2::ZERO {
+        // The settings editor scrolls itself; the engine page hidden under it must not move
+        // or zoom along, nor keep a zoom to apply to the next page.
+        let on_config = self
+            .tabs
+            .lock()
+            .unwrap()
+            .get_tab(active)
+            .is_some_and(|tab| beacon_core::settings::is_editor_url(tab.url()));
+        if !on_config {
+            self.wheel_zoom *= zoom;
+        }
+        if scroll != egui::Vec2::ZERO && !on_config {
             // Screen points: a notch moves the page as far on screen at any scale, and the engine
             // maps it into the page.
             let (dx, dy) = (-scroll.x, -scroll.y);
@@ -1191,9 +1207,7 @@ impl eframe::App for BeaconApp {
                         }
                     }
                     #[cfg(target_os = "android")]
-                    if response.gained_focus() || response.lost_focus() {
-                        crate::android::show_keyboard(response.gained_focus());
-                    }
+                    crate::android::keyboard_for(&response);
                     if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                         let target = self.address_bar.clone();
                         self.navigate_active(&target);
@@ -1203,6 +1217,9 @@ impl eframe::App for BeaconApp {
                         let count = self.tabs.lock().unwrap().tab_count();
                         if chrome::tab_count_button(ui, count).clicked() {
                             self.tab_list_open = !self.tab_list_open;
+                            // The field being typed into is about to go; so does the keyboard,
+                            // this frame rather than once egui notices the field is gone.
+                            ui.memory_mut(|m| m.stop_text_input());
                         }
                         // Frameless like the other toolbar buttons.
                         let menu = egui::Button::new(egui::RichText::new("\u{2630}").size(18.0))
@@ -1315,6 +1332,21 @@ impl eframe::App for BeaconApp {
                 let rect = ui.available_rect_before_wrap();
                 dive.show(ui, rect, !self.address_bar_focused);
                 return;
+            }
+
+            // The engine's page at gosub://config is a read-only dump; the editor goes in its
+            // place, as GTK's does. The engine still navigates there, so the address, history
+            // and Back work as for any page.
+            if let Some(view) = self.views.get_mut(&active) {
+                if !on_config {
+                    view.config = None;
+                } else {
+                    let config = view
+                        .config
+                        .get_or_insert_with(|| crate::config_page::ConfigView::new(self.engine.settings().clone()));
+                    config.show(ui);
+                    return;
+                }
             }
 
             let texture = self.views.get(&active).and_then(|view| {
@@ -1554,7 +1586,8 @@ impl BeaconApp {
     /// a menu, the tab list. Then it goes back in the tab's history, and with no history
     /// left Beacon goes to the background on Android.
     fn back_key(&mut self, ctx: &egui::Context, active: TabId) {
-        if self.address_bar_focused {
+        // Any text field: the address bar, or one on the settings page.
+        if self.address_bar_focused || ctx.egui_wants_keyboard_input() {
             ctx.memory_mut(|m| m.stop_text_input());
         } else if egui::Popup::is_any_open(ctx) {
             egui::Popup::close_all(ctx);
