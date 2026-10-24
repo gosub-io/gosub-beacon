@@ -46,8 +46,9 @@ typedef uint64_t BeaconTabId;
 typedef struct {
     /* Profile directory (cookies, history, settings). NULL for the platform default:
      * ~/.local/share/gosub-beacon on Linux, ~/Library/Application Support on macOS.
-     * UTF-8. A process runs one profile: the first beacon_new picks it, and a later one
-     * naming a different folder returns NULL. */
+     * UTF-8. A process runs one profile: the first beacon_new that opens its folder
+     * picks it, and a later one naming a different folder returns NULL. A folder that
+     * cannot be opened (in use, its key elsewhere) is not kept, so another can be tried. */
     const char *user_data_dir;
     /* Ephemeral cookies and storage, nothing written to history. */
     bool private_mode;

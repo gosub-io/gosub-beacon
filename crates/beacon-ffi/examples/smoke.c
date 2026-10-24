@@ -237,6 +237,10 @@ int main(void) {
         return 1;
     }
 
+    /* A file is no profile folder: refused, and the process is still free to pick another. */
+    BeaconConfig broken = {.user_data_dir = page_a, .private_mode = false};
+    CHECK(beacon_new(&broken) == NULL, "a profile folder that cannot be opened is refused");
+
     BeaconConfig config = {.user_data_dir = "/tmp/beacon-ffi-profile", .private_mode = false};
     BeaconBrowser *browser = beacon_new(&config);
     if (!browser) {

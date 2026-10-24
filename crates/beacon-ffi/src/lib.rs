@@ -673,10 +673,9 @@ impl BeaconBrowser {
 
 // ── lifecycle ────────────────────────────────────────────────────────────────
 
-/// Point the profile at `dir`, the way `--user-data-dir` does for the other shells. A
-/// process runs one profile: the first browser picks it, and a later one naming another
-/// folder is refused rather than quietly writing into the first. NULL keeps whatever the
-/// first picked (the platform default if nothing did).
+/// Point the profile at `dir`, the way `--user-data-dir` does for the other shells: see
+/// [`beacon_core::paths::open_folder`]. NULL keeps whatever an earlier browser picked (the
+/// platform default if none did).
 fn pick_profile(dir: *const c_char) -> Result<(), String> {
     if dir.is_null() {
         return Ok(());
@@ -685,29 +684,7 @@ fn pick_profile(dir: *const c_char) -> Result<(), String> {
         .to_str()
         .map(std::path::PathBuf::from)
         .map_err(|_| "user_data_dir is not UTF-8".to_string())?;
-    let cli = beacon_core::cli::Cli::set(beacon_core::cli::Cli {
-        user_data_dir: Some(dir.clone()),
-        ..Default::default()
-    });
-    match &cli.user_data_dir {
-        Some(picked) if same_folder(picked, &dir) => Ok(()),
-        picked => Err(format!(
-            "user_data_dir {} asked for, but this process already runs the profile in {}",
-            dir.display(),
-            picked.as_deref().map_or("the platform default".into(), |p| p.display().to_string()),
-        )),
-    }
-}
-
-/// Whether two spellings name one folder: `./p`, `a/../p` and a symlink to it are the same
-/// profile. Resolved on disk; a folder that is not there yet is compared as an absolute path.
-fn same_folder(a: &std::path::Path, b: &std::path::Path) -> bool {
-    let resolve = |p: &std::path::Path| {
-        std::fs::canonicalize(p)
-            .or_else(|_| std::path::absolute(p))
-            .unwrap_or_else(|_| p.to_path_buf())
-    };
-    resolve(a) == resolve(b)
+    beacon_core::paths::open_folder(&dir).map_err(|e| format!("{e:#}"))
 }
 
 /// Create a browser. Returns NULL if the engine could not start.

@@ -25,7 +25,14 @@ pub fn init() -> anyhow::Result<&'static Profile> {
     if let Some(profile) = PROFILE.get() {
         return Ok(profile);
     }
-    let cli = crate::cli::Cli::global();
+    let (profile, keys_dir) = resolve(crate::cli::Cli::global())?;
+    let _ = KEYS_DIR.set(keys_dir);
+    Ok(PROFILE.get_or_init(|| profile))
+}
+
+/// The profile `cli` names, opened, and where its key files would go (see [`keys_dir`]).
+/// Publishes nothing.
+fn resolve(cli: &crate::cli::Cli) -> anyhow::Result<(Profile, PathBuf)> {
     let selection = match (&cli.user_data_dir, &cli.profile) {
         (Some(dir), _) => Selection::Dir(dir.clone()),
         (None, Some(name)) => Selection::Named(name.clone()),
@@ -45,28 +52,85 @@ pub fn init() -> anyhow::Result<&'static Profile> {
         _ => Roots::platform()?,
     };
     let profile = roots.open(&selection, env!("CARGO_PKG_VERSION"))?;
-    let _ = KEYS_DIR.set(roots.data.join("keys"));
-    Ok(PROFILE.get_or_init(|| profile))
+    Ok((profile, roots.data.join("keys")))
+}
+
+/// Run the profile in `dir`, for a host on the C ABI, which has no command line to give
+/// `--user-data-dir` on. The profile is opened, locked and unlocked before anything is
+/// published, so a folder that fails (in use, its key elsewhere) leaves the process free
+/// to try another. Once one succeeds it is the process's profile: a later call accepts
+/// the same folder, however it is spelled, and refuses any other.
+pub fn open_folder(dir: &Path) -> anyhow::Result<()> {
+    if PROFILE.get().is_some() {
+        let running = crate::cli::Cli::global().user_data_dir.as_deref();
+        return match running {
+            Some(running) if same_folder(running, dir) => Ok(()),
+            _ => anyhow::bail!(
+                "{} asked for, but this process already runs the profile in {}",
+                dir.display(),
+                profile().dir.display()
+            ),
+        };
+    }
+    let cli = crate::cli::Cli {
+        user_data_dir: Some(dir.to_path_buf()),
+        ..Default::default()
+    };
+    let (profile, keys_dir) = resolve(&cli)?;
+    let lock = profile.lock()?;
+    let keys = key_store(&profile, Some(&keys_dir));
+    // A copy, as in `profile_key`: unlocking may write `[crypto]` into the manifest.
+    let key = profile.clone().unlock(keys.as_deref())?;
+    encrypt_plaintext(&profile, &key)?;
+
+    let published = crate::cli::Cli::set(cli);
+    anyhow::ensure!(
+        published.user_data_dir.as_deref() == Some(dir),
+        "{} asked for, but this process has already settled on another profile",
+        dir.display()
+    );
+    let _ = KEYS_DIR.set(keys_dir);
+    let _ = PROFILE.set(profile);
+    let _ = LOCK.set(lock);
+    let _ = KEY.set(key);
+    let _ = ENCRYPTED.set(());
+    Ok(())
+}
+
+/// Whether two spellings name one folder: `./p`, `a/../p` and a symlink to it are the same
+/// profile. Resolved on disk; a folder that is not there yet is compared as an absolute path.
+fn same_folder(a: &Path, b: &Path) -> bool {
+    let resolve = |p: &Path| {
+        std::fs::canonicalize(p)
+            .or_else(|_| std::path::absolute(p))
+            .unwrap_or_else(|_| p.to_path_buf())
+    };
+    resolve(a) == resolve(b)
 }
 
 /// The folder profile keys are kept in as files, when this platform keeps them that way:
 /// Android, which has no keychain Beacon can use. `None` where the OS keychain holds them.
 /// Outside every profile and its cache, so the lockdown has to grant it on its own.
 pub fn keys_dir() -> Option<&'static Path> {
+    file_keys(KEYS_DIR.get().map(PathBuf::as_path))
+}
+
+fn file_keys(dir: Option<&Path>) -> Option<&Path> {
     if OsKeychain::new().is_some() || !cfg!(target_os = "android") {
         return None;
     }
-    KEYS_DIR.get().map(PathBuf::as_path)
+    dir
 }
 
-/// Where this machine keeps profile keys: the OS keychain, or on Android files in the app's
-/// private storage, which no other app reads. Anywhere else without a keychain, `None`:
-/// every profile is encrypted, so no key store means the profile does not open.
-fn key_store() -> Option<Box<dyn KeyStore>> {
+/// Where this machine keeps `profile`'s key: the OS keychain, or on Android files in the
+/// app's private storage (`keys_dir`), which no other app reads. Anywhere else without a
+/// keychain, `None`: every profile is encrypted, so no key store means the profile does not
+/// open.
+fn key_store(profile: &Profile, keys_dir: Option<&Path>) -> Option<Box<dyn KeyStore>> {
     if let Some(keychain) = OsKeychain::new() {
-        return Some(Box::new(keychain.in_collection(profile().keychain_collection())));
+        return Some(Box::new(keychain.in_collection(profile.keychain_collection())));
     }
-    keys_dir().map(|dir| Box::new(beacon_profile::crypto::FileKeyStore::new(dir)) as Box<dyn KeyStore>)
+    file_keys(keys_dir).map(|dir| Box::new(beacon_profile::crypto::FileKeyStore::new(dir)) as Box<dyn KeyStore>)
 }
 
 /// The profile this process runs. Resolves it on first use for hosts that never call
@@ -142,7 +206,7 @@ fn profile_key() -> anyhow::Result<&'static ProfileKey> {
             // A copy: unlocking may write `[crypto]` into the manifest, and nothing else this
             // process reads depends on it.
             let mut profile = profile().clone();
-            let keys = key_store();
+            let keys = key_store(&profile, keys_dir());
             let key = profile.unlock(keys.as_deref())?;
             // Kept before encrypting: the copy above is gone after this call, and a retry
             // would unlock the stale copy over again. (The keychain now hands back the key
