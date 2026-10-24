@@ -24,7 +24,7 @@ gosub_renderer_skia = { path = "../gosub-engine/crates/gosub_renderer_skia" }
 gosub_renderer_vello = { path = "../gosub-engine/crates/gosub_renderer_vello" }
 gosub_fontmanager = { path = "../gosub-engine/crates/gosub_fontmanager" }
 
-skia-safe = { version = "0.99.0", features = ["gl"] }
+skia-safe = { version = "0.153.3", features = ["gl"] }
 # gtk4 must match the version the engine's `gtk4` feature pins.
 gtk4 = { version = "0.11.1", features = ["v4_6", "v4_14"] }
 gtk-macros = "0.3"
