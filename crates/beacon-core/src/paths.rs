@@ -61,16 +61,16 @@ fn resolve(cli: &crate::cli::Cli) -> anyhow::Result<(Profile, PathBuf)> {
 /// to try another. Once one succeeds it is the process's profile: a later call accepts
 /// the same folder, however it is spelled, and refuses any other.
 pub fn open_folder(dir: &Path) -> anyhow::Result<()> {
-    if PROFILE.get().is_some() {
-        let running = crate::cli::Cli::global().user_data_dir.as_deref();
-        return match running {
-            Some(running) if same_folder(running, dir) => Ok(()),
-            _ => anyhow::bail!(
-                "{} asked for, but this process already runs the profile in {}",
-                dir.display(),
-                profile().dir.display()
-            ),
-        };
+    // Against the profile's own folder, not the command line: one picked by default or by
+    // name has no `user_data_dir`, and its folder named outright is still the same profile.
+    if let Some(running) = PROFILE.get() {
+        anyhow::ensure!(
+            same_folder(&running.dir, dir),
+            "{} asked for, but this process already runs the profile in {}",
+            dir.display(),
+            running.dir.display()
+        );
+        return Ok(());
     }
     let cli = crate::cli::Cli {
         user_data_dir: Some(dir.to_path_buf()),
