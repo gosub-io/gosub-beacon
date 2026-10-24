@@ -531,13 +531,41 @@ impl OsKeychain {
     }
 }
 
+/// How long a keychain call runs before [`patiently`] says it is still waiting.
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+const KEYCHAIN_PATIENCE: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Run one keychain call, and say on stderr when it is slow. Not cut short: a locked
+/// collection waits on its password prompt for as long as the user takes. But a Secret
+/// Service that D-Bus can start and that never answers holds the call until the bus gives
+/// up, two minutes on, and Beacon would sit there without a word. Stderr, not the log: the
+/// shells filter this crate's warnings out, and `beaconctl` has no logger.
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+fn patiently<T>(call: impl FnOnce() -> T) -> T {
+    let (done, waiting) = std::sync::mpsc::channel::<()>();
+    std::thread::scope(|s| {
+        s.spawn(move || {
+            if waiting.recv_timeout(KEYCHAIN_PATIENCE) == Err(std::sync::mpsc::RecvTimeoutError::Timeout) {
+                eprintln!(
+                    "gosub-beacon: still waiting for the keychain after {}s: a locked keyring waits for its password; \
+                     a Secret Service that does not start fails after two minutes",
+                    KEYCHAIN_PATIENCE.as_secs()
+                );
+            }
+        });
+        let out = call();
+        drop(done);
+        out
+    })
+}
+
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 impl KeyStore for OsKeychain {
     fn get(&self, profile: Uuid, slot: Slot) -> Result<Option<ProfileKey>> {
         let entry = self.entry(profile, slot)?;
         // Read as text, the way `set` writes it: on Windows a password is filed as UTF-16,
         // and the raw blob would not be the hex that went in.
-        match entry.get_password() {
+        match patiently(|| entry.get_password()) {
             Ok(text) => {
                 let text = Zeroizing::new(text);
                 Ok(Some(ProfileKey::from_filed(profile, text.as_bytes())?))
@@ -553,13 +581,13 @@ impl KeyStore for OsKeychain {
     }
 
     fn set(&self, key: &ProfileKey, slot: Slot) -> Result<()> {
-        self.entry(key.profile, slot)?
-            .set_password(&key.filed())
-            .context("storing the profile key in the keychain")
+        let entry = self.entry(key.profile, slot)?;
+        patiently(|| entry.set_password(&key.filed())).context("storing the profile key in the keychain")
     }
 
     fn delete(&self, profile: Uuid, slot: Slot) -> Result<()> {
-        match self.entry(profile, slot)?.delete_credential() {
+        let entry = self.entry(profile, slot)?;
+        match patiently(|| entry.delete_credential()) {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
             Err(e) => Err(e).context("removing the profile key from the keychain"),
         }

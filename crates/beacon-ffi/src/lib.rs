@@ -673,6 +673,32 @@ impl BeaconBrowser {
 
 // ── lifecycle ────────────────────────────────────────────────────────────────
 
+/// Point the profile at `dir`, the way `--user-data-dir` does for the other shells. A
+/// process runs one profile: the first browser picks it, and a later one naming another
+/// folder is refused rather than quietly writing into the first. NULL keeps whatever the
+/// first picked (the platform default if nothing did).
+fn pick_profile(dir: *const c_char) -> Result<(), String> {
+    if dir.is_null() {
+        return Ok(());
+    }
+    let dir = unsafe { CStr::from_ptr(dir) }
+        .to_str()
+        .map(std::path::PathBuf::from)
+        .map_err(|_| "user_data_dir is not UTF-8".to_string())?;
+    let cli = beacon_core::cli::Cli::set(beacon_core::cli::Cli {
+        user_data_dir: Some(dir.clone()),
+        ..Default::default()
+    });
+    match &cli.user_data_dir {
+        Some(picked) if *picked == dir => Ok(()),
+        picked => Err(format!(
+            "user_data_dir {} asked for, but this process already runs the profile in {}",
+            dir.display(),
+            picked.as_deref().map_or("the platform default".into(), |p| p.display().to_string()),
+        )),
+    }
+}
+
 /// Create a browser. Returns NULL if the engine could not start.
 ///
 /// # Safety
@@ -682,6 +708,11 @@ impl BeaconBrowser {
 pub unsafe extern "C" fn beacon_new(config: *const BeaconConfig) -> *mut BeaconBrowser {
     init_logging();
     let private = unsafe { config.as_ref() }.map(|c| c.private_mode).unwrap_or(false);
+    let dir = unsafe { config.as_ref() }.map_or(std::ptr::null(), |c| c.user_data_dir);
+    if let Err(e) = pick_profile(dir) {
+        log::error!("beacon_new: {e}");
+        return std::ptr::null_mut();
+    }
 
     #[cfg(not(target_os = "macos"))]
     let backend = Arc::new(gosub_renderer_skia::SkiaBackend::new());
@@ -708,7 +739,7 @@ pub unsafe extern "C" fn beacon_new(config: *const BeaconConfig) -> *mut BeaconB
     let mut engine = match BrowserEngine::<FfiConfig>::new(runtime(), private, backend) {
         Ok(engine) => engine,
         Err(e) => {
-            log::error!("beacon_new: {e}");
+            log::error!("beacon_new: {e:#}");
             return std::ptr::null_mut();
         }
     };

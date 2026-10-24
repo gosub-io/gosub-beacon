@@ -245,6 +245,8 @@ int main(void) {
     }
 
     CHECK(!beacon_is_private(browser), "a browser made without private_mode is not private");
+    BeaconConfig other = {.user_data_dir = "/tmp/beacon-ffi-other-profile", .private_mode = false};
+    CHECK(beacon_new(&other) == NULL, "a second browser naming another profile folder is refused");
 
     /* ── 1. a page loads and composites ────────────────────────────────── */
     printf("\nloading and rendering\n");
