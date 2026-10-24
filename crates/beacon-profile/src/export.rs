@@ -353,7 +353,8 @@ impl Roots {
 
     /// Finish what an import that stopped partway left: a staging folder goes, and a
     /// replaced profile goes too once its successor is in place, or moves back when it is
-    /// not. A profile [`Roots::remove`] moved aside goes as well. Call with the roots locked. Only logs, so a stray folder never keeps Beacon
+    /// not. A profile [`Roots::remove`] moved aside goes as well, with its cache. Call with
+    /// the roots locked. Only logs, so a stray folder never keeps Beacon
     /// from starting.
     pub(crate) fn recover_interrupted_import(&self) {
         let Ok(entries) = fs::read_dir(self.profiles_dir()) else {
@@ -362,9 +363,16 @@ impl Roots {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().into_owned();
             let dir = entry.path();
-            if name.starts_with(STAGING) || name.starts_with(REMOVING) {
+            if name.starts_with(STAGING) {
                 if let Err(e) = fs::remove_dir_all(&dir) {
                     log::warn!("removing {}: {e}", dir.display());
+                }
+            } else if let Some(id) = name.strip_prefix(REMOVING) {
+                // Its cache went before it was moved aside; anything since is gone with it.
+                for dir in [dir, self.cache.join(id)] {
+                    if let Err(e) = remove_dir_if_there(&dir) {
+                        log::warn!("{e:#}");
+                    }
                 }
             } else if let Some(id) = name.strip_prefix(REPLACED) {
                 let home = self.profiles_dir().join(id);
