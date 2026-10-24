@@ -220,6 +220,7 @@ fn profile(command: ProfileCommand) -> Result<()> {
         }
         ProfileCommand::Remove { profile, yes } => {
             let p = existing(&roots, Some(profile))?;
+            let owned = roots.owns(&p);
             if !yes {
                 if !std::io::stdin().is_terminal() {
                     bail!(
@@ -227,10 +228,16 @@ fn profile(command: ProfileCommand) -> Result<()> {
                         printable(p.name())
                     );
                 }
-                print!(
-                    "This removes {} and everything in it. Type its name to go on: ",
-                    printable(p.name())
-                );
+                if owned {
+                    print!("This removes {} and everything in it. ", printable(p.name()));
+                } else {
+                    print!(
+                        "This removes the cache and the key of {}; its folder {} stays, and no longer opens. ",
+                        printable(p.name()),
+                        p.dir.display()
+                    );
+                }
+                print!("Type its name to go on: ");
                 std::io::stdout().flush()?;
                 let mut answer = String::new();
                 std::io::stdin().read_line(&mut answer)?;
@@ -248,7 +255,7 @@ fn profile(command: ProfileCommand) -> Result<()> {
                 None => None,
             };
             roots.remove(&p, &keys, leftover.as_ref().map(|k| k as &dyn KeyStore))?;
-            if p.dir.exists() {
+            if !owned {
                 println!(
                     "removed the cache and the key of {}; its folder {} stays",
                     printable(p.name()),
