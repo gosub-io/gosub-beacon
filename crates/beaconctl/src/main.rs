@@ -11,7 +11,7 @@ use beacon_profile::{Profile, Roots, DEFAULT_COLLECTION, MANIFEST};
 use clap::{Args as ClapArgs, Parser, Subcommand};
 use gosub_engine::storage::{is_plaintext_database, SqliteKey};
 use rusqlite::Connection;
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::path::Path;
 use std::path::PathBuf;
 use zeroize::Zeroizing;
@@ -41,6 +41,15 @@ enum ProfileCommand {
     Show { profile: Option<String> },
     /// Create an empty profile.
     Create { name: String },
+    /// Remove a profile for good: its folder, its cache and its key in this keychain.
+    /// Refused while Beacon has it open. Given a folder Beacon ran with --user-data-dir,
+    /// only the cache and the key go; the folder is yours to delete. Asks for the name
+    /// first, unless --yes.
+    Remove {
+        profile: String,
+        #[arg(long)]
+        yes: bool,
+    },
     /// Open this profile when Beacon starts without --profile.
     SetDefault { profile: String },
     /// Print a profile's folder, for scripts. With --cache, its cache folder.
@@ -208,6 +217,46 @@ fn profile(command: ProfileCommand) -> Result<()> {
         ProfileCommand::Create { name } => {
             let p = roots.create(&name, VERSION)?;
             println!("created {} {}", printable(p.name()), p.id());
+        }
+        ProfileCommand::Remove { profile, yes } => {
+            let p = existing(&roots, Some(profile))?;
+            if !yes {
+                if !std::io::stdin().is_terminal() {
+                    bail!(
+                        "removing {} cannot be undone; pass --yes to do it without asking",
+                        printable(p.name())
+                    );
+                }
+                print!(
+                    "This removes {} and everything in it. Type its name to go on: ",
+                    printable(p.name())
+                );
+                std::io::stdout().flush()?;
+                let mut answer = String::new();
+                std::io::stdin().read_line(&mut answer)?;
+                if answer.trim() != p.name() {
+                    bail!("not removed: that is not its name");
+                }
+            }
+            let keys = keychain(&p)?;
+            let leftover = match p.leftover_key_collection() {
+                Some(leftover) => Some(
+                    OsKeychain::new()
+                        .context("this platform has no keychain Beacon can use")?
+                        .in_collection((leftover != DEFAULT_COLLECTION).then_some(leftover)),
+                ),
+                None => None,
+            };
+            roots.remove(&p, &keys, leftover.as_ref().map(|k| k as &dyn KeyStore))?;
+            if p.dir.exists() {
+                println!(
+                    "removed the cache and the key of {}; its folder {} stays",
+                    printable(p.name()),
+                    p.dir.display()
+                );
+            } else {
+                println!("removed {}", printable(p.name()));
+            }
         }
         ProfileCommand::SetDefault { profile } => {
             let p = existing(&roots, Some(profile))?;

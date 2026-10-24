@@ -88,9 +88,14 @@ moves them into a profile named `default`.
 cargo run --bin gosub-beacon-gtk -- --profile work          # open (or create) the profile "work"
 cargo run --bin gosub-beacon-gtk -- --user-data-dir /tmp/p  # use exactly this folder
 cargo run -p beaconctl -- profile list                      # list, show, create, set-default, path
+cargo run -p beaconctl -- profile remove work               # folder, cache and key; asks for the name
 ```
 
 One Beacon process opens a profile at a time; a second one on the same profile is refused.
+
+A cache is removed with its profile, and only then. A cache left by a profile deleted by hand,
+or by a `--user-data-dir` folder thrown away, stays until you delete it from the cache folder
+above; `profile remove /tmp/p` removes that folder's cache and key and leaves the folder.
 
 ### Encryption
 
