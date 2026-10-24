@@ -367,9 +367,10 @@ impl Roots {
                 if let Err(e) = fs::remove_dir_all(&dir) {
                     log::warn!("removing {}: {e}", dir.display());
                 }
-            } else if let Some(id) = name.strip_prefix(REMOVING) {
+            } else if let Some(id) = name.strip_prefix(REMOVING).and_then(|id| Uuid::parse_str(id).ok()) {
                 // Its cache went before it was moved aside; anything since is gone with it.
-                for dir in [dir, self.cache.join(id)] {
+                // Only by a real id: `.removing-` alone would name the whole cache root.
+                for dir in [dir, self.cache.join(id.to_string())] {
                     if let Err(e) = remove_dir_if_there(&dir) {
                         log::warn!("{e:#}");
                     }

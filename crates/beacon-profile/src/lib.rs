@@ -1981,6 +1981,19 @@ mod tests {
     }
 
     #[test]
+    fn a_removing_folder_without_an_id_leaves_the_cache_alone() {
+        let tmp = tempfile::tempdir().unwrap();
+        let roots = roots(&tmp);
+        let p = roots.open(&Selection::Default, V).unwrap();
+        let stray = roots.profiles_dir().join(REMOVING);
+        fs::create_dir_all(&stray).unwrap();
+
+        drop(roots.lock().unwrap());
+        assert!(p.cache_dir.exists());
+        assert!(stray.exists());
+    }
+
+    #[test]
     fn a_remove_that_stopped_before_the_folder_is_finished_by_running_it_again() {
         let tmp = tempfile::tempdir().unwrap();
         let roots = roots(&tmp);
