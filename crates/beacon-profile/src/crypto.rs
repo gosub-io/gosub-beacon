@@ -546,7 +546,11 @@ fn patiently<T>(call: impl FnOnce() -> T) -> T {
     std::thread::scope(|s| {
         s.spawn(move || {
             if waiting.recv_timeout(KEYCHAIN_PATIENCE) == Err(std::sync::mpsc::RecvTimeoutError::Timeout) {
-                eprintln!(
+                // Not `eprintln!`, which panics when stderr is gone, and the scope would
+                // carry that panic into the keychain call.
+                use std::io::Write;
+                let _ = writeln!(
+                    std::io::stderr(),
                     "gosub-beacon: still waiting for the keychain after {}s: a locked keyring waits for its password; \
                      a Secret Service that does not start fails after two minutes",
                     KEYCHAIN_PATIENCE.as_secs()
