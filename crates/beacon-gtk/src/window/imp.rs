@@ -545,6 +545,8 @@ impl BrowserWindow {
                     let _ = handle.send(EngineTabCommand::CancelNavigation).await;
                 });
             }
+            // The engine cancels without an event, so the Timeline is told here.
+            beacon_core::timeline::stopped(tab_id, now_ms());
             let mut manager = self.tab_manager.lock().unwrap();
             if let Some(mut tab) = manager.get_tab(tab_id) {
                 tab.set_loading(false);
