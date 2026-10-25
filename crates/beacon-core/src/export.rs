@@ -94,7 +94,14 @@ fn content(request: &NetRequest) -> Value {
 
 fn entry(request: &NetRequest, page: Option<usize>) -> Value {
     let (time, timings) = timings(request);
-    let redirect = request.redirects.last().map(|(_, location)| location.as_str()).unwrap_or("");
+    // The row follows its redirects, so its URL is already the last hop's target; only a
+    // response that is itself a redirect, one the stack did not follow, points elsewhere.
+    let redirect = request
+        .redirects
+        .last()
+        .map(|(_, location)| location.as_str())
+        .filter(|location| *location != request.url)
+        .unwrap_or("");
     let mut entry = json!({
         "startedDateTime": iso_time(request.started_ms),
         "time": time,
@@ -293,6 +300,13 @@ mod tests {
         assert!(!text.contains("session=abc"), "{text}");
         assert_eq!(entry["request"]["headers"][1]["value"], "text/html");
         assert_eq!(entry["request"]["queryString"][1]["name"], "x");
+    }
+
+    #[test]
+    fn a_followed_redirect_does_not_point_the_final_response_at_itself() {
+        let mut r = request("https://a.test/final", "document", "navigation", 0);
+        r.redirects = vec![(301, "https://a.test/final".to_string())];
+        assert_eq!(har(&[r])["log"]["entries"][0]["response"]["redirectURL"], "");
     }
 
     #[test]
