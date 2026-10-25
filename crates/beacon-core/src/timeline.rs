@@ -209,9 +209,40 @@ pub fn on_telemetry(kind: &str, data: &serde_json::Value, ts_us: u64) {
     }
 }
 
+/// One kept load, without its stages: what a picker lists.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Load {
+    pub id: uuid::Uuid,
+    pub url: String,
+    pub started_ms: u64,
+}
+
 /// `tab`'s kept loads, oldest first.
-pub fn navigations(tab: TabId) -> Vec<Navigation> {
-    with_store(|store| store.tabs.get(&tab).cloned().unwrap_or_default()).unwrap_or_default()
+///
+/// Light on purpose: the panel asks four times a second, and a load can hold thousands of
+/// stages. [`navigation`] copies out the one being shown.
+pub fn loads(tab: TabId) -> Vec<Load> {
+    with_store(|store| {
+        store
+            .tabs
+            .get(&tab)
+            .map(|navs| {
+                navs.iter()
+                    .map(|nav| Load {
+                        id: nav.id,
+                        url: nav.url.clone(),
+                        started_ms: nav.started_ms,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    })
+    .unwrap_or_default()
+}
+
+/// One of `tab`'s kept loads in full.
+pub fn navigation(tab: TabId, id: uuid::Uuid) -> Option<Navigation> {
+    with_store(|store| store.tabs.get(&tab)?.iter().find(|nav| nav.id == id).cloned()).flatten()
 }
 
 /// A moment drawn across the whole timeline.
@@ -429,10 +460,10 @@ mod tests {
         for (i, id) in ids.iter().enumerate() {
             started(tab, *id, "https://a.test/", i as u64);
         }
-        let kept: Vec<_> = navigations(tab).iter().map(|n| n.id).collect();
+        let kept: Vec<_> = loads(tab).iter().map(|n| n.id).collect();
         assert_eq!(kept, ids[2..]);
         forget(tab);
-        assert!(navigations(tab).is_empty());
+        assert!(loads(tab).is_empty());
     }
 
     #[test]
@@ -460,10 +491,10 @@ mod tests {
             1_231_000,
         );
 
-        let stages = &navigations(a)[0].stages;
+        let stages = navigation(a, nav_a).unwrap().stages;
         assert_eq!(stages.len(), 1);
         assert_eq!(stages[0].end_ms, Some(1_230.0));
-        assert!(navigations(b)[0].stages.is_empty());
+        assert!(navigation(b, nav_b).unwrap().stages.is_empty());
         forget(a);
         forget(b);
     }
@@ -481,7 +512,7 @@ mod tests {
         on_telemetry("timing.start", &serde_json::json!({"timer": new, "namespace": "paint"}), 1_030_000);
         on_telemetry("timing.stop", &serde_json::json!({"timer": old, "duration_us": 5_000}), 1_040_000);
 
-        let stages = &navigations(a)[0].stages;
+        let stages = navigation(a, nav).unwrap().stages;
         assert_eq!(stages.len(), 1);
         assert_eq!(stages[0].namespace, "paint");
         assert_eq!(stages[0].end_ms, None, "the old run's stop left the new stage alone");
@@ -501,7 +532,7 @@ mod tests {
             &serde_json::json!({"timer": timer, "namespace": "paint"}),
             (2_000 + SETTLE_MS + 1) * 1000,
         );
-        assert!(navigations(a)[0].stages.is_empty());
+        assert!(navigation(a, nav).unwrap().stages.is_empty());
         forget(a);
     }
 

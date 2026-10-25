@@ -1286,7 +1286,7 @@ impl BrowserWindow {
         use beacon_core::devtools::format_duration;
 
         let tab = self.active_tab_id();
-        let navs = tab.map(beacon_core::timeline::navigations).unwrap_or_default();
+        let navs = tab.map(beacon_core::timeline::loads).unwrap_or_default();
 
         // The picker's entries change only when the loads do, so a choice survives refreshes.
         let ids: Vec<uuid::Uuid> = navs.iter().map(|n| n.id).collect();
@@ -1320,10 +1320,13 @@ impl BrowserWindow {
             self.timeline_area.queue_draw();
             return;
         };
-        let nav = &navs[index];
+        // Only the load on screen is copied out with its stages.
+        let Some(nav) = tab.and_then(|tab| beacon_core::timeline::navigation(tab, navs[index].id)) else {
+            return;
+        };
         let requests = beacon_core::devtools::requests(tab);
         let next = navs.get(index + 1).map(|n| n.started_ms);
-        let mut timeline = beacon_core::timeline::layout(nav, &requests, next, now_ms());
+        let mut timeline = beacon_core::timeline::layout(&nav, &requests, next, now_ms());
         if !needle.is_empty() {
             timeline
                 .lanes
