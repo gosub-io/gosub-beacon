@@ -45,14 +45,18 @@ pub fn by_origin(requests: &[NetRequest]) -> Vec<OriginRow> {
     let page_site = page_url(requests).map(|url| site_of(&url));
     let mut rows: Vec<OriginRow> = Vec::new();
     for request in requests {
-        let Ok(url) = url::Url::parse(&request.url) else { continue };
-        let origin = origin_of(&url);
+        // A URL that does not parse has no origin to group by; it is its own row, so the
+        // rows still add up to the request count in the summary.
+        let (origin, site) = match url::Url::parse(&request.url) {
+            Ok(url) => (origin_of(&url), Some(site_of(&url))),
+            Err(_) => (request.url.clone(), None),
+        };
         let index = match rows.iter().position(|row| row.origin == origin) {
             Some(index) => index,
             None => {
                 rows.push(OriginRow {
                     origin,
-                    first_party: page_site.as_deref() == Some(site_of(&url).as_str()),
+                    first_party: site.is_some() && page_site == site,
                     requests: 0,
                     failed: 0,
                     bytes: 0,
@@ -141,6 +145,13 @@ mod tests {
         let data = rows.iter().find(|r| r.origin == "data:").unwrap();
         assert_eq!(data.requests, 2);
         assert!(!data.first_party);
+    }
+
+    #[test]
+    fn a_url_that_does_not_parse_still_counts() {
+        let rows = by_origin(&[request("https://a.test/", "document", 0), request("not a url", "other", 3)]);
+        assert_eq!(rows.iter().map(|r| r.requests).sum::<usize>(), 2);
+        assert!(rows.iter().any(|r| r.origin == "not a url" && !r.first_party));
     }
 
     #[test]
