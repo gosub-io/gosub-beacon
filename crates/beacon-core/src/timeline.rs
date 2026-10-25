@@ -412,8 +412,16 @@ mod tests {
         TabId::new()
     }
 
+    /// The store is process-wide, and a stage goes to whichever open load covers its time,
+    /// so tests that feed it run one at a time: another test's open load would take theirs.
+    fn serial() -> std::sync::MutexGuard<'static, ()> {
+        static SERIAL: Mutex<()> = Mutex::new(());
+        SERIAL.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     #[test]
     fn a_tab_keeps_its_last_few_loads() {
+        let _serial = serial();
         let tab = tab();
         let ids: Vec<_> = (0..KEPT + 2).map(|_| uuid::Uuid::new_v4()).collect();
         for (i, id) in ids.iter().enumerate() {
@@ -427,6 +435,7 @@ mod tests {
 
     #[test]
     fn a_stage_goes_to_the_load_that_names_it_and_its_stop_closes_it() {
+        let _serial = serial();
         let (a, b) = (tab(), tab());
         let (nav_a, nav_b) = (uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
         started(a, nav_a, "https://a.test/", 1_000);
@@ -459,6 +468,7 @@ mod tests {
 
     #[test]
     fn a_stage_long_after_the_load_settled_is_nobodys() {
+        let _serial = serial();
         let a = tab();
         let nav = uuid::Uuid::new_v4();
         started(a, nav, "https://a.test/", 1_000);
