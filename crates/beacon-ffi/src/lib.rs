@@ -673,6 +673,20 @@ impl BeaconBrowser {
 
 // ── lifecycle ────────────────────────────────────────────────────────────────
 
+/// Point the profile at `dir`, the way `--user-data-dir` does for the other shells: see
+/// [`beacon_core::paths::open_folder`]. NULL keeps whatever an earlier browser picked (the
+/// platform default if none did).
+fn pick_profile(dir: *const c_char) -> Result<(), String> {
+    if dir.is_null() {
+        return Ok(());
+    }
+    let dir = unsafe { CStr::from_ptr(dir) }
+        .to_str()
+        .map(std::path::PathBuf::from)
+        .map_err(|_| "user_data_dir is not UTF-8".to_string())?;
+    beacon_core::paths::open_folder(&dir).map_err(|e| format!("{e:#}"))
+}
+
 /// Create a browser. Returns NULL if the engine could not start.
 ///
 /// # Safety
@@ -682,6 +696,11 @@ impl BeaconBrowser {
 pub unsafe extern "C" fn beacon_new(config: *const BeaconConfig) -> *mut BeaconBrowser {
     init_logging();
     let private = unsafe { config.as_ref() }.map(|c| c.private_mode).unwrap_or(false);
+    let dir = unsafe { config.as_ref() }.map_or(std::ptr::null(), |c| c.user_data_dir);
+    if let Err(e) = pick_profile(dir) {
+        log::error!("beacon_new: {e}");
+        return std::ptr::null_mut();
+    }
 
     #[cfg(not(target_os = "macos"))]
     let backend = Arc::new(gosub_renderer_skia::SkiaBackend::new());
@@ -708,7 +727,7 @@ pub unsafe extern "C" fn beacon_new(config: *const BeaconConfig) -> *mut BeaconB
     let mut engine = match BrowserEngine::<FfiConfig>::new(runtime(), private, backend) {
         Ok(engine) => engine,
         Err(e) => {
-            log::error!("beacon_new: {e}");
+            log::error!("beacon_new: {e:#}");
             return std::ptr::null_mut();
         }
     };

@@ -64,6 +64,8 @@ const LOCK: &str = "lock";
 const DEFAULTS: &str = "profiles.toml";
 /// At the data root: held while a profile is picked, created or migrated.
 const ROOTS_LOCK: &str = "profiles.lock";
+/// A profile on its way out: [`Roots::remove`] moves it aside under this prefix first.
+const REMOVING: &str = ".removing-";
 
 /// What Beacon wrote into its data directory before profiles existed. Moved into the
 /// first profile on migration, and the sign that a folder without a manifest is a profile.
@@ -267,6 +269,51 @@ impl Roots {
         make_private_dir(&self.data)?;
         let text = toml::to_string_pretty(&Defaults { default: Some(id) })?;
         write_atomic(&self.data.join(DEFAULTS), &text)
+    }
+
+    /// Whether `profile`'s folder is one this made: `profiles/<id>`, where every profile
+    /// Beacon creates, migrates or imports is placed. Any other folder, `--user-data-dir`
+    /// included, is the user's, even one put under `profiles/`.
+    pub fn owns(&self, profile: &Profile) -> bool {
+        let home = self.profiles_dir().join(profile.id().to_string());
+        match (fs::canonicalize(&profile.dir), fs::canonicalize(&home)) {
+            (Ok(dir), Ok(home)) => dir == home,
+            _ => false,
+        }
+    }
+
+    /// Remove `profile` for good: its cache, its key, from `keys` and from `leftover` (the
+    /// collection a [`Profile::move_key`] that stopped partway left a copy in), and its
+    /// folder when [`Roots::owns`] it; a folder of the user's stays. Refused while a Beacon
+    /// has it open.
+    ///
+    /// The folder goes last, so a remove that stops partway leaves the profile listed, and
+    /// running it again finishes the job; it may then no longer open, its key being gone.
+    /// A folder already moved aside is deleted, with what is left of its cache, by the next
+    /// [`Roots::lock`].
+    pub fn remove(&self, profile: &Profile, keys: &dyn KeyStore, leftover: Option<&dyn KeyStore>) -> Result<()> {
+        let _roots = self.lock()?;
+        let lock = profile.lock()?;
+        let owned = self.owns(profile);
+        if self.default_id()? == Some(profile.id()) {
+            write_atomic(&self.data.join(DEFAULTS), &toml::to_string_pretty(&Defaults { default: None })?)?;
+        }
+        remove_dir_if_there(&profile.cache_dir)?;
+        keys.delete(profile.id(), Slot::Current)?;
+        keys.delete(profile.id(), Slot::Next)?;
+        if let Some(leftover) = leftover {
+            leftover.delete(profile.id(), Slot::Current)?;
+        }
+        if owned {
+            let aside = self.profiles_dir().join(format!("{REMOVING}{}", profile.id()));
+            // Windows does not move a folder with an open file in it.
+            if cfg!(windows) {
+                drop(lock);
+            }
+            fs::rename(&profile.dir, &aside).with_context(|| format!("moving {} aside", profile.dir.display()))?;
+            remove_dir_if_there(&aside)?;
+        }
+        Ok(())
     }
 
     /// A profile by name (case-insensitive) or id.
@@ -1102,6 +1149,14 @@ fn warn_unless_private(dir: &Path) {
     let _ = dir;
 }
 
+/// Delete `dir` and everything in it; one that is not there is no error.
+fn remove_dir_if_there(dir: &Path) -> Result<()> {
+    match fs::remove_dir_all(dir) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e).with_context(|| format!("removing {}", dir.display())),
+        _ => Ok(()),
+    }
+}
+
 /// Write via a temp file and rename, so a crash leaves the old file or the new one.
 fn write_atomic(path: &Path, data: impl AsRef<[u8]>) -> Result<()> {
     let tmp = path.with_extension("tmp");
@@ -1875,5 +1930,114 @@ mod tests {
         for dir in [&roots.data, &p.dir, &p.cache_dir] {
             assert_eq!(fs::metadata(dir).unwrap().permissions().mode() & 0o777, 0o700, "{}", dir.display());
         }
+    }
+
+    #[test]
+    fn remove_takes_the_folder_the_cache_and_the_key() {
+        let tmp = tempfile::tempdir().unwrap();
+        let roots = roots(&tmp);
+        let keys = crypto::MemoryKeyStore::default();
+        let mut p = roots.open(&Selection::Default, V).unwrap();
+        p.unlock(Some(&keys)).unwrap();
+        let other = roots.create("other", V).unwrap();
+
+        roots.remove(&p, &keys, None).unwrap();
+        assert!(!p.dir.exists());
+        assert!(!p.cache_dir.exists());
+        assert!(keys.get(p.id(), Slot::Current).unwrap().is_none());
+        assert_eq!(roots.default_id().unwrap(), None);
+        assert_eq!(roots.list().unwrap().iter().map(Profile::id).collect::<Vec<_>>(), [other.id()]);
+        // Without a default the next start takes the one that is left.
+        assert_eq!(roots.open(&Selection::Default, V).unwrap().id(), other.id());
+    }
+
+    #[test]
+    fn remove_is_refused_while_a_beacon_has_the_profile() {
+        let tmp = tempfile::tempdir().unwrap();
+        let roots = roots(&tmp);
+        let keys = crypto::MemoryKeyStore::default();
+        let mut p = roots.open(&Selection::Default, V).unwrap();
+        p.unlock(Some(&keys)).unwrap();
+        let _held = p.lock().unwrap();
+
+        let err = roots.remove(&p, &keys, None).unwrap_err();
+        assert!(err.to_string().contains("in use"), "{err:#}");
+        assert!(p.dir.join(MANIFEST).exists());
+        assert!(keys.get(p.id(), Slot::Current).unwrap().is_some());
+    }
+
+    #[test]
+    fn a_remove_that_stopped_partway_is_finished_on_the_next_start() {
+        let tmp = tempfile::tempdir().unwrap();
+        let roots = roots(&tmp);
+        let p = roots.open(&Selection::Default, V).unwrap();
+        let aside = roots.profiles_dir().join(format!("{REMOVING}{}", p.id()));
+        fs::rename(&p.dir, &aside).unwrap();
+        assert!(p.cache_dir.exists());
+
+        drop(roots.lock().unwrap());
+        assert!(!aside.exists());
+        assert!(!p.cache_dir.exists());
+    }
+
+    #[test]
+    fn a_removing_folder_without_an_id_leaves_the_cache_alone() {
+        let tmp = tempfile::tempdir().unwrap();
+        let roots = roots(&tmp);
+        let p = roots.open(&Selection::Default, V).unwrap();
+        let stray = roots.profiles_dir().join(REMOVING);
+        fs::create_dir_all(&stray).unwrap();
+
+        drop(roots.lock().unwrap());
+        assert!(p.cache_dir.exists());
+        assert!(stray.exists());
+    }
+
+    #[test]
+    fn a_remove_that_stopped_before_the_folder_is_finished_by_running_it_again() {
+        let tmp = tempfile::tempdir().unwrap();
+        let roots = roots(&tmp);
+        let keys = crypto::MemoryKeyStore::default();
+        let mut p = roots.open(&Selection::Default, V).unwrap();
+        p.unlock(Some(&keys)).unwrap();
+        // As far as a first try got: the cache and the key gone, the folder still listed.
+        fs::remove_dir_all(&p.cache_dir).unwrap();
+        keys.delete(p.id(), Slot::Current).unwrap();
+        let listed = roots.find(&p.id().to_string()).unwrap().unwrap();
+
+        roots.remove(&listed, &keys, None).unwrap();
+        assert!(!p.dir.exists());
+        assert!(roots.list().unwrap().is_empty());
+    }
+
+    #[test]
+    fn remove_leaves_a_user_folder_put_under_the_profiles_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let roots = roots(&tmp);
+        let keys = crypto::MemoryKeyStore::default();
+        let dir = roots.profiles_dir().join("mine");
+        let mut p = roots.open(&Selection::Dir(dir.clone()), V).unwrap();
+        p.unlock(Some(&keys)).unwrap();
+        assert!(!roots.owns(&p));
+
+        roots.remove(&p, &keys, None).unwrap();
+        assert!(dir.join(MANIFEST).exists());
+        assert!(!p.cache_dir.exists());
+    }
+
+    #[test]
+    fn remove_leaves_a_folder_named_on_the_command_line() {
+        let tmp = tempfile::tempdir().unwrap();
+        let roots = roots(&tmp);
+        let keys = crypto::MemoryKeyStore::default();
+        let dir = tmp.path().join("scratch");
+        let mut p = roots.open(&Selection::Dir(dir.clone()), V).unwrap();
+        p.unlock(Some(&keys)).unwrap();
+        assert!(p.cache_dir.exists());
+
+        roots.remove(&p, &keys, None).unwrap();
+        assert!(dir.join(MANIFEST).exists());
+        assert!(!p.cache_dir.exists());
+        assert!(keys.get(p.id(), Slot::Current).unwrap().is_none());
     }
 }
