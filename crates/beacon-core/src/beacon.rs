@@ -110,6 +110,7 @@ impl Beacon {
                 let _ = handle.send(EngineTabCommand::CancelNavigation).await;
             });
         }
+        crate::timeline::stopped(tab_id, crate::devtools::now_ms());
         self.with_tab(tab_id, |tab| tab.set_loading(false));
         vec![
             BeaconEvent::LoadProgress(tab_id, None),

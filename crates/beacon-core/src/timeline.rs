@@ -127,6 +127,21 @@ pub fn ended(tab: TabId, id: uuid::Uuid, outcome: Option<&str>, now_ms: u64) {
     });
 }
 
+/// The user stopped `tab`'s load. The engine cancels it without an event of its own, so
+/// whatever load is still open ends here.
+pub fn stopped(tab: TabId, now_ms: u64) {
+    with_store(|store| {
+        if let Some(nav) = store
+            .tabs
+            .get_mut(&tab)
+            .and_then(|navs| navs.iter_mut().rev().find(|n| n.ended_ms.is_none()))
+        {
+            nav.ended_ms = Some(now_ms);
+            nav.outcome = Some("cancelled".to_string());
+        }
+    });
+}
+
 /// Forget a closed tab's loads.
 pub fn forget(tab: TabId) {
     with_store(|store| {
@@ -516,6 +531,19 @@ mod tests {
         assert_eq!(stages.len(), 1);
         assert_eq!(stages[0].namespace, "paint");
         assert_eq!(stages[0].end_ms, None, "the old run's stop left the new stage alone");
+        forget(a);
+    }
+
+    #[test]
+    fn stop_ends_the_open_load_and_a_later_failure_does_not_rewrite_it() {
+        let _serial = serial();
+        let a = tab();
+        let nav = uuid::Uuid::new_v4();
+        started(a, nav, "https://a.test/", 1_000);
+        stopped(a, 1_500);
+        ended(a, nav, Some("failed"), 1_600);
+        let nav = navigation(a, nav).unwrap();
+        assert_eq!((nav.ended_ms, nav.outcome.as_deref()), (Some(1_500), Some("cancelled")));
         forget(a);
     }
 
