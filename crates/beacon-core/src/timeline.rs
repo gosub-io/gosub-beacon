@@ -87,8 +87,10 @@ fn with_navigation(tab: TabId, id: uuid::Uuid, f: impl FnOnce(&mut Navigation)) 
 /// A load began in `tab`.
 pub fn started(tab: TabId, id: uuid::Uuid, url: &str, now_ms: u64) {
     with_store(|store| {
+        // A reload of the same navigation id starts it again, and a stage still running in
+        // the old one must not be closed against the new one's list.
+        store.running.retain(|_, (_, nav, _)| *nav != id);
         let navs = store.tabs.entry(tab).or_default();
-        // A reload of the same navigation id starts it again.
         navs.retain(|n| n.id != id);
         if navs.len() >= KEPT {
             // The engine's timing scope for it stays: clearing it would take its samples
@@ -464,6 +466,26 @@ mod tests {
         assert!(navigations(b)[0].stages.is_empty());
         forget(a);
         forget(b);
+    }
+
+    #[test]
+    fn a_restarted_load_does_not_take_a_stop_meant_for_its_old_run() {
+        let _serial = serial();
+        let a = tab();
+        let nav = uuid::Uuid::new_v4();
+        started(a, nav, "https://a.test/", 1_000);
+        let old = uuid::Uuid::new_v4().to_string();
+        on_telemetry("timing.start", &serde_json::json!({"timer": old, "namespace": "layout"}), 1_010_000);
+        started(a, nav, "https://a.test/", 1_020);
+        let new = uuid::Uuid::new_v4().to_string();
+        on_telemetry("timing.start", &serde_json::json!({"timer": new, "namespace": "paint"}), 1_030_000);
+        on_telemetry("timing.stop", &serde_json::json!({"timer": old, "duration_us": 5_000}), 1_040_000);
+
+        let stages = &navigations(a)[0].stages;
+        assert_eq!(stages.len(), 1);
+        assert_eq!(stages[0].namespace, "paint");
+        assert_eq!(stages[0].end_ms, None, "the old run's stop left the new stage alone");
+        forget(a);
     }
 
     #[test]
