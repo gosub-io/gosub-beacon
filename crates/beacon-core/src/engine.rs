@@ -312,6 +312,32 @@ impl<C: BeaconConfig> BrowserEngine<C> {
         self.engine.settings()
     }
 
+    /// The renderer processes running, for the Processes tab. Empty unless pages render
+    /// out of process.
+    pub fn renderers(&self) -> Vec<crate::processes::RendererInfo> {
+        #[cfg(target_os = "linux")]
+        if let Some(pool) = self.engine.renderer_pool() {
+            return pool
+                .snapshot()
+                .into_iter()
+                .map(|status| crate::processes::RendererInfo {
+                    pid: status.pid.max(0) as u32,
+                    site: status.key.site,
+                    tabs: status.tabs,
+                })
+                .collect();
+        }
+        Vec::new()
+    }
+
+    /// How confined the renderers are, in a few words, when they run at all.
+    pub fn renderer_tier(&self) -> Option<String> {
+        #[cfg(target_os = "linux")]
+        return self.engine.renderer_process_tier().map(|tier| crate::processes::tier_label(&tier));
+        #[cfg(not(target_os = "linux"))]
+        None
+    }
+
     /// Take the engine event stream (navigation, redraw, hover, …). Only the first
     /// caller receives the receiver that was subscribed before zone creation.
     pub fn take_event_rx(&mut self) -> Option<broadcast::Receiver<EngineEvent>> {

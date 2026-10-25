@@ -19,6 +19,7 @@ gosub_shared.workspace = true
 beacon-profile = { path = "../beacon-profile" }
 
 anyhow.workspace = true
+chrono.workspace = true
 clap.workspace = true
 dirs.workspace = true
 lazy_static.workspace = true

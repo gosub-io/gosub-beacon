@@ -195,6 +195,7 @@ impl Beacon {
     pub fn unbind_engine_tab(&mut self, engine_id: EngineTabId) {
         if let Some(tab) = self.engine_tabs.remove(&engine_id) {
             crate::page_report::forget(tab);
+            crate::timeline::forget(tab);
         }
     }
 
@@ -409,8 +410,9 @@ impl Beacon {
             // Every navigation, whoever started it: a link the page followed, a redirect, a
             // back/forward. Only the ones started here were marked loading before, so a tapped
             // link loaded under a Reload button.
-            NavigationEvent::Started { url, .. } => {
+            NavigationEvent::Started { url, nav_id } => {
                 crate::page_report::navigation_started(our_id);
+                crate::timeline::started(our_id, nav_id.0, url.as_str(), crate::devtools::now_ms());
                 // Leaving for another address leaves the error page behind. The error
                 // page itself arrives as a load of the failed address (the shell's
                 // `LoadHtml` at that base URL), and a reload of it keeps the address
@@ -431,10 +433,12 @@ impl Beacon {
             }
 
             NavigationEvent::Progress {
+                nav_id,
                 received_bytes,
                 expected_length,
                 ..
             } => {
+                crate::timeline::progressed(our_id, nav_id.0, crate::devtools::now_ms());
                 if !is_active {
                     return Vec::new();
                 }
@@ -479,7 +483,8 @@ impl Beacon {
             }
 
             // Load ended without a page change (stop button, download offer).
-            NavigationEvent::Cancelled { .. } => {
+            NavigationEvent::Cancelled { nav_id, .. } => {
+                crate::timeline::ended(our_id, nav_id.0, Some("cancelled"), crate::devtools::now_ms());
                 self.with_tab(our_id, |tab| tab.set_loading(false));
                 let mut out = vec![BeaconEvent::LoadingChanged(our_id, false), BeaconEvent::TabsChanged];
                 if is_active {
@@ -488,7 +493,10 @@ impl Beacon {
                 out
             }
 
-            NavigationEvent::Failed { url, error, .. } => {
+            NavigationEvent::Failed { url, error, nav_id } => {
+                if let Some(nav_id) = nav_id {
+                    crate::timeline::ended(our_id, nav_id.0, Some("failed"), crate::devtools::now_ms());
+                }
                 self.with_tab(our_id, |tab| tab.set_loading(false));
                 if !crate::error_page::is_cancellation(&error.to_string()) {
                     self.with_tab(our_id, |tab| tab.set_showing_error(true));
@@ -505,7 +513,8 @@ impl Beacon {
                 vec![BeaconEvent::Log(format!("Cannot load {url}: {error}"))]
             }
 
-            NavigationEvent::Finished { url, .. } => {
+            NavigationEvent::Finished { url, nav_id } => {
+                crate::timeline::ended(our_id, nav_id.0, None, crate::devtools::now_ms());
                 self.with_tab(our_id, |tab| {
                     tab.set_loading(false);
                     // Session history is recorded by the engine; it follows up with a

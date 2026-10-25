@@ -771,6 +771,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "beacon-profile",
+ "chrono",
  "clap",
  "dirs",
  "gosub_engine",

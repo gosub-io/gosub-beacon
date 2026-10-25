@@ -29,7 +29,7 @@ const CAPACITY: usize = 4000;
 
 static BUFFER: Mutex<Vec<LogLine>> = Mutex::new(Vec::new());
 
-fn now_ms() -> u64 {
+pub(crate) fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
@@ -374,6 +374,42 @@ fn push_capped<T>(list: &mut Vec<T>, item: T) {
 }
 
 impl NetRequest {
+    /// A request seen for the first time: just its id, tab and URL, nothing reported yet.
+    pub(crate) fn new(id: uuid::Uuid, tab: Option<crate::tab::TabId>, url: &str, started_ms: u64) -> Self {
+        NetRequest {
+            id,
+            tab,
+            url: url.to_string(),
+            kind: "other".into(),
+            initiator: "other".into(),
+            state: RequestState::Queued,
+            status: None,
+            content_type: None,
+            content_length: None,
+            received_bytes: 0,
+            elapsed_us: None,
+            error: None,
+            failure: None,
+            method: None,
+            request_headers: Vec::new(),
+            headers: Vec::new(),
+            body: None,
+            body_truncated: false,
+            body_evicted: false,
+            redirects: Vec::new(),
+            dns_us: None,
+            connect_us: None,
+            headers_ms: None,
+            started_ms,
+            cache: Vec::new(),
+            auth: Vec::new(),
+            upgrades: Vec::new(),
+            changes: Vec::new(),
+            retries: Vec::new(),
+            preflights: Vec::new(),
+        }
+    }
+
     /// Where this request has got to, derived only from what was reported.
     ///
     /// Note what is *not* claimed: with no connection timing there is no way to tell a
@@ -710,38 +746,7 @@ pub fn record_resource(tab: Option<crate::tab::TabId>, event: &gosub_engine::eve
         if requests.len() >= REQUEST_CAPACITY {
             requests.drain(..REQUEST_CAPACITY / 4);
         }
-        requests.push(NetRequest {
-            id,
-            tab,
-            url: url.to_string(),
-            kind: "other".into(),
-            initiator: "other".into(),
-            state: RequestState::Queued,
-            status: None,
-            content_type: None,
-            content_length: None,
-            received_bytes: 0,
-            elapsed_us: None,
-            error: None,
-            failure: None,
-            method: None,
-            request_headers: Vec::new(),
-            headers: Vec::new(),
-            body: None,
-            body_truncated: false,
-            body_evicted: false,
-            redirects: Vec::new(),
-            dns_us: None,
-            connect_us: None,
-            headers_ms: None,
-            started_ms: now_ms(),
-            cache: Vec::new(),
-            auth: Vec::new(),
-            upgrades: Vec::new(),
-            changes: Vec::new(),
-            retries: Vec::new(),
-            preflights: Vec::new(),
-        });
+        requests.push(NetRequest::new(id, tab, url, now_ms()));
         requests.last_mut().expect("just pushed")
     }
 

@@ -221,6 +221,98 @@ mod imp_history {
     impl ObjectImpl for HistoryRow {}
 }
 
+mod imp_origin {
+    use gtk4::glib;
+    use gtk4::glib::Properties;
+    use gtk4::prelude::*;
+    use gtk4::subclass::prelude::*;
+    use std::cell::RefCell;
+
+    #[derive(Properties, Default)]
+    #[properties(wrapper_type = super::OriginRow)]
+    pub struct OriginRow {
+        #[property(get, set)]
+        pub origin: RefCell<String>,
+        /// "first" or "third".
+        #[property(get, set)]
+        pub party: RefCell<String>,
+        #[property(get, set)]
+        pub requests: RefCell<String>,
+        #[property(get, set)]
+        pub size: RefCell<String>,
+        #[property(get, set)]
+        pub kinds: RefCell<String>,
+        #[property(get, set)]
+        pub css: RefCell<String>,
+    }
+
+    #[glib::object_subclass]
+    impl ObjectSubclass for OriginRow {
+        const NAME: &'static str = "BeaconOriginRow";
+        type Type = super::OriginRow;
+    }
+
+    #[glib::derived_properties]
+    impl ObjectImpl for OriginRow {}
+}
+
+mod imp_process {
+    use gtk4::glib;
+    use gtk4::glib::Properties;
+    use gtk4::prelude::*;
+    use gtk4::subclass::prelude::*;
+    use std::cell::RefCell;
+
+    #[derive(Properties, Default)]
+    #[properties(wrapper_type = super::ProcessRow)]
+    pub struct ProcessRow {
+        /// The name, indented by its depth in the tree.
+        #[property(get, set)]
+        pub name: RefCell<String>,
+        #[property(get, set)]
+        pub pid: RefCell<String>,
+        #[property(get, set)]
+        pub memory: RefCell<String>,
+        #[property(get, set)]
+        pub uptime: RefCell<String>,
+        #[property(get, set)]
+        pub detail: RefCell<String>,
+        #[property(get, set)]
+        pub css: RefCell<String>,
+    }
+
+    #[glib::object_subclass]
+    impl ObjectSubclass for ProcessRow {
+        const NAME: &'static str = "BeaconProcessRow";
+        type Type = super::ProcessRow;
+    }
+
+    #[glib::derived_properties]
+    impl ObjectImpl for ProcessRow {}
+}
+
+glib::wrapper! {
+    /// One process in the Processes tab.
+    pub struct ProcessRow(ObjectSubclass<imp_process::ProcessRow>);
+}
+
+impl Default for ProcessRow {
+    fn default() -> Self {
+        glib::Object::new()
+    }
+}
+
+glib::wrapper! {
+    /// Every request one origin served, in the network table's By origin view.
+    pub struct OriginRow(ObjectSubclass<imp_origin::OriginRow>);
+}
+
+impl Default for OriginRow {
+    fn default() -> Self {
+        glib::Object::new()
+    }
+}
+
 glib::wrapper! {
     /// One request in the network table.
     pub struct RequestRow(ObjectSubclass<imp_request::RequestRow>);

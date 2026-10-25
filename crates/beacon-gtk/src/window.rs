@@ -360,6 +360,16 @@ impl BrowserWindow {
         });
         app.add_action(&reset_timings_action);
 
+        let export_har_action = SimpleAction::new("export-har", None);
+        export_har_action.connect_activate({
+            let app = app.clone();
+            move |_, _| {
+                let Some(window) = BrowserWindow::action_target(&app) else { return };
+                window.imp().export_har();
+            }
+        });
+        app.add_action(&export_har_action);
+
         let reload_action = SimpleAction::new("reload", None);
         reload_action.connect_activate({
             let app = app.clone();

@@ -115,6 +115,18 @@ pub struct BrowserWindow {
     #[template_child]
     pub network_scroller: TemplateChild<ScrolledWindow>,
     #[template_child]
+    pub network_by_origin: TemplateChild<ToggleButton>,
+    #[template_child]
+    pub network_view: TemplateChild<Stack>,
+    #[template_child]
+    pub origins_list: TemplateChild<gtk4::ColumnView>,
+    #[template_child]
+    pub processes_list: TemplateChild<gtk4::ColumnView>,
+    #[template_child]
+    pub timeline_nav: TemplateChild<gtk4::DropDown>,
+    #[template_child]
+    pub timeline_area: TemplateChild<gtk4::DrawingArea>,
+    #[template_child]
     pub network_list: TemplateChild<gtk4::ColumnView>,
     #[template_child]
     pub network_detail_stack: TemplateChild<Stack>,
@@ -147,6 +159,18 @@ pub struct BrowserWindow {
     pub history_model: gtk4::gio::ListStore,
     /// The Page report's lines, updated in place like the others'.
     pub report_model: gtk4::gio::ListStore,
+    /// The network table's By origin rows, updated in place like the others'.
+    pub origins_model: gtk4::gio::ListStore,
+    /// The Processes tab's rows, updated in place like the others'.
+    pub processes_model: gtk4::gio::ListStore,
+    /// The loads the Timeline's picker offers, oldest first, by navigation id.
+    pub timeline_navs: RefCell<Vec<uuid::Uuid>>,
+    /// The load the reader picked, or `None` to follow the newest.
+    pub timeline_selected: RefCell<Option<uuid::Uuid>>,
+    /// What the Timeline draws, laid out on the last refresh.
+    pub timeline_drawn: Rc<RefCell<Option<beacon_core::timeline::Timeline>>>,
+    /// The engine's telemetry while the pane is open: the Timeline's stage bars.
+    pub devtools_rx: RefCell<Option<tokio::sync::broadcast::Receiver<Arc<gosub_engine::telemetry::Event>>>>,
     /// The rows the network table is showing, in order. Held rather than rebuilt: a refresh
     /// writes new values into the objects already here, and the view updates the labels it
     /// has bound to them. Rows are only added or removed when the request list really
@@ -287,6 +311,12 @@ impl Default for BrowserWindow {
             history_list: TemplateChild::default(),
             report_list: TemplateChild::default(),
             network_scroller: TemplateChild::default(),
+            network_by_origin: TemplateChild::default(),
+            network_view: TemplateChild::default(),
+            origins_list: TemplateChild::default(),
+            processes_list: TemplateChild::default(),
+            timeline_nav: TemplateChild::default(),
+            timeline_area: TemplateChild::default(),
             network_list: TemplateChild::default(),
             network_detail_stack: TemplateChild::default(),
             detail_raw: TemplateChild::default(),
@@ -306,6 +336,12 @@ impl Default for BrowserWindow {
             timings_model: gtk4::gio::ListStore::new::<super::rows::TimingRow>(),
             history_model: gtk4::gio::ListStore::new::<super::rows::HistoryRow>(),
             report_model: gtk4::gio::ListStore::new::<super::rows::ReportRow>(),
+            origins_model: gtk4::gio::ListStore::new::<super::rows::OriginRow>(),
+            processes_model: gtk4::gio::ListStore::new::<super::rows::ProcessRow>(),
+            timeline_navs: RefCell::new(Vec::new()),
+            timeline_selected: RefCell::new(None),
+            timeline_drawn: Rc::new(RefCell::new(None)),
+            devtools_rx: RefCell::new(None),
             detail_rendered: RefCell::new(std::collections::HashMap::new()),
             devtools_tick: RefCell::new(None),
             devtools_height: Cell::new(260),
@@ -656,6 +692,9 @@ impl BrowserWindow {
         if let Some(source) = self.devtools_tick.borrow_mut().take() {
             source.remove();
         }
+        // Listening is what makes the engine announce its stages, so only while the pane is
+        // open, like body capture.
+        *self.devtools_rx.borrow_mut() = showing.then(gosub_engine::telemetry::subscribe);
         if !showing {
             return;
         }
@@ -803,6 +842,22 @@ impl BrowserWindow {
         self.build_timings_columns();
         self.build_history_columns();
         self.build_report_columns();
+        self.build_origins_columns();
+        // The summary is cut to fit the header; the whole line is a hover away.
+        self.devtools_summary
+            .bind_property("label", &*self.devtools_summary, "tooltip-text")
+            .sync_create()
+            .build();
+        self.build_processes_columns();
+        self.setup_timeline();
+
+        let window = self.obj().clone();
+        self.network_by_origin.connect_toggled(move |toggle| {
+            let imp = window.imp();
+            imp.network_view
+                .set_visible_child_name(if toggle.is_active() { "origins" } else { "requests" });
+            imp.refresh_devtools();
+        });
 
         // Selecting a request shows it in full. The row object carries the id, so a refresh
         // that reorders or trims the list cannot leave the detail pane on the wrong request.
@@ -843,8 +898,13 @@ impl BrowserWindow {
             // clear: it is replaced by the next navigation's.
             let page = imp.devtools_page();
             let has_content = !matches!(page.as_str(), "console" | "history");
-            imp.devtools_action.set_visible(has_content && page != "report");
+            // Nor is the process list, which is what is running, not what was recorded.
+            // The Timeline keeps the last few loads on its own and has a picker instead.
+            imp.devtools_action
+                .set_visible(has_content && !matches!(page.as_str(), "report" | "processes" | "timeline"));
             imp.devtools_filter.set_visible(has_content);
+            imp.network_by_origin.set_visible(page == "network");
+            imp.timeline_nav.set_visible(page == "timeline");
             imp.refresh_devtools();
         });
     }
@@ -860,11 +920,25 @@ impl BrowserWindow {
         if !self.devtools_pane.get_visible() {
             return;
         }
+        // Whatever page is showing: a load watched from the Network tab still wants its
+        // stages on the Timeline afterwards.
+        if let Some(rx) = self.devtools_rx.borrow_mut().as_mut() {
+            loop {
+                match rx.try_recv() {
+                    Ok(event) => beacon_core::timeline::on_telemetry(&event.kind, &event.data, event.ts_us),
+                    Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => continue,
+                    Err(_) => break,
+                }
+            }
+        }
         let needle = self.devtools_filter.text().to_lowercase();
         match self.devtools_page().as_str() {
             "timings" => self.refresh_timings(&needle),
+            "network" if self.network_by_origin.is_active() => self.refresh_origins(&needle),
             "network" => self.refresh_network(&needle),
             "history" => self.refresh_history(),
+            "processes" => self.refresh_processes(&needle),
+            "timeline" => self.refresh_timeline(&needle),
             "report" => self.refresh_report(&needle),
             // The page's own console, which has nothing to say until scripts run. Its
             // summary line would otherwise keep whatever the last page put there.
@@ -1100,6 +1174,375 @@ impl BrowserWindow {
         });
     }
 
+    fn build_origins_columns(&self) {
+        self.origins_list
+            .set_model(Some(&gtk4::NoSelection::new(Some(self.origins_model.clone()))));
+        for (title, property, width, xalign) in [
+            ("Origin", "origin", Some(220), 0.0),
+            ("Party", "party", Some(56), 0.0),
+            ("Requests", "requests", Some(72), 1.0),
+            ("Size", "size", Some(72), 1.0),
+            ("Kinds", "kinds", None, 0.0),
+        ] {
+            self.origins_list.append_column(&Self::text_column(title, property, width, xalign));
+        }
+
+        // An origin opens into its requests: the request list, filtered to it. A tree that
+        // expands in place would say the same with a great deal more machinery.
+        let window = self.obj().clone();
+        self.origins_list.connect_activate(move |_, position| {
+            let imp = window.imp();
+            let Some(row) = imp.origins_model.item(position).and_downcast::<super::rows::OriginRow>() else {
+                return;
+            };
+            imp.devtools_filter.set_text(&row.origin());
+            imp.network_by_origin.set_active(false);
+        });
+    }
+
+    fn refresh_origins(&self, needle: &str) {
+        use beacon_core::devtools::format_bytes;
+
+        let requests = beacon_core::devtools::requests(self.active_tab_id());
+        let all = beacon_core::origins::by_origin(&requests);
+        let third = all.iter().filter(|row| !row.first_party).count();
+        self.devtools_summary
+            .set_text(&format!("{} origins, {third} third party · {} requests", all.len(), requests.len()));
+
+        let rows: Vec<_> = all
+            .iter()
+            .filter(|row| needle.is_empty() || row.origin.to_lowercase().contains(needle))
+            .collect();
+        for (index, row) in rows.iter().enumerate() {
+            let item = match self.origins_model.item(index as u32).and_downcast::<super::rows::OriginRow>() {
+                Some(item) => item,
+                None => {
+                    let item = super::rows::OriginRow::default();
+                    self.origins_model.append(&item);
+                    item
+                }
+            };
+            let requests = match row.failed {
+                0 => row.requests.to_string(),
+                failed => format!("{} ({failed} failed)", row.requests),
+            };
+            set_changed!(item, origin, set_origin, row.origin.as_str());
+            set_changed!(item, party, set_party, if row.first_party { "first" } else { "third" });
+            set_changed!(item, requests, set_requests, requests);
+            set_changed!(item, size, set_size, format_bytes(row.bytes));
+            set_changed!(item, kinds, set_kinds, beacon_core::origins::format_kinds(&row.kinds));
+            set_changed!(item, css, set_css, "monospace");
+        }
+        let wanted = rows.len() as u32;
+        if self.origins_model.n_items() > wanted {
+            self.origins_model
+                .splice(wanted, self.origins_model.n_items() - wanted, &[] as &[super::rows::OriginRow]);
+        }
+    }
+
+    /// Height of one timeline lane, and of the axis above them.
+    const TIMELINE_LANE: i32 = 16;
+    /// Rows above the lanes: the axis, and two for the marks' labels, so two marks close
+    /// together can both be read.
+    const TIMELINE_HEADER: i32 = 3 * Self::TIMELINE_LANE;
+    /// Width of the lane labels left of the bars.
+    const TIMELINE_LABELS: f64 = 220.0;
+
+    fn setup_timeline(&self) {
+        self.timeline_nav.set_model(Some(&gtk4::StringList::new(&[])));
+        let window = self.obj().clone();
+        self.timeline_nav.connect_selected_notify(move |dropdown| {
+            let imp = window.imp();
+            let navs = imp.timeline_navs.borrow().clone();
+            let index = dropdown.selected() as usize;
+            // Picking the newest means following whatever is newest next.
+            let picked = navs.get(index).copied().filter(|_| index + 1 < navs.len());
+            if *imp.timeline_selected.borrow() != picked {
+                imp.timeline_selected.replace(picked);
+                imp.refresh_devtools();
+            }
+        });
+
+        let drawn = self.timeline_drawn.clone();
+        self.timeline_area.set_draw_func(move |area, cr, width, _| {
+            if let Some(timeline) = drawn.borrow().as_ref() {
+                Self::draw_timeline(area, cr, width, timeline);
+            }
+        });
+        let drawn = self.timeline_drawn.clone();
+        self.timeline_area.connect_query_tooltip(move |_, _, y, _, tooltip| {
+            let drawn = drawn.borrow();
+            let Some(timeline) = drawn.as_ref() else { return false };
+            let lane = (y - Self::TIMELINE_HEADER) / Self::TIMELINE_LANE;
+            let Some(lane) = (y >= Self::TIMELINE_HEADER).then(|| timeline.lanes.get(lane as usize)).flatten() else {
+                return false;
+            };
+            tooltip.set_text(Some(&lane.detail));
+            true
+        });
+    }
+
+    fn refresh_timeline(&self, needle: &str) {
+        use beacon_core::devtools::format_duration;
+
+        let tab = self.active_tab_id();
+        let navs = tab.map(beacon_core::timeline::navigations).unwrap_or_default();
+
+        // The picker's entries change only when the loads do, so a choice survives refreshes.
+        let ids: Vec<uuid::Uuid> = navs.iter().map(|n| n.id).collect();
+        if *self.timeline_navs.borrow() != ids {
+            let labels: Vec<String> = navs
+                .iter()
+                .map(|n| format!("{} {}", format_clock(n.started_ms), truncate(&n.url, 40)))
+                .collect();
+            let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
+            self.timeline_navs.replace(ids.clone());
+            if !ids.contains(&self.timeline_selected.borrow().unwrap_or_default()) {
+                self.timeline_selected.replace(None);
+            }
+            let selected = self.timeline_selected.borrow().and_then(|id| ids.iter().position(|n| *n == id));
+            if let Some(model) = self.timeline_nav.model().and_downcast::<gtk4::StringList>() {
+                model.splice(0, model.n_items(), &labels);
+            }
+            self.timeline_nav
+                .set_selected(selected.unwrap_or(ids.len().saturating_sub(1)) as u32);
+        }
+
+        let index = self
+            .timeline_selected
+            .borrow()
+            .and_then(|id| navs.iter().position(|n| n.id == id))
+            .or(navs.len().checked_sub(1));
+        let Some(index) = index else {
+            self.devtools_summary.set_text("No page loads in this tab yet");
+            self.timeline_drawn.replace(None);
+            self.timeline_area.set_content_height(0);
+            self.timeline_area.queue_draw();
+            return;
+        };
+        let nav = &navs[index];
+        let requests = beacon_core::devtools::requests(tab);
+        let next = navs.get(index + 1).map(|n| n.started_ms);
+        let mut timeline = beacon_core::timeline::layout(nav, &requests, next, now_ms());
+        if !needle.is_empty() {
+            timeline
+                .lanes
+                .retain(|lane| lane.label.to_lowercase().contains(needle) || lane.detail.to_lowercase().contains(needle));
+        }
+
+        let stages = nav.stages.len();
+        let mut summary = format!(
+            "{} · {} requests, {stages} stages",
+            format_duration(((timeline.end_ms - timeline.start_ms) * 1000.0) as u64),
+            timeline
+                .lanes
+                .iter()
+                .filter(|l| l.kind != beacon_core::timeline::LaneKind::Stage)
+                .count(),
+        );
+        if let Some(outcome) = &nav.outcome {
+            summary.push_str(&format!(" · {outcome}"));
+        }
+        if stages == 0 && nav.ended_ms.is_some() {
+            // Out of process, the page's stages are timed in the renderer, which does not put
+            // them on this process's bus.
+            let isolated = self.engine.borrow().as_ref().is_some_and(|engine| !engine.renderers().is_empty());
+            summary.push_str(if isolated {
+                " · page stages run in the renderer process and are not reported here"
+            } else {
+                " · stages are recorded only while this pane is open"
+            });
+        }
+        self.devtools_summary.set_text(&summary);
+
+        let height = Self::TIMELINE_HEADER + timeline.lanes.len() as i32 * Self::TIMELINE_LANE + 4;
+        self.timeline_drawn.replace(Some(timeline));
+        self.timeline_area.set_content_height(height);
+        self.timeline_area.queue_draw();
+    }
+
+    /// One load: an axis along the top, a lane per request and per stage, and each mark as a
+    /// line through all of them.
+    fn draw_timeline(area: &gtk4::DrawingArea, cr: &gtk4::cairo::Context, width: i32, timeline: &beacon_core::timeline::Timeline) {
+        use beacon_core::timeline::LaneKind;
+
+        let ink = area.color();
+        let (r, g, b) = (ink.red() as f64, ink.green() as f64, ink.blue() as f64);
+        let lane_h = Self::TIMELINE_LANE as f64;
+        let left = Self::TIMELINE_LABELS;
+        let span_w = (width as f64 - left - 8.0).max(1.0);
+        let span = (timeline.end_ms - timeline.start_ms).max(1.0);
+        let x_of = |ms: f64| left + (ms - timeline.start_ms) / span * span_w;
+        let header = Self::TIMELINE_HEADER as f64;
+        let bottom = header + lane_h * timeline.lanes.len() as f64;
+        let now = now_ms() as f64;
+
+        cr.select_font_face("monospace", gtk4::cairo::FontSlant::Normal, gtk4::cairo::FontWeight::Normal);
+        cr.set_font_size(10.0);
+        // Labels cut to the column, at the width of one monospace character at this size.
+        let label_chars = ((left - 8.0) / 6.0) as usize;
+        let text = |text: &str, x: f64, y: f64| {
+            cr.move_to(x, y + 10.0);
+            let _ = cr.show_text(text);
+        };
+
+        // The axis: a tick every round number of milliseconds that leaves room for its label.
+        let step = [
+            1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0, 10_000.0, 30_000.0,
+        ]
+        .into_iter()
+        .find(|step| span / step <= span_w / 70.0)
+        .unwrap_or(60_000.0);
+        let mut tick = 0.0;
+        while tick <= span {
+            let x = x_of(timeline.start_ms + tick);
+            cr.set_source_rgba(r, g, b, 0.10);
+            cr.rectangle(x, lane_h, 1.0, bottom - lane_h);
+            let _ = cr.fill();
+            cr.set_source_rgba(r, g, b, 0.6);
+            text(
+                &if tick >= 1000.0 {
+                    format!("{:.1}s", tick / 1000.0)
+                } else {
+                    format!("{tick}ms")
+                },
+                x + 2.0,
+                1.0,
+            );
+            tick += step;
+        }
+
+        for (index, lane) in timeline.lanes.iter().enumerate() {
+            let y = header + lane_h * index as f64;
+            cr.set_source_rgba(r, g, b, 0.85);
+            text(&truncate(&lane.label, label_chars), 4.0, y + 1.0);
+
+            let bar_h = lane_h - 6.0;
+            for (start, end) in &lane.spans {
+                let x = x_of(*start);
+                let end_x = x_of(end.unwrap_or(now).min(timeline.end_ms));
+                match lane.kind {
+                    LaneKind::Request { headers_ms, failed } => {
+                        // Waiting for the server in the ink colour, the body in blue: the
+                        // network table's waterfall, on this clock.
+                        let split = headers_ms.map(x_of).unwrap_or(end_x).clamp(x, end_x);
+                        cr.set_source_rgba(r, g, b, 0.30);
+                        cr.rectangle(x, y + 3.0, (split - x).max(0.0), bar_h);
+                        let _ = cr.fill();
+                        if failed {
+                            cr.set_source_rgba(0.85, 0.25, 0.20, 0.85);
+                        } else {
+                            cr.set_source_rgba(0.20, 0.45, 0.85, 0.85);
+                        }
+                        cr.rectangle(split, y + 3.0, (end_x - split).max(1.0), bar_h);
+                        let _ = cr.fill();
+                    }
+                    LaneKind::Stage => {
+                        cr.set_source_rgba(0.85, 0.55, 0.15, 0.85);
+                        cr.rectangle(x, y + 3.0, (end_x - x).max(1.0), bar_h);
+                        let _ = cr.fill();
+                    }
+                }
+            }
+        }
+
+        // Marks last, over everything, each labelled at the top of its line: on the first label
+        // row, or the second when the first is taken there.
+        let mut row_ends = [f64::MIN; 2];
+        for mark in &timeline.marks {
+            let x = x_of(mark.at_ms);
+            let (mr, mg, mb) = match mark.label {
+                "first paint" => (0.20, 0.65, 0.30),
+                "finished" | "stopped" => (0.20, 0.45, 0.85),
+                "first bytes" => (r, g, b),
+                _ => (0.60, 0.35, 0.75),
+            };
+            cr.set_source_rgba(mr, mg, mb, 0.9);
+            cr.rectangle(x, lane_h, 1.5, bottom - lane_h);
+            let _ = cr.fill();
+            // Left of its line when the right edge would cut it off.
+            let label_w = cr.text_extents(mark.label).map_or(0.0, |extents| extents.x_advance());
+            let label_x = if x + 3.0 + label_w > width as f64 {
+                x - 3.0 - label_w
+            } else {
+                x + 3.0
+            };
+            // Two marks within a few pixels of each other are one line to the eye; a third
+            // label there would only print over the other two.
+            if let Some(row) = row_ends.iter().position(|end| label_x > end + 4.0) {
+                row_ends[row] = label_x + label_w;
+                text(mark.label, label_x, lane_h * (row as f64 + 1.0) + 1.0);
+            }
+        }
+    }
+
+    fn build_processes_columns(&self) {
+        self.processes_list
+            .set_model(Some(&gtk4::NoSelection::new(Some(self.processes_model.clone()))));
+        for (title, property, width, xalign) in [
+            ("Process", "name", Some(260), 0.0),
+            ("PID", "pid", Some(72), 1.0),
+            ("Memory", "memory", Some(88), 1.0),
+            ("Uptime", "uptime", Some(80), 1.0),
+            ("Serves", "detail", None, 0.0),
+        ] {
+            self.processes_list
+                .append_column(&Self::text_column(title, property, width, xalign));
+        }
+    }
+
+    fn refresh_processes(&self, needle: &str) {
+        use beacon_core::processes::format_uptime;
+
+        let (renderers, tier) = match self.engine.borrow().as_ref() {
+            Some(engine) => (engine.renderers(), engine.renderer_tier()),
+            None => (Vec::new(), None),
+        };
+        let all = beacon_core::processes::tree(&renderers, tier.as_deref());
+        let total_kb: u64 = all.iter().filter_map(|p| p.rss_kb).sum();
+        self.devtools_summary.set_text(&format!(
+            "{} processes · {} resident",
+            all.len(),
+            beacon_core::devtools::format_bytes(total_kb * 1024)
+        ));
+
+        // A filter keeps a matching process's place in the tree, so its indent still says
+        // what it hangs under.
+        let rows: Vec<_> = all
+            .iter()
+            .filter(|p| needle.is_empty() || p.name.to_lowercase().contains(needle) || p.detail.to_lowercase().contains(needle))
+            .collect();
+        for (index, process) in rows.iter().enumerate() {
+            let item = match self.processes_model.item(index as u32).and_downcast::<super::rows::ProcessRow>() {
+                Some(item) => item,
+                None => {
+                    let item = super::rows::ProcessRow::default();
+                    self.processes_model.append(&item);
+                    item
+                }
+            };
+            let name = match process.depth {
+                0 => process.name.clone(),
+                depth => format!("{}└ {}", "   ".repeat(depth - 1), process.name),
+            };
+            let memory = process
+                .rss_kb
+                .map(|kb| beacon_core::devtools::format_bytes(kb * 1024))
+                .unwrap_or_else(|| "—".to_string());
+            set_changed!(item, name, set_name, name);
+            set_changed!(item, pid, set_pid, process.pid.to_string());
+            set_changed!(item, memory, set_memory, memory);
+            set_changed!(item, uptime, set_uptime, process.uptime_s.map(format_uptime).unwrap_or_default());
+            set_changed!(item, detail, set_detail, process.detail.as_str());
+            set_changed!(item, css, set_css, "monospace");
+        }
+        let wanted = rows.len() as u32;
+        if self.processes_model.n_items() > wanted {
+            self.processes_model
+                .splice(wanted, self.processes_model.n_items() - wanted, &[] as &[super::rows::ProcessRow]);
+        }
+    }
+
     /// The tree column: indented by the row's branch depth, a mark for where the tab is.
     fn history_page_column(title: &str) -> gtk4::ColumnViewColumn {
         /// Pixels per level of side branch.
@@ -1309,6 +1752,143 @@ impl BrowserWindow {
             self.network_list.append_column(&Self::text_column(title, property, width, xalign));
         }
         self.network_list.append_column(&self.waterfall_column());
+        self.attach_request_menu();
+    }
+
+    /// A right click on any cell of a request offers to copy or export it.
+    ///
+    /// Hooked into every column's factory, after the column's own setup has made the cell's
+    /// widget: a right click does not select a row in a column view, so the cell has to say
+    /// which request it is showing.
+    fn attach_request_menu(&self) {
+        let columns = self.network_list.columns();
+        for index in 0..columns.n_items() {
+            let Some(factory) = columns
+                .item(index)
+                .and_downcast::<gtk4::ColumnViewColumn>()
+                .and_then(|column| column.factory())
+                .and_downcast::<gtk4::SignalListItemFactory>()
+            else {
+                continue;
+            };
+            let window = self.obj().downgrade();
+            factory.connect_setup(move |_, item| {
+                let item = Self::as_list_item(item);
+                let Some(child) = item.child() else { return };
+                let click = GestureClick::new();
+                click.set_button(gdk::BUTTON_SECONDARY);
+                let item = item.downgrade();
+                let window = window.clone();
+                click.connect_pressed(move |gesture, _, x, y| {
+                    let (Some(window), Some(item)) = (window.upgrade(), item.upgrade()) else {
+                        return;
+                    };
+                    let Some(id) = item
+                        .item()
+                        .and_downcast::<super::rows::RequestRow>()
+                        .and_then(|row| row.request_id())
+                    else {
+                        return;
+                    };
+                    if let Some(widget) = gesture.widget() {
+                        window.imp().show_request_menu(id, &widget, x, y);
+                    }
+                });
+                child.add_controller(click);
+            });
+        }
+    }
+
+    fn show_request_menu(&self, id: uuid::Uuid, widget: &gtk4::Widget, x: f64, y: f64) {
+        // One flat list: with a section separator the popover came up a row short and cut
+        // its last item off.
+        let menu = gtk4::gio::Menu::new();
+        menu.append(Some("Copy as cURL"), Some("request.copy-curl"));
+        menu.append(Some("Copy URL"), Some("request.copy-url"));
+        menu.append(Some("Export HAR"), Some("request.export-har"));
+
+        let actions = SimpleActionGroup::new();
+        type CopyAs = fn(&beacon_core::devtools::NetRequest) -> String;
+        let copies: [(&str, CopyAs); 2] = [
+            ("copy-curl", beacon_core::export::curl),
+            ("copy-url", |request| request.url.clone()),
+        ];
+        for (name, copy) in copies {
+            let action = gtk4::gio::SimpleAction::new(name, None);
+            let window = self.obj().downgrade();
+            action.connect_activate(move |_, _| {
+                let Some(window) = window.upgrade() else { return };
+                let imp = window.imp();
+                let Some(request) = beacon_core::devtools::requests(imp.active_tab_id())
+                    .into_iter()
+                    .find(|r| r.id == id)
+                else {
+                    return;
+                };
+                window.clipboard().set_text(&copy(&request));
+            });
+            actions.add_action(&action);
+        }
+        let action = gtk4::gio::SimpleAction::new("export-har", None);
+        let window = self.obj().downgrade();
+        action.connect_activate(move |_, _| {
+            if let Some(window) = window.upgrade() {
+                window.imp().export_har();
+            }
+        });
+        actions.add_action(&action);
+
+        let window = self.obj().clone();
+        let popover = PopoverMenu::builder()
+            .halign(gtk4::Align::Start)
+            .has_arrow(false)
+            .flags(PopoverMenuFlags::NESTED)
+            .build();
+        popover.insert_action_group("request", Some(&actions));
+        // Parented to the window, not the cell: list cells are recycled, and a popover on one
+        // would go with it.
+        popover.set_parent(&window);
+        popover.set_menu_model(Some(&menu));
+        popover.connect_closed(|popover| {
+            let popover = popover.clone();
+            glib::idle_add_local_once(move || popover.unparent());
+        });
+        if let Some(point) = widget.compute_point(&window, &Point::new(x as f32, y as f32)) {
+            popover.set_pointing_to(Some(&gdk::Rectangle::new(point.x() as i32, point.y() as i32, 0, 0)));
+            popover.popup();
+        }
+    }
+
+    /// Save the active tab's request log as a HAR file, asking where.
+    pub(crate) fn export_har(&self) {
+        let requests = beacon_core::devtools::requests(self.active_tab_id());
+        if requests.is_empty() {
+            self.log("Export HAR: this tab has made no requests yet");
+            return;
+        }
+        let name = beacon_core::export::har_file_name(&requests, now_ms());
+        let dialog = gtk4::FileDialog::builder().initial_name(name).build();
+        let window = self.obj().clone();
+        dialog.save(Some(&*self.obj()), gtk4::gio::Cancellable::NONE, move |result| {
+            let file = match result {
+                Ok(file) => file,
+                Err(err) if err.matches(gtk4::DialogError::Dismissed) => return,
+                Err(err) => {
+                    window.imp().log(&format!("Export HAR: no file chooser: {err}"));
+                    return;
+                }
+            };
+            let Some(path) = file.path() else { return };
+            // The log as it is now, not as it was when the dialog opened: the page may have
+            // gone on loading while the name was typed.
+            let requests = beacon_core::devtools::requests(window.imp().active_tab_id());
+            match std::fs::write(&path, beacon_core::export::har_text(&requests)) {
+                Ok(()) => window
+                    .imp()
+                    .log(&format!("Exported {} requests to {}", requests.len(), path.display())),
+                Err(err) => window.imp().log(&format!("Export HAR to {} failed: {err}", path.display())),
+            }
+        });
     }
 
     /// The debug log's columns. Level and target are narrow and fixed; the message takes
