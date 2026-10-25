@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# Build Gosub Beacon for Android (arm64) as a debug-signed APK, and install it with --install.
+# Build Gosub Beacon for Android as a debug-signed APK, and install it with --install. arm64 by
+# default; ANDROID_ABI=armeabi-v7a builds for 32-bit ARM Android instead.
 #
 #   scripts/android-apk.sh [--install] [--debug]
 #
 # Needs: the Android SDK (platform + build-tools), the NDK, `cargo install cargo-ndk`,
-# `rustup target add aarch64-linux-android`, and a JDK for javac. ANDROID_HOME defaults to
-# ~/Android/Sdk and ANDROID_NDK_HOME to the newest NDK under it. Output:
-# target/android/gosub-beacon.apk.
+# `rustup target add aarch64-linux-android` (`armv7-linux-androideabi` for armeabi-v7a), and a
+# JDK for javac. ANDROID_HOME defaults to ~/Android/Sdk and ANDROID_NDK_HOME to the newest NDK
+# under it. Output: target/android/gosub-beacon.apk.
 set -euo pipefail
 
 INSTALL=0
@@ -28,6 +29,7 @@ PLATFORM=$(find "$ANDROID_HOME/platforms" -mindepth 1 -maxdepth 1 -type d | sort
 # Target 34 rather than the platform's: 35 forces edge-to-edge, which would put the tab
 # strip under the status bar.
 MIN_SDK=26
+ABI=${ANDROID_ABI:-arm64-v8a}
 TARGET_SDK=34
 VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' "$ROOT/Cargo.toml" | head -1)
 
@@ -38,10 +40,10 @@ mkdir -p "$STAGE/apk/lib" "$STAGE/res/mipmap-xxxhdpi"
 
 PROFILE_FLAG=()
 [ "$PROFILE" = release ] && PROFILE_FLAG=(--release)
-(cd "$ROOT" && cargo ndk -t arm64-v8a -P "$MIN_SDK" -o "$STAGE/apk/lib" build "${PROFILE_FLAG[@]}" -p beacon-android)
+(cd "$ROOT" && cargo ndk -t "$ABI" -P "$MIN_SDK" -o "$STAGE/apk/lib" build "${PROFILE_FLAG[@]}" -p beacon-android)
 
 # Debug info makes up most of the library; the phone has no use for it.
-"$ANDROID_NDK_HOME"/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip "$STAGE/apk/lib/arm64-v8a/libbeacon_android.so"
+"$ANDROID_NDK_HOME"/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip "$STAGE/apk/lib/$ABI/libbeacon_android.so"
 
 # The Java half of rustls-platform-verifier, which the engine's network stack checks
 # certificates with. Upstream serves it as an .aar from a Maven branch on GitHub, at the

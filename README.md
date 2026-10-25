@@ -198,6 +198,10 @@ scripts/android-apk.sh --debug      # debug profile instead of release
 adb logcat -s beacon RustStdoutStderr   # the log; RUST_LOG cannot be set for an app
 ```
 
+For a device running 32-bit ARM Android, build with `ANDROID_ABI=armeabi-v7a` (after
+`rustup target add armv7-linux-androideabi`). Devices with an Arm Mali GPU cannot draw pages
+yet; see [docs/known-issues.md](docs/known-issues.md).
+
 The script downloads two pinned jars on first use (the Java half of
 rustls-platform-verifier, which HTTPS needs on Android, and the Kotlin standard library it
 depends on). It stops with a message when `Cargo.lock` moves to a verifier version the pin
