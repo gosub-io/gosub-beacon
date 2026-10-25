@@ -8,7 +8,7 @@
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use beacon_core::cli::Cli;
 use winit::platform::android::activity::AndroidApp;
@@ -40,11 +40,21 @@ pub fn run(app: AndroidApp) -> ! {
     let _ = APP.set(app.clone());
     init_certificate_verifier(&app);
 
-    let options = eframe::NativeOptions {
+    let mut options = eframe::NativeOptions {
         android_app: Some(app),
         renderer: eframe::Renderer::Wgpu,
         ..Default::default()
     };
+    // Ask for the GPU's own limits. egui's default asks for wgpu's defaults, which an older
+    // mobile GPU does not meet (a Mali-G71 allows 4 colour attachments, not 8), so Beacon
+    // could not start there; Vello also needs more storage buffers than the downlevel set.
+    if let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut options.wgpu_options.wgpu_setup {
+        setup.device_descriptor = Arc::new(|adapter| eframe::wgpu::DeviceDescriptor {
+            label: Some("beacon egui device"),
+            required_limits: adapter.limits(),
+            ..Default::default()
+        });
+    }
     crate::start(options, Vec::new());
 
     // The activity is gone, but Android may keep the process and later create a new
