@@ -1885,12 +1885,20 @@ impl BrowserWindow {
             // The log as it is now, not as it was when the dialog opened: the page may have
             // gone on loading while the name was typed.
             let requests = beacon_core::devtools::requests(window.imp().active_tab_id());
-            match std::fs::write(&path, beacon_core::export::har_text(&requests)) {
-                Ok(()) => window
-                    .imp()
-                    .log(&format!("Exported {} requests to {}", requests.len(), path.display())),
-                Err(err) => window.imp().log(&format!("Export HAR to {} failed: {err}", path.display())),
-            }
+            let count = requests.len();
+            // Serializing a log full of bodies and writing it out is not the main loop's work:
+            // the window would stop drawing until the disk is done.
+            glib::spawn_future_local(async move {
+                let target = path.clone();
+                let written = gtk4::gio::spawn_blocking(move || std::fs::write(&target, beacon_core::export::har_text(&requests))).await;
+                match written {
+                    Ok(Ok(())) => window.imp().log(&format!("Exported {count} requests to {}", path.display())),
+                    Ok(Err(err)) => window.imp().log(&format!("Export HAR to {} failed: {err}", path.display())),
+                    Err(_) => window
+                        .imp()
+                        .log(&format!("Export HAR to {} failed: the writer stopped", path.display())),
+                }
+            });
         });
     }
 
