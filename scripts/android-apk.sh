@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Build Gosub Beacon for Android as a debug-signed APK, and install it with --install. arm64 by
-# default; ANDROID_ABI=armeabi-v7a builds for 32-bit-only devices instead.
+# default; ANDROID_ABI=armeabi-v7a builds for 32-bit ARM Android instead.
 #
 #   scripts/android-apk.sh [--install] [--debug]
 #
 # Needs: the Android SDK (platform + build-tools), the NDK, `cargo install cargo-ndk`,
-# `rustup target add aarch64-linux-android`, and a JDK for javac. ANDROID_HOME defaults to
-# ~/Android/Sdk and ANDROID_NDK_HOME to the newest NDK under it. Output:
-# target/android/gosub-beacon.apk.
+# `rustup target add aarch64-linux-android` (`armv7-linux-androideabi` for armeabi-v7a), and a
+# JDK for javac. ANDROID_HOME defaults to ~/Android/Sdk and ANDROID_NDK_HOME to the newest NDK
+# under it. Output: target/android/gosub-beacon.apk.
 set -euo pipefail
 
 INSTALL=0

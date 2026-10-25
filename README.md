@@ -193,7 +193,7 @@ scripts/android-apk.sh --debug      # debug profile instead of release
 adb logcat -s beacon RustStdoutStderr   # the log; RUST_LOG cannot be set for an app
 ```
 
-For a device that runs a 32-bit Android, build with `ANDROID_ABI=armeabi-v7a` (after
+For a device running 32-bit ARM Android, build with `ANDROID_ABI=armeabi-v7a` (after
 `rustup target add armv7-linux-androideabi`). Devices with an Arm Mali GPU cannot draw pages
 yet; see [docs/known-issues.md](docs/known-issues.md).
 

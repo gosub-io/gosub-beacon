@@ -5,7 +5,8 @@ it is fixed. One open issue matters most: Beacon cannot draw pages on any Androi
 an Arm Mali GPU until Vello ships a fix (KI-001).
 
 Add new entries at the end of the table with the next free ID, and give each one the
-platform, the symptom as a user sees it, the cause, the status, and when to look again.
+platform, the symptom as a user sees it, the cause and the status. An entry that is open
+or won't be fixed also says when to look again.
 
 | ID | Platform | Symptom | Status |
 | --- | --- | --- | --- |
@@ -66,6 +67,8 @@ Beacon, and OpenGL ES is no fallback for KI-001.
   only 128.
 - **Status:** won't fix; it is a limit of Vello's design. Android devices Beacon targets have
   Vulkan.
+- **Revisit when:** Vello gains a path for OpenGL ES (smaller workgroups), or Beacon has to
+  support a device without Vulkan.
 
 ## KI-004: 32-bit-only Android devices
 
