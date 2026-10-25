@@ -780,6 +780,7 @@ dependencies = [
  "lazy_static",
  "log",
  "reqwest 0.12.28",
+ "rustix 1.1.4",
  "serde_json",
  "sys-locale",
  "tokio",

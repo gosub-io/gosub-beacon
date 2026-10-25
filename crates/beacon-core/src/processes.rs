@@ -124,9 +124,9 @@ fn tree_from(entries: &[Entry], root: u32, renderers: &[RendererInfo], tier: Opt
 /// `tier` is the renderers' confinement, as [`tier_label`] words it.
 #[cfg(target_os = "linux")]
 pub fn tree(renderers: &[RendererInfo], tier: Option<&str>) -> Vec<Process> {
-    // What `/proc` counts start times in. USER_HZ is 100 on every architecture Linux
-    // supports, whatever the kernel's own tick rate.
-    const TICKS_PER_SECOND: u64 = 100;
+    // What `/proc` counts start times in: the kernel's USER_HZ, as `sysconf(_SC_CLK_TCK)`
+    // reports it.
+    let ticks_per_second = rustix::param::clock_ticks_per_second().max(1);
 
     let read = |pid: u32, file: &str| std::fs::read(format!("/proc/{pid}/{file}")).ok();
 
@@ -176,7 +176,7 @@ pub fn tree(renderers: &[RendererInfo], tier: Option<&str>) -> Vec<Process> {
                 ppid,
                 name: name_from(&read(pid, "cmdline").unwrap_or_default(), &comm),
                 rss_kb,
-                started_s: Some(started / TICKS_PER_SECOND),
+                started_s: Some(started / ticks_per_second),
             }
         })
         .collect();
