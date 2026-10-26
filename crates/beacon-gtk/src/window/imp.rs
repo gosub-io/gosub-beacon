@@ -4007,15 +4007,16 @@ impl BrowserWindow {
         });
     }
 
-    /// Put `url` in the address bar, with what its scheme says about the connection: a
-    /// padlock for https, "not secure" for plaintext http and gopher, nothing for local
-    /// and internal pages. `None` empties the bar for typing.
+    /// Put `url` in the address bar, with what the engine says about its connection: a
+    /// padlock when encrypted, "not secure" when cleartext, nothing for local and internal
+    /// pages. `None` empties the bar for typing.
     fn show_address(&self, url: Option<&url::Url>) {
+        use gosub_engine::net::protocols::{transport, Transport};
         self.searchbar.set_text(url.map_or("", |u| u.as_str()));
-        let (icon, tooltip) = match url.map(url::Url::scheme) {
-            Some("https") => (Some("channel-secure-symbolic"), Some("Secure connection")),
-            Some("http" | "gopher") => (Some("channel-insecure-symbolic"), Some("Not secure")),
-            _ => (None, None),
+        let (icon, tooltip) = match url.and_then(transport) {
+            Some(Transport::Encrypted) => (Some("channel-secure-symbolic"), Some("Secure connection")),
+            Some(Transport::Cleartext) => (Some("channel-insecure-symbolic"), Some("Not secure")),
+            None => (None, None),
         };
         self.searchbar.set_icon_from_icon_name(gtk4::EntryIconPosition::Primary, icon);
         self.searchbar.set_icon_tooltip_text(gtk4::EntryIconPosition::Primary, tooltip);
@@ -4030,9 +4031,9 @@ impl BrowserWindow {
             let manager = self.tab_manager.lock().unwrap();
             match manager.get_tab(tab_id) {
                 Some(tab) => {
-                    // Pages from the web and gopherspace are bookmarkable; internal pages
-                    // and local files are not.
-                    if !matches!(tab.url().scheme(), "http" | "https" | "gopher") {
+                    // Pages from the network are bookmarkable, over whichever protocol the
+                    // engine speaks; internal pages and local files are not.
+                    if !gosub_engine::net::protocols::is_network_place(tab.url()) {
                         return;
                     }
                     (tab.url().to_string(), tab.title().to_string())
