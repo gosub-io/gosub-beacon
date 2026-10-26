@@ -624,6 +624,11 @@ impl BrowserWindow {
         };
         self.log(format!("Visiting the URL {}", entry.text().as_str()).as_str());
         let url_str = entry.text().to_string();
+        // Keys go to the page once the address is entered, as in other browsers, so typing
+        // reaches a field the page autofocuses.
+        if let Some(area) = self.render_areas.borrow().get(&tab_id) {
+            area.grab_focus();
+        }
         self.sender.send(Message::LoadUrl(tab_id, url_str)).await.unwrap();
     }
 }
