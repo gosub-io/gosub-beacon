@@ -132,7 +132,6 @@
                             <object class="GtkEntry" id="searchbar">
                                 <signal name="activate" handler="handle_searchbar_clicked" swapped="true"/>
                                 <property name="placeholder-text" translatable="yes">Search or enter address</property>
-                                <property name="primary-icon-name">channel-secure-symbolic</property>
                                 <property name="hexpand">True</property>
                                 <style>
                                     <class name="address-bar"/>

@@ -3529,9 +3529,9 @@ impl BrowserWindow {
             // New-tab pages (blank, home) get an empty address bar, ready to type into.
             let page = gosub_engine::internal_pages::InternalPages::page_name(tab.url());
             if matches!(tab.url().scheme(), "gosub" | "about") && matches!(page, "blank" | "home") {
-                self.searchbar.set_text("");
+                self.show_address(None);
             } else {
-                self.searchbar.set_text(tab.url().as_str());
+                self.show_address(Some(tab.url()));
             }
             let suffix = if self.private.get() { " (Private)" } else { "" };
             self.obj().set_title(Some(&format!("{} — Gosub Beacon{suffix}", tab.title())));
@@ -4007,6 +4007,20 @@ impl BrowserWindow {
         });
     }
 
+    /// Put `url` in the address bar, with what its scheme says about the connection: a
+    /// padlock for https, "not secure" for plaintext http and gopher, nothing for local
+    /// and internal pages. `None` empties the bar for typing.
+    fn show_address(&self, url: Option<&url::Url>) {
+        self.searchbar.set_text(url.map_or("", |u| u.as_str()));
+        let (icon, tooltip) = match url.map(url::Url::scheme) {
+            Some("https") => (Some("channel-secure-symbolic"), Some("Secure connection")),
+            Some("http" | "gopher") => (Some("channel-insecure-symbolic"), Some("Not secure")),
+            _ => (None, None),
+        };
+        self.searchbar.set_icon_from_icon_name(gtk4::EntryIconPosition::Primary, icon);
+        self.searchbar.set_icon_tooltip_text(gtk4::EntryIconPosition::Primary, tooltip);
+    }
+
     /// Add or remove the active tab's page from the bookmarks. Shared by the toolbar star and
     /// the `app.bookmark-page` action (Ctrl+D), so both behave identically.
     pub(crate) fn toggle_bookmark(&self) {
@@ -4015,13 +4029,17 @@ impl BrowserWindow {
         let (url, title) = {
             let manager = self.tab_manager.lock().unwrap();
             match manager.get_tab(tab_id) {
-                Some(tab) => (tab.url().to_string(), tab.title().to_string()),
+                Some(tab) => {
+                    // Pages from the web and gopherspace are bookmarkable; internal pages
+                    // and local files are not.
+                    if !matches!(tab.url().scheme(), "http" | "https" | "gopher") {
+                        return;
+                    }
+                    (tab.url().to_string(), tab.title().to_string())
+                }
                 None => return,
             }
         };
-        if !url.starts_with("http") {
-            return; // internal pages are not bookmarkable
-        }
         if places.is_bookmarked(&url) {
             places.remove_bookmark(&url);
         } else {
@@ -4620,7 +4638,7 @@ impl BrowserWindow {
                 // A shell page raises no navigation event, so the address bar is told here.
                 if shell {
                     if self.active_tab_id() == Some(tab_id) {
-                        self.searchbar.set_text(url.as_str());
+                        self.show_address(Some(&url));
                     }
                 } else {
                     self.navigate_engine_tab(tab_id, url.as_str());
@@ -5279,7 +5297,7 @@ impl BrowserWindow {
             }
             BeaconEvent::UrlChanged(tab_id, url) => {
                 if self.active_tab_id() == Some(tab_id) {
-                    self.searchbar.set_text(url.as_str());
+                    self.show_address(Some(&url));
                 }
             }
             BeaconEvent::LoadingChanged(..) => {}
