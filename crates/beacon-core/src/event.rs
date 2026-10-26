@@ -65,6 +65,18 @@ pub enum BeaconEvent {
     /// may offer to trust the new certificate, whose SHA-256 this is
     /// (`BeaconEngine::trust_certificate`).
     CertificateChanged(TabId, Url, [u8; 32]),
+    /// A page's server asked for a client certificate (`gemini://` status `6x`), and the load
+    /// failed. Sent beside `NavigationFailed`. With none `presented` the frontend may offer
+    /// to make one (`BeaconEngine::make_identity`); with one presented, the server refused
+    /// it (`61` not authorised, `62` not valid), and the frontend may offer to replace or
+    /// forget it. `message` is the server's, to show as its words.
+    IdentityAsked {
+        tab_id: TabId,
+        url: Url,
+        status: u8,
+        message: String,
+        presented: bool,
+    },
     /// The tab's engine worker died; the tab is now marked crashed.
     TabCrashed(TabId, String),
 

@@ -83,7 +83,19 @@ typedef enum {
      * to put the picker and the control's min/max/step are read with beacon_picker_anchor
      * and friends. Answer with beacon_picker_set as the choice moves and beacon_picker_close
      * when the picker goes away. */
-    BEACON_PICKER = 17
+    BEACON_PICKER = 17,
+    /* A gemini server showed another certificate than on the first visit, and the load in
+     * `tab` was refused. `text` is the new certificate's SHA-256 as AB:CD:..., `number` a
+     * question id. Answer with beacon_certificate_trust or beacon_question_dismiss. */
+    BEACON_CERTIFICATE_CHANGED = 18,
+    /* A gemini server asked for a client certificate, and the load in `tab` failed.
+     * `text` is the server's message, `number` a question id. Answer with
+     * beacon_identity_make or beacon_question_dismiss. */
+    BEACON_IDENTITY_ASKED = 19,
+    /* As BEACON_IDENTITY_ASKED, but the server refused the identity it was given. Answer
+     * with beacon_identity_make (a new one in its place), beacon_identity_forget, or
+     * beacon_question_dismiss. */
+    BEACON_IDENTITY_REFUSED = 20
 } BeaconEventKind;
 
 typedef struct {
@@ -638,6 +650,22 @@ typedef enum {
 char *beacon_download_offer_url(BeaconBrowser *browser, uint64_t offer);
 uint64_t beacon_download_accept(BeaconBrowser *browser, uint64_t offer, const char *path);
 void beacon_download_reject(BeaconBrowser *browser, uint64_t offer);
+
+/* Questions a failed load asks the user: BEACON_CERTIFICATE_CHANGED, BEACON_IDENTITY_ASKED
+ * and BEACON_IDENTITY_REFUSED carry an id in `number`. A tab has at most one open; a newer
+ * one, or closing the tab, drops it. What is trusted or made is what was asked about, so
+ * the answer names only the id.
+ *
+ * beacon_question_url is the page it was asked on, which is also the place an identity is
+ * for: it goes to that host and port and the paths at or below it. Free with
+ * beacon_string_free; NULL for an unknown id. beacon_certificate_trust and
+ * beacon_identity_make store the answer and load the page again, and say whether they
+ * did. The identity's `name` is what the server sees; ask the user for it. */
+char *beacon_question_url(BeaconBrowser *browser, uint64_t question);
+bool beacon_certificate_trust(BeaconBrowser *browser, uint64_t question);
+bool beacon_identity_make(BeaconBrowser *browser, uint64_t question, const char *name);
+bool beacon_identity_forget(BeaconBrowser *browser, uint64_t question);
+void beacon_question_dismiss(BeaconBrowser *browser, uint64_t question);
 
 size_t beacon_download_count(BeaconBrowser *browser);
 uint64_t beacon_download_at(BeaconBrowser *browser, size_t index);

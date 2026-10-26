@@ -167,6 +167,11 @@ pub struct BeaconBrowser {
     /// The last picker request, read back by `beacon_picker_anchor` and friends after the
     /// `BEACON_PICKER` event carrying the kind and value.
     picker: Option<PickerDetails>,
+    /// What failed loads asked the user and the shell has not answered yet, at most one per
+    /// tab, keyed by the id the event carries. What is trusted or made is what is kept here,
+    /// never something the shell hands back.
+    questions: HashMap<u64, Question>,
+    next_question: u64,
 
     /// The wgpu device Vello draws through, kept so attached views can share it.
     #[cfg(target_os = "macos")]
@@ -208,6 +213,16 @@ struct PickerDetails {
     step: Option<String>,
 }
 
+/// A question a failed load asks the user (`BEACON_CERTIFICATE_CHANGED`,
+/// `BEACON_IDENTITY_ASKED`, `BEACON_IDENTITY_REFUSED`).
+struct Question {
+    tab_id: TabId,
+    /// The page to load again once answered; for an identity, also the place it is for.
+    url: url::Url,
+    /// The certificate a changed-certificate question offers to trust.
+    fingerprint: Option<[u8; 32]>,
+}
+
 /// A download the engine offered, waiting for the shell to name a file or decline.
 struct PendingOffer {
     tab_id: TabId,
@@ -245,6 +260,9 @@ pub enum BeaconEventKind {
     NavigationFailed = 15,
     HitTest = 16,
     Picker = 17,
+    CertificateChanged = 18,
+    IdentityAsked = 19,
+    IdentityRefused = 20,
 }
 
 /// A rectangle in the page, in unzoomed CSS px of the viewport.
@@ -350,6 +368,15 @@ fn displayed_url(mode: &GosubRenderMode, url: &url::Url) -> url::Url {
 impl BeaconBrowser {
     fn tab(&self, handle: u64) -> Option<TabId> {
         self.handles.get(&handle).copied()
+    }
+
+    /// Park a question for `tab_id`, replacing one it still has open, and return its id.
+    fn ask(&mut self, tab_id: TabId, url: url::Url, fingerprint: Option<[u8; 32]>) -> u64 {
+        self.questions.retain(|_, question| question.tab_id != tab_id);
+        let id = self.next_question;
+        self.next_question += 1;
+        self.questions.insert(id, Question { tab_id, url, fingerprint });
+        id
     }
 
     fn handle_for(&mut self, tab_id: TabId) -> u64 {
@@ -773,6 +800,8 @@ pub unsafe extern "C" fn beacon_new(config: *const BeaconConfig) -> *mut BeaconB
         offers: HashMap::new(),
         next_offer: 1,
         picker: None,
+        questions: HashMap::new(),
+        next_question: 1,
         pending: Vec::new(),
         strings: Vec::new(),
         frame: Vec::new(),
@@ -884,6 +913,7 @@ pub unsafe extern "C" fn beacon_close_tab(browser: *mut BeaconBrowser, tab: u64)
     b.beacon.mru_mut().forget(tab_id);
     b.viewports.remove(&tab_id);
     b.progress.remove(&tab_id);
+    b.questions.retain(|_, question| question.tab_id != tab_id);
     // Before the handle goes: `beacon_detach_view` resolves the tab through it, so a shell
     // that detaches after closing -- which is the order a tab strip closes a tab in -- would
     // find nothing and leave the surface behind, alive over a view it no longer draws.
@@ -1773,6 +1803,88 @@ pub unsafe extern "C" fn beacon_download_reject(browser: *mut BeaconBrowser, off
     b.offers.remove(&offer);
 }
 
+/// The page a question was asked for: the one a changed certificate was refused on, or the
+/// place an identity is asked for. Free with `beacon_string_free`; NULL for an unknown id.
+///
+/// # Safety
+/// `browser` must be a live handle from [`beacon_new`].
+#[no_mangle]
+pub unsafe extern "C" fn beacon_question_url(browser: *mut BeaconBrowser, question: u64) -> *mut c_char {
+    let b = browser!(browser, std::ptr::null_mut());
+    match b.questions.get(&question) {
+        Some(asked) => to_c_string(asked.url.as_str()),
+        None => std::ptr::null_mut(),
+    }
+}
+
+/// Trust the certificate a `BEACON_CERTIFICATE_CHANGED` question was about, exactly that
+/// one, and load its page again. False for an unknown id or another kind of question.
+///
+/// # Safety
+/// `browser` must be a live handle from [`beacon_new`].
+#[no_mangle]
+pub unsafe extern "C" fn beacon_certificate_trust(browser: *mut BeaconBrowser, question: u64) -> bool {
+    let b = browser!(browser, false);
+    let Some(asked) = b.questions.remove(&question) else { return false };
+    let Some(fingerprint) = asked.fingerprint else { return false };
+    if !b.engine.trust_certificate(&asked.url, &fingerprint) {
+        return false;
+    }
+    b.load(asked.tab_id, asked.url.as_str());
+    true
+}
+
+/// Make an identity called `name` (UTF-8, not empty) for the place a
+/// `BEACON_IDENTITY_ASKED` or `BEACON_IDENTITY_REFUSED` question was asked for, replacing
+/// one there, and load the page again. The server sees the name. False for an unknown id,
+/// a certificate question, an empty name, or when making it failed.
+///
+/// # Safety
+/// `browser` must be a live handle from [`beacon_new`]; `name` a NUL-terminated string.
+#[no_mangle]
+pub unsafe extern "C" fn beacon_identity_make(browser: *mut BeaconBrowser, question: u64, name: *const c_char) -> bool {
+    let b = browser!(browser, false);
+    let Some(name) = to_str(name).map(str::trim).filter(|name| !name.is_empty()) else {
+        return false;
+    };
+    match b.questions.get(&question) {
+        Some(asked) if asked.fingerprint.is_none() => {}
+        _ => return false,
+    }
+    let Some(asked) = b.questions.remove(&question) else { return false };
+    if !b.engine.make_identity(&asked.url, name) {
+        return false;
+    }
+    b.load(asked.tab_id, asked.url.as_str());
+    true
+}
+
+/// Forget the identity a `BEACON_IDENTITY_REFUSED` question's place presents, so it is no
+/// longer given there. Whether there was one.
+///
+/// # Safety
+/// `browser` must be a live handle from [`beacon_new`].
+#[no_mangle]
+pub unsafe extern "C" fn beacon_identity_forget(browser: *mut BeaconBrowser, question: u64) -> bool {
+    let b = browser!(browser, false);
+    match b.questions.get(&question) {
+        Some(asked) if asked.fingerprint.is_none() => {}
+        _ => return false,
+    }
+    let Some(asked) = b.questions.remove(&question) else { return false };
+    b.engine.forget_identity(&asked.url)
+}
+
+/// Leave a question unanswered. The tab keeps its error page.
+///
+/// # Safety
+/// `browser` must be a live handle from [`beacon_new`].
+#[no_mangle]
+pub unsafe extern "C" fn beacon_question_dismiss(browser: *mut BeaconBrowser, question: u64) {
+    let b = browser!(browser);
+    b.questions.remove(&question);
+}
+
 /// # Safety
 /// `browser` must be a live handle from [`beacon_new`].
 #[no_mangle]
@@ -1921,13 +2033,32 @@ pub unsafe extern "C" fn beacon_poll_events(browser: *mut BeaconBrowser, out: *m
                 (BeaconEventKind::NavigationFailed, Some(t), Some(format!("{url}: {error}")), 0.0)
             }
             BeaconEvent::TabCrashed(t, error) => (BeaconEventKind::TabCrashed, Some(t), Some(error), 0.0),
-            // No way to trust the new certificate from a C shell yet: it is said, as a log line.
-            BeaconEvent::CertificateChanged(t, url, _) => (
-                BeaconEventKind::Log,
-                Some(t),
-                Some(format!("the certificate of {url} changed since the first visit")),
-                0.0,
-            ),
+            // Parked with an id, as a download offer is: the shell answers when the user
+            // does, and the answer acts on what was asked, not on anything it passes back.
+            BeaconEvent::CertificateChanged(t, url, fingerprint) => {
+                let question = b.ask(t, url, Some(fingerprint));
+                (
+                    BeaconEventKind::CertificateChanged,
+                    Some(t),
+                    Some(beacon_core::devtools::format_fingerprint(&fingerprint)),
+                    question as f64,
+                )
+            }
+            BeaconEvent::IdentityAsked {
+                tab_id,
+                url,
+                message,
+                presented,
+                ..
+            } => {
+                let question = b.ask(tab_id, url, None);
+                let kind = if presented {
+                    BeaconEventKind::IdentityRefused
+                } else {
+                    BeaconEventKind::IdentityAsked
+                };
+                (kind, Some(tab_id), Some(message), question as f64)
+            }
             BeaconEvent::HoverUrl(t, url) => (BeaconEventKind::HoverUrl, Some(t), url, 0.0),
             BeaconEvent::CursorChanged(t, cursor) => (
                 BeaconEventKind::CursorChanged,

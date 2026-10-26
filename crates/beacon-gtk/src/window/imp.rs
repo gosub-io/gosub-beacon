@@ -3155,6 +3155,143 @@ impl BrowserWindow {
         });
     }
 
+    /// A page's server asked for a client certificate, and the load failed. Asked about in
+    /// the window when it is the active tab's, like a changed certificate. With none
+    /// presented the user may make one; with one presented the server refused it, and the
+    /// user may forget it or make another in its place. Nothing is made without asking: the
+    /// server learns who the user is from it.
+    fn on_identity_asked(&self, tab_id: TabId, url: url::Url, status: u8, message: String, presented: bool) {
+        if self.active_tab_id() != Some(tab_id) {
+            return;
+        }
+        let server = match url.port() {
+            Some(port) => format!("{}:{port}", url.host_str().unwrap_or_default()),
+            None => url.host_str().unwrap_or_default().to_string(),
+        };
+        if !presented {
+            self.ask_identity_name(tab_id, url, server, message);
+            return;
+        }
+        let refusal = if status == 62 {
+            "says the identity you gave it is not valid"
+        } else {
+            "does not accept the identity you gave it"
+        };
+        let dialog = gtk4::AlertDialog::builder()
+            .modal(true)
+            .message(format!("{server} {refusal}"))
+            .detail(format!(
+                "The server says: {message}\n\nYou can keep the identity, forget it so this \
+                 place no longer gets it, or make a new one in its place."
+            ))
+            .buttons(["Keep", "Forget", "Make a New One"])
+            .cancel_button(0)
+            .default_button(0)
+            .build();
+        let window = self.obj().clone();
+        dialog.choose(Some(&*self.obj()), gtk4::gio::Cancellable::NONE, move |answer| {
+            let imp = window.imp();
+            match answer.ok() {
+                Some(1) => {
+                    let forgot = imp.engine.borrow().as_ref().is_some_and(|engine| engine.forget_identity(&url));
+                    if forgot {
+                        imp.log(&format!("Forgot the identity for {server}"));
+                    }
+                }
+                Some(2) => imp.ask_identity_name(tab_id, url, server, message),
+                _ => {}
+            }
+        });
+    }
+
+    /// Ask for a name for a new identity for the place `url` is in, make it, and load `url`
+    /// again with it. The name goes into the certificate, where the server reads it.
+    fn ask_identity_name(&self, tab_id: TabId, url: url::Url, server: String, message: String) {
+        let place = format!("{server}{}", url.path());
+        let dialog = gtk4::Window::builder()
+            .title(format!("Identity for {server}"))
+            .modal(true)
+            .resizable(false)
+            .transient_for(&*self.obj())
+            .build();
+        let content = gtk4::Box::new(gtk4::Orientation::Vertical, 12);
+        content.set_margin_top(18);
+        content.set_margin_bottom(18);
+        content.set_margin_start(18);
+        content.set_margin_end(18);
+        let heading = gtk4::Label::new(Some(&format!("{server} asks who you are")));
+        heading.add_css_class("title-4");
+        heading.set_xalign(0.0);
+        let said = gtk4::Label::new(Some(&format!("The server says: {message}")));
+        said.set_wrap(true);
+        said.set_xalign(0.0);
+        let explained = gtk4::Label::new(Some(&format!(
+            "Beacon can make a certificate for you to give it. It goes to {place} and the pages \
+             under it, and to no other server. The server can recognise you by it on every visit."
+        )));
+        explained.set_wrap(true);
+        explained.set_max_width_chars(48);
+        explained.set_xalign(0.0);
+        let name_label = gtk4::Label::new(Some("Name the server sees"));
+        name_label.set_xalign(0.0);
+        let name = gtk4::Entry::builder()
+            .text(url.host_str().unwrap_or_default())
+            .activates_default(true)
+            .build();
+        let buttons = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
+        buttons.set_halign(gtk4::Align::End);
+        let cancel = gtk4::Button::with_label("Cancel");
+        let make = gtk4::Button::with_label("Make Identity and Reload");
+        make.add_css_class("suggested-action");
+        buttons.append(&cancel);
+        buttons.append(&make);
+        for widget in [
+            heading.upcast_ref::<gtk4::Widget>(),
+            said.upcast_ref(),
+            explained.upcast_ref(),
+            name_label.upcast_ref(),
+            name.upcast_ref(),
+            buttons.upcast_ref(),
+        ] {
+            content.append(widget);
+        }
+        dialog.set_child(Some(&content));
+        dialog.set_default_widget(Some(&make));
+
+        let weak_dialog = dialog.downgrade();
+        cancel.connect_clicked(move |_| {
+            if let Some(dialog) = weak_dialog.upgrade() {
+                dialog.close();
+            }
+        });
+        let window = self.obj().clone();
+        let (weak_dialog, weak_name) = (dialog.downgrade(), name.downgrade());
+        make.connect_clicked(move |_| {
+            let (Some(dialog), Some(name)) = (weak_dialog.upgrade(), weak_name.upgrade()) else {
+                return;
+            };
+            let chosen = name.text().trim().to_string();
+            if chosen.is_empty() {
+                name.grab_focus();
+                return;
+            }
+            let imp = window.imp();
+            let made = imp
+                .engine
+                .borrow()
+                .as_ref()
+                .is_some_and(|engine| engine.make_identity(&url, &chosen));
+            dialog.close();
+            if made {
+                imp.log(&format!("Made an identity for {place}"));
+                let _ = imp.get_sender().send_blocking(Message::LoadUrl(tab_id, url.to_string()));
+            } else {
+                imp.log(&format!("Could not make an identity for {place}"));
+            }
+        });
+        dialog.present();
+    }
+
     /// Whether `tab_id` shows the error page (see `GosubTab::showing_error`).
     fn tab_shows_error(&self, tab_id: TabId) -> bool {
         let manager = self.tab_manager.lock().unwrap();
@@ -5362,6 +5499,13 @@ impl BrowserWindow {
             BeaconEvent::FaviconChanged(tab_id) => self.store_bookmark_favicon(tab_id),
             BeaconEvent::NavigationFailed(tab_id, url, error) => self.on_navigation_failed(tab_id, &url, &error),
             BeaconEvent::CertificateChanged(tab_id, url, fingerprint) => self.on_certificate_changed(tab_id, url, fingerprint),
+            BeaconEvent::IdentityAsked {
+                tab_id,
+                url,
+                status,
+                message,
+                presented,
+            } => self.on_identity_asked(tab_id, url, status, message, presented),
             BeaconEvent::TabCrashed(tab_id, _) => {
                 self.render_areas.borrow_mut().remove(&tab_id);
             }

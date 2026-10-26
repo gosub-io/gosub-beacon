@@ -517,6 +517,23 @@ impl Beacon {
                         out.push(BeaconEvent::CertificateChanged(our_id, url.clone(), *fingerprint));
                     }
                 }
+                if let gosub_engine::LoadError::ClientCertificate {
+                    url: asked_at,
+                    status,
+                    message,
+                    presented,
+                } = &error
+                {
+                    if let Ok(asked_at) = url::Url::parse(asked_at) {
+                        out.push(BeaconEvent::IdentityAsked {
+                            tab_id: our_id,
+                            url: asked_at,
+                            status: *status,
+                            message: message.clone(),
+                            presented: *presented,
+                        });
+                    }
+                }
                 out.push(BeaconEvent::NavigationFailed(our_id, url, error.to_string()));
                 out
             }
@@ -671,6 +688,55 @@ mod tests {
         ));
         assert!(out.contains(&BeaconEvent::LoadingChanged(tab_id, false)));
         assert!(!loading(&beacon, tab_id));
+    }
+
+    /// A gemini failure the user can act on is said beside the failure: a changed
+    /// certificate with its fingerprint, and a request for an identity with what the
+    /// server said. The same failure over https asks nothing.
+    #[test]
+    fn a_gemini_failure_the_user_can_answer_is_said_beside_it() {
+        let (mut beacon, tab_id, engine_id) = beacon_with_tab();
+        let fail = |beacon: &mut Beacon, url: &str, error| {
+            beacon.on_engine_event(nav(
+                engine_id,
+                NavigationEvent::Failed {
+                    nav_id: Some(NavigationId::new()),
+                    url: url::Url::parse(url).unwrap(),
+                    error,
+                },
+            ))
+        };
+        let changed = |fingerprint| gosub_engine::events::LoadError::Tls {
+            kind: gosub_engine::events::TlsFailureKind::Other,
+            host: "example.org".into(),
+            fingerprint: Some(fingerprint),
+            message: "changed".into(),
+        };
+
+        let at = url::Url::parse("gemini://example.org/").unwrap();
+        let out = fail(&mut beacon, at.as_str(), changed([7; 32]));
+        assert!(out.contains(&BeaconEvent::CertificateChanged(tab_id, at, [7; 32])));
+        let out = fail(&mut beacon, "https://example.org/", changed([7; 32]));
+        assert!(!out.iter().any(|e| matches!(e, BeaconEvent::CertificateChanged(..))));
+
+        let asked_at = "gemini://example.org/private/?q";
+        let out = fail(
+            &mut beacon,
+            "gemini://example.org/start",
+            gosub_engine::events::LoadError::ClientCertificate {
+                url: asked_at.into(),
+                status: 61,
+                message: "Not you".into(),
+                presented: true,
+            },
+        );
+        assert!(out.contains(&BeaconEvent::IdentityAsked {
+            tab_id,
+            url: url::Url::parse(asked_at).unwrap(),
+            status: 61,
+            message: "Not you".into(),
+            presented: true,
+        }));
     }
 
     #[test]

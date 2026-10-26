@@ -587,6 +587,11 @@ int main(void) {
     CHECK(beacon_download_offer_url(browser, 12345) == NULL, "an unknown offer has no URL");
     CHECK(beacon_download_accept(browser, 12345, "/tmp/nope") == 0, "accepting an unknown offer returns 0");
     beacon_download_reject(browser, 12345); /* must not crash */
+    CHECK(beacon_question_url(browser, 12345) == NULL, "an unknown question has no URL");
+    CHECK(!beacon_certificate_trust(browser, 12345), "an unknown question trusts nothing");
+    CHECK(!beacon_identity_make(browser, 12345, "Visitor"), "an unknown question makes nothing");
+    CHECK(!beacon_identity_forget(browser, 12345), "an unknown question forgets nothing");
+    beacon_question_dismiss(browser, 12345); /* must not crash */
 
     /* A tab opened from another belongs beside it, not behind everything opened since. */
     BeaconTabId neighbour = beacon_open_tab_after(browser, url_b, tab);

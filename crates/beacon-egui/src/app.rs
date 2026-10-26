@@ -155,6 +155,8 @@ pub struct BeaconApp {
     fling: Option<(egui::Vec2, f64)>,
     /// Where the mouse was over the page last frame, so only real movement reaches the engine.
     last_pointer: Option<egui::Pos2>,
+    /// What a failed load of the active tab asks the user, shown over the page until answered.
+    question: Option<Question>,
     /// The native date or time dialog open over a form control, and what it is for.
     #[cfg(target_os = "android")]
     picker: Option<NativePicker>,
@@ -171,6 +173,26 @@ pub struct BeaconApp {
     published: Arc<Mutex<HashMap<u64, Published>>>,
     #[cfg(target_os = "android")]
     egui_ctx: egui::Context,
+}
+
+/// A question a failed load asks the user, as GTK asks it in a dialog.
+enum Question {
+    /// The server showed another certificate than on the first visit; trusting it
+    /// stores exactly this one.
+    Certificate {
+        tab_id: TabId,
+        url: url::Url,
+        fingerprint: [u8; 32],
+    },
+    /// The server asked for a client certificate. `refused` while the one presented was
+    /// not accepted; `name` is the name being typed for a new one.
+    Identity {
+        tab_id: TabId,
+        url: url::Url,
+        message: String,
+        refused: Option<u8>,
+        name: String,
+    },
 }
 
 /// A native picker in progress. A date and time control asks for its date first, then its
@@ -274,6 +296,7 @@ impl BeaconApp {
             wheel_zoom: 1.0,
             finger: false,
             last_pointer: None,
+            question: None,
             touch_trail: Default::default(),
             fling: None,
             tab_list_open: false,
@@ -568,9 +591,31 @@ impl BeaconApp {
                 }
                 BeaconEvent::FaviconChanged(tab_id) => self.favicons.forget(tab_id),
                 BeaconEvent::NavigationFailed(tab_id, url, error) => self.load_error_page(tab_id, &url, &error),
-                // The error page says the certificate changed; trusting the new one is the GTK
-                // shell's for now.
-                BeaconEvent::CertificateChanged(..) => {}
+                // Asked over the page when it is the active tab's; a background tab keeps its
+                // error page, and asks when it is reloaded in front.
+                BeaconEvent::CertificateChanged(tab_id, url, fingerprint) => {
+                    if self.active() == Some(tab_id) {
+                        self.question = Some(Question::Certificate { tab_id, url, fingerprint });
+                    }
+                }
+                BeaconEvent::IdentityAsked {
+                    tab_id,
+                    url,
+                    status,
+                    message,
+                    presented,
+                } => {
+                    if self.active() == Some(tab_id) {
+                        let name = url.host_str().unwrap_or_default().to_string();
+                        self.question = Some(Question::Identity {
+                            tab_id,
+                            url,
+                            message,
+                            refused: presented.then_some(status),
+                            name,
+                        });
+                    }
+                }
                 // Only the active tab's load is reported. `None` is the load ending, which
                 // runs the bar to the end before it goes.
                 BeaconEvent::LoadProgress(tab_id, fraction) => {
@@ -987,6 +1032,7 @@ impl eframe::App for BeaconApp {
         self.pump_engine();
         #[cfg(target_os = "android")]
         self.poll_picker();
+        self.show_question(&ctx);
 
         let Some(active) = self.active() else { return };
 
@@ -1695,6 +1741,151 @@ impl BeaconApp {
             let max_y = (view.page_height - view.page_viewport_height()).max(0.0);
             view.scroll_x = (view.scroll_x + dx / scale).max(0.0);
             view.scroll_y = (view.scroll_y + dy / scale).clamp(0.0, max_y);
+        }
+    }
+
+    /// The question a failed load asks, over the page, and what the answer does: trusting
+    /// a changed certificate or making an identity stores it and loads the page again.
+    /// Dropped when its tab is no longer the active one.
+    fn show_question(&mut self, ctx: &egui::Context) {
+        let active = self.active();
+        let Some(question) = self.question.as_mut() else { return };
+        let (Question::Certificate { tab_id, .. } | Question::Identity { tab_id, .. }) = question;
+        if active != Some(*tab_id) {
+            self.question = None;
+            return;
+        }
+        let server = |url: &url::Url| match url.port() {
+            Some(port) => format!("{}:{port}", url.host_str().unwrap_or_default()),
+            None => url.host_str().unwrap_or_default().to_string(),
+        };
+        #[derive(PartialEq)]
+        enum Answer {
+            None,
+            Cancel,
+            Trust,
+            Forget,
+            Rename,
+            Make,
+        }
+        let mut answer = Answer::None;
+        let modal = egui::Modal::new(egui::Id::new("load-question")).show(ctx, |ui| {
+            ui.set_max_width(420.0);
+            match question {
+                Question::Certificate { url, fingerprint, .. } => {
+                    let server = server(url);
+                    ui.heading(format!("The certificate of {server} changed"));
+                    ui.label(format!(
+                        "{server} showed another certificate than on your first visit. A server that \
+                         renewed its certificate does this, and so does someone intercepting the \
+                         connection. Trust it only if you expected the change, or can check the \
+                         fingerprint with the server's owner."
+                    ));
+                    ui.label("The new certificate is SHA-256");
+                    ui.monospace(beacon_core::devtools::format_fingerprint(fingerprint));
+                    ui.horizontal(|ui| {
+                        if ui.button("Cancel").clicked() {
+                            answer = Answer::Cancel;
+                        }
+                        if ui.button("Trust and Reload").clicked() {
+                            answer = Answer::Trust;
+                        }
+                    });
+                }
+                Question::Identity {
+                    url,
+                    message,
+                    refused: Some(status),
+                    ..
+                } => {
+                    let refusal = if *status == 62 {
+                        "says the identity you gave it is not valid"
+                    } else {
+                        "does not accept the identity you gave it"
+                    };
+                    ui.heading(format!("{} {refusal}", server(url)));
+                    ui.label(format!("The server says: {message}"));
+                    ui.label(
+                        "You can keep the identity, forget it so this place no longer gets it, \
+                         or make a new one in its place.",
+                    );
+                    ui.horizontal(|ui| {
+                        if ui.button("Keep").clicked() {
+                            answer = Answer::Cancel;
+                        }
+                        if ui.button("Forget").clicked() {
+                            answer = Answer::Forget;
+                        }
+                        if ui.button("Make a New One").clicked() {
+                            answer = Answer::Rename;
+                        }
+                    });
+                }
+                Question::Identity {
+                    url,
+                    message,
+                    refused: None,
+                    name,
+                    ..
+                } => {
+                    let server = server(url);
+                    ui.heading(format!("{server} asks who you are"));
+                    ui.label(format!("The server says: {message}"));
+                    ui.label(format!(
+                        "Beacon can make a certificate for you to give it. It goes to {server}{} and \
+                         the pages under it, and to no other server. The server can recognise you by \
+                         it on every visit.",
+                        url.path()
+                    ));
+                    ui.label("Name the server sees");
+                    let field = ui.text_edit_singleline(name);
+                    let entered = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    ui.horizontal(|ui| {
+                        if ui.button("Cancel").clicked() {
+                            answer = Answer::Cancel;
+                        }
+                        let named = !name.trim().is_empty();
+                        if ui.add_enabled(named, egui::Button::new("Make Identity and Reload")).clicked() || (entered && named) {
+                            answer = Answer::Make;
+                        }
+                    });
+                }
+            }
+        });
+        if modal.should_close() && answer == Answer::None {
+            answer = Answer::Cancel;
+        }
+        let reload = match (answer, question) {
+            (Answer::None, _) => return,
+            (Answer::Rename, Question::Identity { refused, .. }) => {
+                *refused = None;
+                return;
+            }
+            (Answer::Trust, Question::Certificate { url, fingerprint, .. }) => {
+                let trusted = self.engine.trust_certificate(url, fingerprint);
+                if trusted {
+                    self.log.push(format!("Trusted the new certificate of {}", server(url)));
+                }
+                trusted.then(|| url.clone())
+            }
+            (Answer::Forget, Question::Identity { url, .. }) => {
+                if self.engine.forget_identity(url) {
+                    self.log.push(format!("Forgot the identity for {}", server(url)));
+                }
+                None
+            }
+            (Answer::Make, Question::Identity { url, name, .. }) => {
+                let made = self.engine.make_identity(url, name.trim());
+                if !made {
+                    self.log.push(format!("Could not make an identity for {}", server(url)));
+                }
+                made.then(|| url.clone())
+            }
+            _ => None,
+        };
+        self.question = None;
+        if let Some(url) = reload {
+            self.navigate_active(url.as_str());
         }
     }
 
