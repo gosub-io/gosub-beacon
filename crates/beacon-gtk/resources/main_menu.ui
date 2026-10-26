@@ -143,6 +143,16 @@
                             <attribute name="action">app.devtools-page</attribute>
                             <attribute name="target">history</attribute>
                         </item>
+                        <item>
+                            <attribute name="label">Timeline</attribute>
+                            <attribute name="action">app.devtools-page</attribute>
+                            <attribute name="target">timeline</attribute>
+                        </item>
+                        <item>
+                            <attribute name="label">Processes</attribute>
+                            <attribute name="action">app.devtools-page</attribute>
+                            <attribute name="target">processes</attribute>
+                        </item>
                     </section>
                     <section>
                         <item>
@@ -151,6 +161,10 @@
                         </item>
                     </section>
                 </submenu>
+                <item>
+                    <attribute name="label">Export HAR</attribute>
+                    <attribute name="action">app.export-har</attribute>
+                </item>
             </section>
 
             <section>

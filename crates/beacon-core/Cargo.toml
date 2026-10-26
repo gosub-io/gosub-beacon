@@ -19,6 +19,7 @@ gosub_shared.workspace = true
 beacon-profile = { path = "../beacon-profile" }
 
 anyhow.workspace = true
+chrono.workspace = true
 clap.workspace = true
 dirs.workspace = true
 lazy_static.workspace = true
@@ -30,3 +31,7 @@ sys-locale.workspace = true
 tokio.workspace = true
 url.workspace = true
 uuid.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# The clock-tick rate `/proc` start times are counted in, for the Processes tab.
+rustix = { version = "1.1", features = ["param"] }
