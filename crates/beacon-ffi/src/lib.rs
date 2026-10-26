@@ -1921,6 +1921,13 @@ pub unsafe extern "C" fn beacon_poll_events(browser: *mut BeaconBrowser, out: *m
                 (BeaconEventKind::NavigationFailed, Some(t), Some(format!("{url}: {error}")), 0.0)
             }
             BeaconEvent::TabCrashed(t, error) => (BeaconEventKind::TabCrashed, Some(t), Some(error), 0.0),
+            // No way to trust the new certificate from a C shell yet: it is said, as a log line.
+            BeaconEvent::CertificateChanged(t, url, _) => (
+                BeaconEventKind::Log,
+                Some(t),
+                Some(format!("the certificate of {url} changed since the first visit")),
+                0.0,
+            ),
             BeaconEvent::HoverUrl(t, url) => (BeaconEventKind::HoverUrl, Some(t), url, 0.0),
             BeaconEvent::CursorChanged(t, cursor) => (
                 BeaconEventKind::CursorChanged,

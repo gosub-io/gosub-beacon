@@ -60,6 +60,11 @@ pub enum BeaconEvent {
     /// A navigation failed. The frontend decides what to show — Beacon renders an error
     /// page into the tab rather than replacing the chrome.
     NavigationFailed(TabId, Url, String),
+    /// A page's server showed another certificate than the one first seen there
+    /// (`gemini://`), and the load was refused. Sent beside `NavigationFailed`; the frontend
+    /// may offer to trust the new certificate, whose SHA-256 this is
+    /// (`BeaconEngine::trust_certificate`).
+    CertificateChanged(TabId, Url, [u8; 32]),
     /// The tab's engine worker died; the tab is now marked crashed.
     TabCrashed(TabId, String),
 

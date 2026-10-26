@@ -568,6 +568,9 @@ impl BeaconApp {
                 }
                 BeaconEvent::FaviconChanged(tab_id) => self.favicons.forget(tab_id),
                 BeaconEvent::NavigationFailed(tab_id, url, error) => self.load_error_page(tab_id, &url, &error),
+                // The error page says the certificate changed; trusting the new one is the GTK
+                // shell's for now.
+                BeaconEvent::CertificateChanged(..) => {}
                 // Only the active tab's load is reported. `None` is the load ending, which
                 // runs the bar to the end before it goes.
                 BeaconEvent::LoadProgress(tab_id, fraction) => {

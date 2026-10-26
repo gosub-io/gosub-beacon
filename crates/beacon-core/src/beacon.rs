@@ -508,6 +508,15 @@ impl Beacon {
                 if is_active {
                     out.push(BeaconEvent::LoadProgress(our_id, None));
                 }
+                if let gosub_engine::LoadError::Tls {
+                    fingerprint: Some(fingerprint),
+                    ..
+                } = &error
+                {
+                    if gosub_engine::net::protocols::known_hosts::key_for(&url).is_some() {
+                        out.push(BeaconEvent::CertificateChanged(our_id, url.clone(), *fingerprint));
+                    }
+                }
                 out.push(BeaconEvent::NavigationFailed(our_id, url, error.to_string()));
                 out
             }

@@ -3106,6 +3106,50 @@ impl BrowserWindow {
         self.load_error_page(our_id, url, error);
     }
 
+    /// A page's server showed another certificate than the one first seen there, and the
+    /// load was refused. Asked about in the window when it is the active tab's: trusting
+    /// stores exactly the certificate shown here and loads the page again. A background
+    /// tab keeps its error page, and asks when it is reloaded in front.
+    fn on_certificate_changed(&self, tab_id: TabId, url: url::Url, fingerprint: [u8; 32]) {
+        if self.active_tab_id() != Some(tab_id) {
+            return;
+        }
+        let server = match url.port() {
+            Some(port) => format!("{}:{port}", url.host_str().unwrap_or_default()),
+            None => url.host_str().unwrap_or_default().to_string(),
+        };
+        let sha256 = fingerprint.iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join(":");
+        let dialog = gtk4::AlertDialog::builder()
+            .modal(true)
+            .message(format!("The certificate of {server} changed"))
+            .detail(format!(
+                "{server} showed another certificate than on your first visit. A server that \
+                 renewed its certificate does this, and so does someone intercepting the \
+                 connection.\n\nThe new certificate is SHA-256\n{sha256}\n\nTrust it only if you \
+                 expected the change, or can check the fingerprint with the server's owner."
+            ))
+            .buttons(["Cancel", "Trust and Reload"])
+            .cancel_button(0)
+            .default_button(0)
+            .build();
+        let window = self.obj().clone();
+        dialog.choose(Some(&*self.obj()), gtk4::gio::Cancellable::NONE, move |answer| {
+            if answer.ok() != Some(1) {
+                return;
+            }
+            let imp = window.imp();
+            let trusted = imp
+                .engine
+                .borrow()
+                .as_ref()
+                .is_some_and(|engine| engine.trust_certificate(&url, &fingerprint));
+            if trusted {
+                imp.log(&format!("Trusted the new certificate of {server}"));
+                let _ = imp.get_sender().send_blocking(Message::LoadUrl(tab_id, url.to_string()));
+            }
+        });
+    }
+
     /// Whether `tab_id` shows the error page (see `GosubTab::showing_error`).
     fn tab_shows_error(&self, tab_id: TabId) -> bool {
         let manager = self.tab_manager.lock().unwrap();
@@ -5312,6 +5356,7 @@ impl BrowserWindow {
             // `TabsChanged` asks for. A bookmarked page's icon also goes to its bookmark.
             BeaconEvent::FaviconChanged(tab_id) => self.store_bookmark_favicon(tab_id),
             BeaconEvent::NavigationFailed(tab_id, url, error) => self.on_navigation_failed(tab_id, &url, &error),
+            BeaconEvent::CertificateChanged(tab_id, url, fingerprint) => self.on_certificate_changed(tab_id, url, fingerprint),
             BeaconEvent::TabCrashed(tab_id, _) => {
                 self.render_areas.borrow_mut().remove(&tab_id);
             }
