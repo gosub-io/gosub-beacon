@@ -223,6 +223,15 @@ struct Question {
     fingerprint: Option<[u8; 32]>,
 }
 
+/// Take question `id` out to answer it, when `wanted` says it is the kind being answered.
+/// Any other call leaves it parked: answering the wrong kind must not throw the question away.
+fn take_question(questions: &mut HashMap<u64, Question>, id: u64, wanted: impl Fn(&Question) -> bool) -> Option<Question> {
+    if !questions.get(&id).is_some_and(wanted) {
+        return None;
+    }
+    questions.remove(&id)
+}
+
 /// A download the engine offered, waiting for the shell to name a file or decline.
 struct PendingOffer {
     tab_id: TabId,
@@ -1825,7 +1834,9 @@ pub unsafe extern "C" fn beacon_question_url(browser: *mut BeaconBrowser, questi
 #[no_mangle]
 pub unsafe extern "C" fn beacon_certificate_trust(browser: *mut BeaconBrowser, question: u64) -> bool {
     let b = browser!(browser, false);
-    let Some(asked) = b.questions.remove(&question) else { return false };
+    let Some(asked) = take_question(&mut b.questions, question, |asked| asked.fingerprint.is_some()) else {
+        return false;
+    };
     let Some(fingerprint) = asked.fingerprint else { return false };
     if !b.engine.trust_certificate(&asked.url, &fingerprint) {
         return false;
@@ -1847,11 +1858,9 @@ pub unsafe extern "C" fn beacon_identity_make(browser: *mut BeaconBrowser, quest
     let Some(name) = to_str(name).map(str::trim).filter(|name| !name.is_empty()) else {
         return false;
     };
-    match b.questions.get(&question) {
-        Some(asked) if asked.fingerprint.is_none() => {}
-        _ => return false,
-    }
-    let Some(asked) = b.questions.remove(&question) else { return false };
+    let Some(asked) = take_question(&mut b.questions, question, |asked| asked.fingerprint.is_none()) else {
+        return false;
+    };
     if !b.engine.make_identity(&asked.url, name) {
         return false;
     }
@@ -1867,11 +1876,9 @@ pub unsafe extern "C" fn beacon_identity_make(browser: *mut BeaconBrowser, quest
 #[no_mangle]
 pub unsafe extern "C" fn beacon_identity_forget(browser: *mut BeaconBrowser, question: u64) -> bool {
     let b = browser!(browser, false);
-    match b.questions.get(&question) {
-        Some(asked) if asked.fingerprint.is_none() => {}
-        _ => return false,
-    }
-    let Some(asked) = b.questions.remove(&question) else { return false };
+    let Some(asked) = take_question(&mut b.questions, question, |asked| asked.fingerprint.is_none()) else {
+        return false;
+    };
     b.engine.forget_identity(&asked.url)
 }
 
@@ -2409,5 +2416,38 @@ pub unsafe extern "C" fn beacon_draw_view(browser: *mut BeaconBrowser, tab: u64)
         let b = browser!(browser, false);
         let Some(tab_id) = b.tab(tab) else { return false };
         b.present_latest(tab_id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parked(fingerprint: Option<[u8; 32]>) -> HashMap<u64, Question> {
+        let url = url::Url::parse("gemini://example.org/").unwrap();
+        HashMap::from([(
+            1,
+            Question {
+                tab_id: TabId::new(),
+                url,
+                fingerprint,
+            },
+        )])
+    }
+
+    #[test]
+    fn answering_the_wrong_kind_leaves_the_question_parked() {
+        let mut questions = parked(None);
+        assert!(take_question(&mut questions, 1, |asked| asked.fingerprint.is_some()).is_none());
+        assert!(questions.contains_key(&1));
+        assert!(take_question(&mut questions, 1, |asked| asked.fingerprint.is_none()).is_some());
+        assert!(questions.is_empty());
+    }
+
+    #[test]
+    fn an_unknown_question_is_not_taken() {
+        let mut questions = parked(Some([7; 32]));
+        assert!(take_question(&mut questions, 2, |_| true).is_none());
+        assert_eq!(questions.len(), 1);
     }
 }
