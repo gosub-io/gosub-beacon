@@ -660,7 +660,9 @@ void beacon_download_reject(BeaconBrowser *browser, uint64_t offer);
  * for: it goes to that host and port and the paths at or below it. Free with
  * beacon_string_free; NULL for an unknown id. beacon_certificate_trust and
  * beacon_identity_make store the answer and load the page again, and say whether they
- * did. The identity's `name` is what the server sees; ask the user for it. */
+ * did. The identity's `name` is what the server sees; ask the user for it.
+ * beacon_identity_forget answers BEACON_IDENTITY_REFUSED only. A call for the wrong kind
+ * returns false and leaves the question open. */
 char *beacon_question_url(BeaconBrowser *browser, uint64_t question);
 bool beacon_certificate_trust(BeaconBrowser *browser, uint64_t question);
 bool beacon_identity_make(BeaconBrowser *browser, uint64_t question, const char *name);

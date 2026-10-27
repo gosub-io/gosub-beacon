@@ -221,6 +221,9 @@ struct Question {
     url: url::Url,
     /// The certificate a changed-certificate question offers to trust.
     fingerprint: Option<[u8; 32]>,
+    /// An identity question about one that was presented and refused
+    /// (`BEACON_IDENTITY_REFUSED`), the only kind there is one to forget for.
+    presented: bool,
 }
 
 /// Take question `id` out to answer it, when `wanted` says it is the kind being answered.
@@ -380,11 +383,19 @@ impl BeaconBrowser {
     }
 
     /// Park a question for `tab_id`, replacing one it still has open, and return its id.
-    fn ask(&mut self, tab_id: TabId, url: url::Url, fingerprint: Option<[u8; 32]>) -> u64 {
+    fn ask(&mut self, tab_id: TabId, url: url::Url, fingerprint: Option<[u8; 32]>, presented: bool) -> u64 {
         self.questions.retain(|_, question| question.tab_id != tab_id);
         let id = self.next_question;
         self.next_question += 1;
-        self.questions.insert(id, Question { tab_id, url, fingerprint });
+        self.questions.insert(
+            id,
+            Question {
+                tab_id,
+                url,
+                fingerprint,
+                presented,
+            },
+        );
         id
     }
 
@@ -1869,14 +1880,15 @@ pub unsafe extern "C" fn beacon_identity_make(browser: *mut BeaconBrowser, quest
 }
 
 /// Forget the identity a `BEACON_IDENTITY_REFUSED` question's place presents, so it is no
-/// longer given there. Whether there was one.
+/// longer given there. Whether there was one; false for any other kind of question, which
+/// stays open.
 ///
 /// # Safety
 /// `browser` must be a live handle from [`beacon_new`].
 #[no_mangle]
 pub unsafe extern "C" fn beacon_identity_forget(browser: *mut BeaconBrowser, question: u64) -> bool {
     let b = browser!(browser, false);
-    let Some(asked) = take_question(&mut b.questions, question, |asked| asked.fingerprint.is_none()) else {
+    let Some(asked) = take_question(&mut b.questions, question, |asked| asked.presented) else {
         return false;
     };
     b.engine.forget_identity(&asked.url)
@@ -2043,7 +2055,7 @@ pub unsafe extern "C" fn beacon_poll_events(browser: *mut BeaconBrowser, out: *m
             // Parked with an id, as a download offer is: the shell answers when the user
             // does, and the answer acts on what was asked, not on anything it passes back.
             BeaconEvent::CertificateChanged(t, url, fingerprint) => {
-                let question = b.ask(t, url, Some(fingerprint));
+                let question = b.ask(t, url, Some(fingerprint), false);
                 (
                     BeaconEventKind::CertificateChanged,
                     Some(t),
@@ -2058,7 +2070,7 @@ pub unsafe extern "C" fn beacon_poll_events(browser: *mut BeaconBrowser, out: *m
                 presented,
                 ..
             } => {
-                let question = b.ask(tab_id, url, None);
+                let question = b.ask(tab_id, url, None, presented);
                 let kind = if presented {
                     BeaconEventKind::IdentityRefused
                 } else {
@@ -2423,7 +2435,7 @@ pub unsafe extern "C" fn beacon_draw_view(browser: *mut BeaconBrowser, tab: u64)
 mod tests {
     use super::*;
 
-    fn parked(fingerprint: Option<[u8; 32]>) -> HashMap<u64, Question> {
+    fn parked(fingerprint: Option<[u8; 32]>, presented: bool) -> HashMap<u64, Question> {
         let url = url::Url::parse("gemini://example.org/").unwrap();
         HashMap::from([(
             1,
@@ -2431,13 +2443,14 @@ mod tests {
                 tab_id: TabId::new(),
                 url,
                 fingerprint,
+                presented,
             },
         )])
     }
 
     #[test]
     fn answering_the_wrong_kind_leaves_the_question_parked() {
-        let mut questions = parked(None);
+        let mut questions = parked(None, false);
         assert!(take_question(&mut questions, 1, |asked| asked.fingerprint.is_some()).is_none());
         assert!(questions.contains_key(&1));
         assert!(take_question(&mut questions, 1, |asked| asked.fingerprint.is_none()).is_some());
@@ -2446,8 +2459,17 @@ mod tests {
 
     #[test]
     fn an_unknown_question_is_not_taken() {
-        let mut questions = parked(Some([7; 32]));
+        let mut questions = parked(Some([7; 32]), false);
         assert!(take_question(&mut questions, 2, |_| true).is_none());
         assert_eq!(questions.len(), 1);
+    }
+
+    #[test]
+    fn only_a_refused_identity_is_there_to_forget() {
+        let mut questions = parked(None, false);
+        assert!(take_question(&mut questions, 1, |asked| asked.presented).is_none());
+        assert!(questions.contains_key(&1));
+        let mut questions = parked(None, true);
+        assert!(take_question(&mut questions, 1, |asked| asked.presented).is_some());
     }
 }
