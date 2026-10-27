@@ -16,6 +16,10 @@ use beacon_profile::crypto::Store;
 use gosub_engine::cookies::SqliteCookieStore;
 use gosub_engine::events::EngineEvent;
 use gosub_engine::html::RenderConfiguration;
+use gosub_engine::net::protocols::identities::{
+    ClientIdentitiesHandle, ClientIdentity, IdentityScope, InMemoryClientIdentities, SqliteClientIdentities,
+};
+use gosub_engine::net::protocols::known_hosts::{key_for, CertPin, InMemoryKnownHosts, KnownHostsHandle, SqliteKnownHosts};
 use gosub_engine::places::SqlitePlaces;
 use gosub_engine::storage::{InMemorySessionStore, PartitionPolicy, SqliteLocalStore, StorageService};
 use gosub_engine::tab::TabHandle;
@@ -42,6 +46,10 @@ impl<C: RenderConfiguration<CompositorSink = DefaultCompositor>> BeaconConfig fo
 pub struct BrowserEngine<C: BeaconConfig> {
     /// Bookmarks + visited history store, shared with the engine's zone.
     places: gosub_engine::places::PlacesHandle,
+    /// The certificates `gemini://` trusted on first use, shared with the engine's zone.
+    known_hosts: KnownHostsHandle,
+    /// The client certificates `gemini://` presents, shared with the engine's zone.
+    client_identities: ClientIdentitiesHandle,
     /// Kept alive so the engine keeps running for the lifetime of the window; stopped by
     /// [`BrowserEngine::shutdown`].
     engine: GosubEngine<C>,
@@ -222,6 +230,30 @@ impl<C: BeaconConfig> BrowserEngine<C> {
             })
         });
 
+        // The certificates gemini:// trusted on first use. A private window remembers them
+        // only while it is open, like the rest of what it sees.
+        let known_hosts: KnownHostsHandle = if private {
+            InMemoryKnownHosts::handle()
+        } else {
+            Arc::new(
+                SqliteKnownHosts::open(data_dir.join(Store::KnownHosts.file_name()), Some(key(Store::KnownHosts)?))
+                    .map_err(|e| anyhow::anyhow!("known hosts: {e:?}"))?,
+            )
+        };
+        // The identities the user made for gemini:// servers. A private window's are gone
+        // when it closes, and it never presents the profile's.
+        let client_identities: ClientIdentitiesHandle = if private {
+            InMemoryClientIdentities::handle()
+        } else {
+            Arc::new(
+                SqliteClientIdentities::open(
+                    data_dir.join(Store::ClientIdentities.file_name()),
+                    Some(key(Store::ClientIdentities)?),
+                )
+                .map_err(|e| anyhow::anyhow!("client identities: {e:?}"))?,
+            )
+        };
+
         let zone_services = if private {
             // Everything in memory, nothing recorded: gone when the window closes.
             ZoneServices {
@@ -272,11 +304,15 @@ impl<C: BeaconConfig> BrowserEngine<C> {
             .config(zone_cfg)
             .id(ZoneId::from(profile.zone_id()))
             .services(zone_services)
+            .known_hosts(known_hosts.clone())
+            .client_identities(client_identities.clone())
             .create()
             .map_err(|e| anyhow::anyhow!("create_zone: {e:?}"))?;
 
         Ok(Self {
             places,
+            known_hosts,
+            client_identities,
             engine,
             zone,
             compositor,
@@ -305,6 +341,48 @@ impl<C: BeaconConfig> BrowserEngine<C> {
     /// Bookmarks + visited history (star button, bookmarks bar, URL completion).
     pub fn places(&self) -> gosub_engine::places::PlacesHandle {
         self.places.clone()
+    }
+
+    /// Trust the certificate a refused visit to `url` was shown (`fingerprint`, from
+    /// `BeaconEvent::CertificateChanged`) in place of the one pinned there, so the next visit
+    /// goes through. Exactly that certificate: whatever the server shows after it is held
+    /// to it. False for a page whose protocol pins nothing.
+    pub fn trust_certificate(&self, url: &url::Url, fingerprint: &[u8; 32]) -> bool {
+        let Some((host, port)) = key_for(url) else {
+            return false;
+        };
+        self.known_hosts.remember(&host, port, &CertPin::from_digest(fingerprint));
+        true
+    }
+
+    /// Make an identity called `name` for the place a server asked for one at `url` (from
+    /// `BeaconEvent::IdentityAsked`), replacing one already there, so the next visit
+    /// presents it. It covers the host and port of `url` and every path at or below its
+    /// path. False for a page whose protocol presents none, or when making it failed.
+    pub fn make_identity(&self, url: &url::Url, name: &str) -> bool {
+        let Some(scope) = IdentityScope::for_url(url) else {
+            return false;
+        };
+        match ClientIdentity::generate(scope, name) {
+            Ok(identity) => {
+                self.client_identities.add(identity);
+                true
+            }
+            Err(e) => {
+                log::warn!("could not make an identity for {url}: {e}");
+                false
+            }
+        }
+    }
+
+    /// Stop presenting the identity `url` would present. Whether there was one.
+    pub fn forget_identity(&self, url: &url::Url) -> bool {
+        let port = key_for(url).map(|(_, port)| port);
+        let Some(identity) = port.and_then(|port| self.client_identities.for_url(url, port)) else {
+            return false;
+        };
+        self.client_identities.remove(&identity.scope);
+        true
     }
 
     /// The engine's settings store (backs the `gosub://config` page).

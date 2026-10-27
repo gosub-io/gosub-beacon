@@ -13,6 +13,8 @@ license = "MIT"
 gosub_engine = { path = "../gosub-engine/crates/gosub_engine", features = [
     "sqlite_cookie_store",
     "sqlite_places",
+    "sqlite_known_hosts",
+    "sqlite_client_identities",
     # Encrypted profiles. OpenSSL is built in rather than linked, so no platform needs a
     # libcrypto at run time.
     "sqlcipher-vendored-openssl",

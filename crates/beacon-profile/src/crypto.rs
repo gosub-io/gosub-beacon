@@ -216,10 +216,21 @@ pub enum Store {
     Cookies,
     Places,
     LocalStorage,
+    /// The certificates `gemini://` trusted on first use.
+    KnownHosts,
+    /// The client certificates `gemini://` presents, private keys included.
+    ClientIdentities,
 }
 
 impl Store {
-    pub const ALL: [Store; 4] = [Store::Settings, Store::Cookies, Store::Places, Store::LocalStorage];
+    pub const ALL: [Store; 6] = [
+        Store::Settings,
+        Store::Cookies,
+        Store::Places,
+        Store::LocalStorage,
+        Store::KnownHosts,
+        Store::ClientIdentities,
+    ];
 
     /// The database file inside the profile folder.
     pub fn file_name(self) -> &'static str {
@@ -228,6 +239,8 @@ impl Store {
             Store::Cookies => "cookies.db",
             Store::Places => "places.db",
             Store::LocalStorage => "local-storage.db",
+            Store::KnownHosts => "known-hosts.db",
+            Store::ClientIdentities => "client-identities.db",
         }
     }
 
@@ -237,6 +250,8 @@ impl Store {
             Store::Cookies => b"gosub-beacon store v1 cookies",
             Store::Places => b"gosub-beacon store v1 places",
             Store::LocalStorage => b"gosub-beacon store v1 local-storage",
+            Store::KnownHosts => b"gosub-beacon store v1 known-hosts",
+            Store::ClientIdentities => b"gosub-beacon store v1 client-identities",
         }
     }
 }
