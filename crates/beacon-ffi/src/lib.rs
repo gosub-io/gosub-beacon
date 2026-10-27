@@ -614,6 +614,9 @@ impl BeaconBrowser {
     /// tab, a restarted worker -- so `view-source:` typed into the address bar and
     /// `beacon_view_source` cannot end up meaning different things.
     fn load(&mut self, tab_id: TabId, address: &str) {
+        // Answering a question loads its page again, so one left open past here would
+        // pull the tab back from wherever it is going now.
+        self.questions.retain(|_, question| question.tab_id != tab_id);
         let Ok((mode, url)) = beacon_core::address_parser::GosubAddressParser::parse(address) else {
             return;
         };
@@ -1103,6 +1106,12 @@ macro_rules! active_command {
         #[no_mangle]
         pub unsafe extern "C" fn $name(browser: *mut BeaconBrowser) {
             let b = browser!(browser);
+            // Leaving the page drops its question, as `load` does.
+            if matches!($command, BeaconCommand::Back | BeaconCommand::Forward(_)) {
+                if let Some(active) = b.tabs.lock().unwrap().active() {
+                    b.questions.retain(|_, question| question.tab_id != active);
+                }
+            }
             let events = b.beacon.apply($command);
             b.queue(events);
         }

@@ -653,7 +653,7 @@ void beacon_download_reject(BeaconBrowser *browser, uint64_t offer);
 
 /* Questions a failed load asks the user: BEACON_CERTIFICATE_CHANGED, BEACON_IDENTITY_ASKED
  * and BEACON_IDENTITY_REFUSED carry an id in `number`. A tab has at most one open; a newer
- * one, or closing the tab, drops it. What is trusted or made is what was asked about, so
+ * one, loading another page in the tab, going back or forward, or closing the tab drops it. What is trusted or made is what was asked about, so
  * the answer names only the id.
  *
  * beacon_question_url is the page it was asked on, which is also the place an identity is
