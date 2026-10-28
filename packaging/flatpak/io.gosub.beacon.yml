@@ -87,12 +87,12 @@ modules:
       #   commit: 002e197c2eeabf05ea28ed49a37f1e6b16ce4ec2  # tip of `beacon`, keep in step with Cargo.lock
       #   dest: gosub-engine
 
-      # Prebuilt Skia, matching skia-bindings 0.99.0 and the feature set the GTK build
+      # Prebuilt Skia, matching skia-bindings 0.153.3 and the feature set the GTK build
       # resolves to. Regenerate with ./refresh-skia.sh when skia-safe is bumped.
       - type: file
-        url: https://github.com/rust-skia/skia-binaries/releases/download/0.99.0/skia-binaries-a25a0fdb7d90429aa2d1-x86_64-unknown-linux-gnu-egl-gl-jpegd-jpege-pdf-svg-textlayout-wayland-x11.tar.gz
-        sha256: 8bbae5ae75610f126bca4433c17de480856163ea6baba84cab120e697d6f8a93
-        dest-filename: skia-binaries-a25a0fdb7d90429aa2d1-x86_64-unknown-linux-gnu-egl-gl-jpegd-jpege-pdf-svg-textlayout-wayland-x11.tar.gz
+        url: https://github.com/rust-skia/skia-binaries/releases/download/0.153.3/skia-binaries-b7f043e0b1e2a850e702-x86_64-unknown-linux-gnu-egl-ganesh-gl-jpegd-jpege-pdf-svg-textlayout-wayland-x11.tar.gz
+        sha256: 0eebabfd94c22e3eb6751c728afec265692a037696acc12820d8fb99dab6fb40
+        dest-filename: skia-binaries-b7f043e0b1e2a850e702-x86_64-unknown-linux-gnu-egl-ganesh-gl-jpegd-jpege-pdf-svg-textlayout-wayland-x11.tar.gz
         only-arches:
           - x86_64
 
