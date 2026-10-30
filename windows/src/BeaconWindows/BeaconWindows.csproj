@@ -8,7 +8,7 @@
 
     <!-- Match the Rust workspace version; .NET defaults to 1.0.0 and the About dialog would
          then disagree with the other two shells. -->
-    <Version>0.1.0</Version>
+    <Version>0.1.1-preview.1</Version>
     <AssemblyName>GosubBeacon</AssemblyName>
     <ApplicationIcon></ApplicationIcon>
 

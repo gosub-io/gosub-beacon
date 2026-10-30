@@ -58,7 +58,7 @@ pub fn run() {
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("Gosub Beacon")
+            .with_title(beacon_core::build_info::product())
             .with_inner_size([1024.0, 768.0]),
         // Vello needs wgpu; there is no software path here.
         renderer: eframe::Renderer::Wgpu,

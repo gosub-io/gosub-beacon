@@ -4,7 +4,7 @@ members = ["crates/beacon", "crates/beacon-android", "crates/beacon-core", "crat
 default-members = ["crates/beacon"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1-preview.1"
 edition = "2021"
 authors = ["Gosub Community <info@gosub.io>"]
 license = "MIT"

@@ -87,7 +87,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
         )
         super.init(window: window)
 
-        window.title = browser.isPrivate ? "Private Browsing" : "Gosub Beacon"
+        window.title = browser.isPrivate ? "Private Browsing" : Bundle.main.productName
         window.delegate = self
         if browser.isPrivate {
             // Dark chrome for a private window, which is the signal Chrome and Firefox both
@@ -567,7 +567,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
     /// A private window keeps saying so in its title, because the page title is the one
     /// piece of chrome someone reads without looking.
     private func setWindowTitle(_ pageTitle: String) {
-        let base = pageTitle.isEmpty ? "Gosub Beacon" : pageTitle
+        let product = Bundle.main.productName
+        let base = pageTitle.isEmpty ? product : "\(pageTitle) — \(product)"
         window?.title = browser.isPrivate ? "\(base) — Private" : base
     }
 

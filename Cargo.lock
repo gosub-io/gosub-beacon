@@ -799,7 +799,7 @@ checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
 name = "beacon-android"
-version = "0.1.0"
+version = "0.1.1-preview.1"
 dependencies = [
  "beacon-egui",
  "winit",
@@ -807,7 +807,7 @@ dependencies = [
 
 [[package]]
 name = "beacon-core"
-version = "0.1.0"
+version = "0.1.1-preview.1"
 dependencies = [
  "anyhow",
  "beacon-profile",
@@ -830,7 +830,7 @@ dependencies = [
 
 [[package]]
 name = "beacon-egui"
-version = "0.1.0"
+version = "0.1.1-preview.1"
 dependencies = [
  "android_logger",
  "anyhow",
@@ -854,7 +854,7 @@ dependencies = [
 
 [[package]]
 name = "beacon-ffi"
-version = "0.1.0"
+version = "0.1.1-preview.1"
 dependencies = [
  "anyhow",
  "beacon-core",
@@ -873,7 +873,7 @@ dependencies = [
 
 [[package]]
 name = "beacon-gtk"
-version = "0.1.0"
+version = "0.1.1-preview.1"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -900,14 +900,14 @@ dependencies = [
 
 [[package]]
 name = "beacon-icon"
-version = "0.1.0"
+version = "0.1.1-preview.1"
 dependencies = [
  "resvg",
 ]
 
 [[package]]
 name = "beacon-profile"
-version = "0.1.0"
+version = "0.1.1-preview.1"
 dependencies = [
  "anyhow",
  "argon2",
@@ -932,7 +932,7 @@ dependencies = [
 
 [[package]]
 name = "beaconctl"
-version = "0.1.0"
+version = "0.1.1-preview.1"
 dependencies = [
  "anyhow",
  "beacon-profile",
@@ -3091,7 +3091,7 @@ dependencies = [
 
 [[package]]
 name = "gosub-beacon"
-version = "0.1.0"
+version = "0.1.1-preview.1"
 dependencies = [
  "beacon-egui",
  "beacon-gtk",

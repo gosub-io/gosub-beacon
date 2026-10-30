@@ -8,7 +8,7 @@
 # `rustup toolchain install "$(cat scripts/release-toolchain)" --target aarch64-linux-android`
 # (`armv7-linux-androideabi` for armeabi-v7a), and a JDK for javac. ANDROID_HOME defaults to
 # ~/Android/Sdk and ANDROID_NDK_HOME to the newest NDK under it.
-# Output: target/android/gosub-beacon.apk.
+# Output: target/android/gosub-beacon-<version>-<abi>.apk.
 set -euo pipefail
 
 INSTALL=0
@@ -37,6 +37,7 @@ TARGET_SDK=34
 VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' "$ROOT/Cargo.toml" | head -1)
 
 OUT=$ROOT/target/android
+APK=$OUT/gosub-beacon-$VERSION-$ABI.apk
 STAGE=$OUT/stage
 rm -rf "$STAGE"
 mkdir -p "$STAGE/apk/lib" "$STAGE/res/mipmap-xxxhdpi"
@@ -113,10 +114,10 @@ if [ ! -f "$KEYSTORE" ]; then
         -keyalg RSA -keysize 2048 -validity 10000
 fi
 "$BUILD_TOOLS/apksigner" sign --ks "$KEYSTORE" --ks-pass pass:android --key-pass pass:android \
-    --out "$OUT/gosub-beacon.apk" "$STAGE/aligned.apk"
-echo "built $OUT/gosub-beacon.apk ($(du -h "$OUT/gosub-beacon.apk" | cut -f1))"
+    --out "$APK" "$STAGE/aligned.apk"
+echo "built $APK ($(du -h "$APK" | cut -f1))"
 
 if [ "$INSTALL" = 1 ]; then
-    adb install -r "$OUT/gosub-beacon.apk"
+    adb install -r "$APK"
     adb shell am start -n io.gosub.beacon/android.app.NativeActivity
 fi

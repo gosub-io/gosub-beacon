@@ -30,7 +30,11 @@ pub struct About;
 
 impl About {
     pub fn create_dialog() -> Window {
-        let window = Window::builder().title("About Gosub Beacon").modal(true).resizable(false).build();
+        let window = Window::builder()
+            .title(format!("About {}", beacon_core::build_info::product()))
+            .modal(true)
+            .resizable(false)
+            .build();
 
         let stack = Stack::new();
         stack.set_transition_type(StackTransitionType::Crossfade);
@@ -124,11 +128,13 @@ impl About {
     /// The version block, for the action bar's centre.
     fn build_info_bar() -> GtkBox {
         let info = GtkBox::new(Orientation::Horizontal, 8);
-        let label = Label::new(Some(concat!(
-            "Gosub Beacon ",
-            env!("CARGO_PKG_VERSION"),
-            " · Powered by the Gosub Engine · © 2024-2026 Gosub contributors"
+        // Two lines: on one the commits widen the dialog past the artwork.
+        let label = Label::new(Some(&format!(
+            "{} {}\nPowered by the Gosub Engine · © 2024-2026 Gosub contributors",
+            beacon_core::build_info::product(),
+            beacon_core::build_info::version_label(),
         )));
+        label.set_justify(gtk4::Justification::Center);
         label.add_css_class("about-info-line");
         info.append(&label);
         let link = LinkButton::with_label("https://gosub.io", "https://gosub.io");

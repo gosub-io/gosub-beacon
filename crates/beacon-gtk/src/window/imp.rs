@@ -3719,8 +3719,7 @@ impl BrowserWindow {
             } else {
                 self.show_address(Some(tab.url()));
             }
-            let suffix = if self.private.get() { " (Private)" } else { "" };
-            self.obj().set_title(Some(&format!("{} — Gosub Beacon{suffix}", tab.title())));
+            self.set_page_title(tab.title());
         }
         drop(manager);
         // The raster DPR is a process-wide atomic: re-store it for this tab's zoom.
@@ -4191,6 +4190,13 @@ impl BrowserWindow {
         self.btn_bookmark.connect_clicked(move |_| {
             window.imp().toggle_bookmark();
         });
+    }
+
+    /// "Page — Gosub Beacon Preview", with " (Private)" in a private window.
+    fn set_page_title(&self, page: &str) {
+        let suffix = if self.private.get() { " (Private)" } else { "" };
+        let product = beacon_core::build_info::product();
+        self.obj().set_title(Some(&format!("{page} — {product}{suffix}")));
     }
 
     /// Put `url` in the address bar, with what the engine says about its connection: a
@@ -5488,7 +5494,7 @@ impl BrowserWindow {
             }
             BeaconEvent::TitleChanged(tab_id, title) => {
                 if self.active_tab_id() == Some(tab_id) {
-                    self.obj().set_title(Some(&format!("{title} — Gosub Beacon")));
+                    self.set_page_title(&title);
                 }
             }
             BeaconEvent::UrlChanged(tab_id, url) => {

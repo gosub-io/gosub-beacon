@@ -326,7 +326,7 @@ public partial class MainWindow : Window
     // ── chrome ─────────────────────────────────────────────────────────────────
 
     private void SetTitle(string? pageTitle) =>
-        Title = string.IsNullOrEmpty(pageTitle) ? "Gosub Beacon" : $"{pageTitle} - Gosub Beacon";
+        Title = string.IsNullOrEmpty(pageTitle) ? BuildInfo.Product : $"{pageTitle} - {BuildInfo.Product}";
 
     private void SyncActiveTab()
     {

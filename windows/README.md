@@ -177,6 +177,7 @@ windows/
     SettingsWindow.cs          the engine's settings store, typed per row
     DownloadsWindow.cs         progress, and open when finished
     AboutWindow.cs             the artwork, and the credits crossfade
+    BuildInfo.cs               version and product name ("Gosub Beacon Preview")
     MainWindow.xaml[.cs]       menu bar, toolbar, the event pump, context menus
     App.xaml[.cs]              startup and the "beacon.dll is missing" message
 ```

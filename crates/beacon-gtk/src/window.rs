@@ -32,7 +32,9 @@ impl BrowserWindow {
         window.imp().private.set(private);
         if private {
             window.add_css_class("private-window");
-            window.set_title(Some("Gosub Beacon (Private)"));
+            window.set_title(Some(&format!("{} (Private)", beacon_core::build_info::product())));
+        } else {
+            window.set_title(Some(beacon_core::build_info::product()));
         }
 
         window.set_resizable(true);

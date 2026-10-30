@@ -32,7 +32,8 @@ that it compiles the engine and Beacon from scratch, so budget for it.
 To ship the result:
 
 ```bash
-flatpak build-bundle ~/.local/share/flatpak/repo beacon.flatpak io.gosub.beacon
+# <version> is the workspace version in Cargo.toml, e.g. 0.1.1-preview.1
+flatpak build-bundle ~/.local/share/flatpak/repo GosubBeacon-<version>.flatpak io.gosub.beacon
 ```
 
 ## Things that will bite

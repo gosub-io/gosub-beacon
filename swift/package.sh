@@ -288,9 +288,10 @@ cat > "$app/Contents/Info.plist" <<PLIST
     <key>CFBundleExecutable</key>        <string>BeaconMac</string>
     <key>CFBundleIconFile</key>          <string>AppIcon</string>
     <key>CFBundlePackageType</key>       <string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>$version</string>
+    <key>CFBundleShortVersionString</key><string>${version%%-*}</string>
     <key>CFBundleVersion</key>           <string>$build</string>
-    <!-- Beacon's own keys: which commit this is, read by the About window. -->
+    <!-- Beacon's own keys: the full version and which commit this is, read by the About window. -->
+    <key>BeaconVersion</key>             <string>$version</string>
     <key>BeaconBuildCommit</key>         <string>$commit</string>
     <key>BeaconEngineCommit</key>        <string>$engine</string>
     <key>BeaconBuildDate</key>           <string>$build_date</string>

@@ -8,6 +8,7 @@
 pub mod activity;
 pub mod address_parser;
 pub mod beacon;
+pub mod build_info;
 pub mod cli;
 pub mod command;
 pub mod devtools;

@@ -61,7 +61,7 @@ final class AboutWindowController: NSWindowController {
         )
         super.init(window: window)
 
-        window.title = "About Gosub Beacon"
+        window.title = "About \(Bundle.main.productName)"
         window.isReleasedWhenClosed = false
         build()
         window.center()
@@ -93,7 +93,9 @@ final class AboutWindowController: NSWindowController {
         closeButton.keyEquivalent = "\u{1b}"
 
         // Two lines: on one the text would run under the buttons at this width.
-        let info = NSTextField(labelWithString: "Gosub Beacon \(Bundle.main.versionLabel) · Powered by the Gosub Engine")
+        let info = NSTextField(
+            labelWithString: "\(Bundle.main.productName) \(Bundle.main.versionLabel) · Powered by the Gosub Engine"
+        )
         info.font = .systemFont(ofSize: 10)
         info.textColor = .secondaryLabelColor
         // The full build identity, for a bug report: hover, or select-and-copy from the label.
@@ -334,8 +336,16 @@ private final class FlippedView: NSView {
 extension Bundle {
     /// The version to show. A `swift run` binary has no Info.plist, so this falls back
     /// rather than showing an empty string in the one place people look for a version.
+    /// The workspace version, "0.1.1-preview.1". CFBundleShortVersionString holds only its
+    /// numbers, which is all macOS accepts there.
     var shortVersion: String {
-        (object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "0.1.0"
+        (object(forInfoDictionaryKey: "BeaconVersion") as? String)
+            ?? (object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "0.1.0"
+    }
+
+    /// "Gosub Beacon Preview" for a preview version. Window titles and About use it.
+    var productName: String {
+        shortVersion.contains("-preview") ? "Gosub Beacon Preview" : "Gosub Beacon"
     }
 
     /// The commit count package.sh wrote into CFBundleVersion; nil for a `swift run` binary.
