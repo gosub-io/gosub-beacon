@@ -51,17 +51,10 @@ pub fn run() {
     beacon_core::isolation::lock_down_broker();
 
     // `build()` rather than `init()`: the logger is handed to beacon-core, which installs
-    // it wrapped so every record it accepts is also kept for the developer pane. colog still
+    // it wrapped so every record it accepts is also kept for the developer pane. env_logger still
     // decides what the terminal sees; the pane just gets a copy.
-    let mut builder = colog::basic_builder();
+    let mut builder = env_logger::Builder::new();
     builder
-        .format_file(true)
-        .format_indent(Some(2))
-        .format_level(true)
-        .format_suffix(" ")
-        .format_module_path(true)
-        .format_source_path(true)
-        .format_target(true)
         .filter(None, log::LevelFilter::Error)
         .filter(Some("gtk"), log::LevelFilter::Info)
         // Our own warnings must not be swallowed by the global Error filter. These match
@@ -78,11 +71,11 @@ pub fn run() {
     }
 
     // `build()` rather than `init()`: the logger goes to beacon-core, which installs it
-    // wrapped so every record it accepts is also kept for the developer pane. colog still
+    // wrapped so every record it accepts is also kept for the developer pane. env_logger still
     // decides what the terminal sees; the pane gets a copy.
     let logger = builder.build();
     // `log` drops anything above the global max before a logger is consulted, so this must
-    // be at least as permissive as colog's own filtering -- which is what `filter()` reports.
+    // be at least as permissive as env_logger's own filtering -- which is what `filter()` reports.
     let max_level = logger.filter();
     beacon_core::devtools::install_logger(Box::new(logger), max_level);
 

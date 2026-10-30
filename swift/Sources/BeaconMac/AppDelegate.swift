@@ -175,7 +175,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         // Settings or About window is in front.
         switch item.action {
         case #selector(showSettings(_:)), #selector(newWindowAction(_:)), #selector(newPrivateWindowAction(_:)),
-            #selector(newTab(_:)), #selector(showAbout), #selector(showHelpPage(_:)), #selector(showVersionPage(_:)):
+            #selector(newTab(_:)), #selector(showAbout), #selector(showHelpPage(_:)), #selector(showVersionPage(_:)),
+            #selector(showLicensesPage(_:)):
             return browser != nil
         default:
             break
@@ -203,6 +204,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     @objc private func showVersionPage(_ sender: Any?) {
         openPage("gosub://version")
+    }
+
+    /// Not private: the About window's Licences button reaches it through the responder chain.
+    @objc func showLicensesPage(_ sender: Any?) {
+        openPage("gosub://licenses")
     }
 
     /// Show a page in the front window, or in a new one when there is no window to show it
@@ -397,6 +403,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let holder = submenu("Help", [
             item("Gosub Beacon Help", #selector(showHelpPage(_:)), "?"),
             item("Engine Version", #selector(showVersionPage(_:))),
+            item("Licences", #selector(showLicensesPage(_:))),
         ])
         NSApp.helpMenu = holder.submenu
         return holder

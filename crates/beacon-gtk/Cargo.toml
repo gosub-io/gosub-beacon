@@ -18,7 +18,7 @@ anyhow.workspace = true
 async-channel.workspace = true
 chrono.workspace = true
 clap.workspace = true
-colog.workspace = true
+env_logger.workspace = true
 lazy_static.workspace = true
 log.workspace = true
 once_cell.workspace = true
@@ -49,7 +49,6 @@ gosub_fontmanager.workspace = true
 # EGL is how Skia binds the GL context on Wayland/X11.
 skia-safe = { workspace = true, features = ["egl"] }
 gtk4.workspace = true
-gtk-macros.workspace = true
 
 # Not on macOS either: it pulls in gio and GLib's -sys crates, which would fail on a Mac without
 # Homebrew before build.rs gets to say anything. On a native Mac build, host and target are

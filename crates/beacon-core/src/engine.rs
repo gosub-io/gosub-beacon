@@ -130,6 +130,16 @@ impl<C: BeaconConfig> BrowserEngine<C> {
         engine
             .internal_pages()
             .register("help", beacon_page(include_str!("../resources/help.html").to_string()));
+        // Third-party notices (scripts/third-party-licenses.sh). Not behind BEACON_PAGES: a
+        // binary we hand out has to carry them whatever the settings say.
+        engine.internal_pages().register(
+            "licenses",
+            Arc::new(|_: &gosub_engine::internal_pages::PageRequest<'_>| {
+                Some(gosub_engine::internal_pages::PageResponse::html(
+                    include_str!("../resources/licenses.html").to_string(),
+                ))
+            }),
+        );
         engine.internal_pages().set_not_found(Arc::new(|req, known| {
             req.settings
                 .get_bool(BEACON_PAGES)

@@ -158,6 +158,21 @@ internal sealed class AboutWindow : Window
         _toggle.Margin = new Thickness(12, 0, 0, 0);
         _toggle.Click += (_, _) => TogglePage();
 
+        var licenses = new Button
+        {
+            Content = "Licences",
+            Width = 80,
+            Height = 24,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(100, 0, 0, 0),
+        };
+        licenses.Click += (_, _) =>
+        {
+            (Owner as MainWindow)?.ShowLicenses();
+            Close();
+        };
+
         var close = new Button
         {
             Content = "Close",
@@ -179,7 +194,7 @@ internal sealed class AboutWindow : Window
             FontSize = 10,
             Foreground = Brushes.DimGray,
             VerticalAlignment = VerticalAlignment.Center,
-            Text = $"Gosub Beacon {version} · Powered by the Gosub Engine · © 2026 Gosub Project  ",
+            Text = $"Gosub Beacon {version} · Powered by the Gosub Engine · © 2024-2026 Gosub contributors  ",
         };
 
         var link = new Hyperlink(new Run("https://gosub.io")) { NavigateUri = new Uri("https://gosub.io") };
@@ -213,6 +228,7 @@ internal sealed class AboutWindow : Window
 
         var bar = new Grid { Height = BarHeight, Background = SystemColors.ControlBrush };
         bar.Children.Add(_toggle);
+        bar.Children.Add(licenses);
         bar.Children.Add(centre);
         bar.Children.Add(close);
         return bar;

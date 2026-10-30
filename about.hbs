@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Third-party licences</title>
+<style>
+    body { font-family: sans-serif; margin: 2em auto; max-width: 60em; padding: 0 1em; line-height: 1.4; }
+    h2 { margin-top: 2em; border-bottom: 1px solid #ccc; }
+    .used-by { color: #555; font-size: 90%; }
+    pre { white-space: pre-wrap; background: #f6f6f6; padding: 1em; font-size: 85%; }
+</style>
+</head>
+<body>
+<h1>Third-party licences</h1>
+<p>Gosub Beacon is made from the open-source components below, each under its own licence.</p>
+<!-- NATIVE -->
+<h2>Rust crates</h2>
+<ul>
+{{#each overview}}
+    <li><a href="#{{id}}">{{name}}</a> ({{count}})</li>
+{{/each}}
+</ul>
+{{#each licenses}}
+<h3 id="{{id}}">{{name}}</h3>
+<p class="used-by">Used by:
+{{#each used_by}}
+    {{crate.name}} {{crate.version}}{{#unless @last}},{{/unless}}
+{{/each}}
+</p>
+<pre>{{text}}</pre>
+{{/each}}
+</body>
+</html>

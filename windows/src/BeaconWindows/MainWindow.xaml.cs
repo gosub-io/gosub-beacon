@@ -559,6 +559,7 @@ public partial class MainWindow : Window
         tools.Items.Add(MenuItemFor("_Settings", ShowSettings));
 
         var help = new MenuItem { Header = "_Help" };
+        help.Items.Add(MenuItemFor("_Licences", ShowLicenses));
         help.Items.Add(MenuItemFor("_About Gosub Beacon", ShowAbout));
 
         MainMenu.Items.Add(file);
@@ -704,6 +705,9 @@ public partial class MainWindow : Window
     }
 
     private void ShowAbout() => new AboutWindow { Owner = this }.ShowDialog();
+
+    /// <summary>Third-party licences, as a tab. Also reached from the About window.</summary>
+    internal void ShowLicenses() => OpenTab("gosub://licenses");
 
     protected override void OnPreviewKeyDown(KeyEventArgs e)
     {

@@ -270,3 +270,21 @@ jobs:
       - name: Run fmt
         working-directory: gosub-beacon
         run: cargo fmt --check --all
+
+  deny:
+    runs-on: ubuntu-24.04
+    steps:
+      # Licences, advisories and sources (deny.toml). The engine has to be here for the
+      # same reason as in fmt: `cargo metadata` resolves the path dependencies.
+      - uses: actions/checkout@v7
+        with:
+          path: gosub-beacon
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ env.ENGINE_REPO }}
+          ref: ${{ env.ENGINE_REF }}
+          path: gosub-engine
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: gosub-beacon/Cargo.toml
+          command: check

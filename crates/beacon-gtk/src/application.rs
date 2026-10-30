@@ -4,7 +4,6 @@ use crate::window::BrowserWindow;
 use gtk4::glib::clone;
 use gtk4::subclass::prelude::GtkApplicationImpl;
 use gtk4::{gio, glib, prelude::*, subclass::prelude::*, Settings};
-use gtk_macros::action;
 use log::info;
 
 /// The app action a second launch hands its URLs to the running instance with: whether it
@@ -117,61 +116,31 @@ impl Application {
         ));
         self.add_action(&open_urls);
 
-        action!(
-            self,
-            "quit",
-            clone!(
-                #[weak(rename_to=app)]
-                self,
-                move |_, _| {
-                    app.quit();
-                }
-            )
-        );
-
-        action!(
-            self,
-            "toggle-dark-mode",
-            clone!(
-                #[weak(rename_to=_app)]
-                self,
-                move |_, _| {
-                    info!(target: "gtk", "Toggle dark mode action triggered");
-                    let settings = Settings::default().expect("Failed to get default GtkSettings");
-                    let mode: bool = settings.property("gtk-application-prefer-dark-theme");
-                    settings.set_property("gtk-application-prefer-dark-theme", !mode);
-                }
-            )
-        );
-
-        action!(
-            self,
-            "show-about",
-            clone!(
-                #[weak(rename_to=app)]
-                self,
-                move |_, _| {
-                    info!(target: "gtk", "Show about dialog action triggered");
-                    let about = About::create_dialog();
-                    about.set_transient_for(app.active_window().as_ref());
-                    about.present();
-                }
-            )
-        );
-
-        action!(
-            self,
-            "show-shortcuts",
-            clone!(
-                #[weak(rename_to=app)]
-                self,
-                move |_, _| {
-                    info!(target: "gtk", "Show about dialog action triggered");
-                    let about = ShortcutsDialog::create_dialog(&app);
-                    about.present();
-                }
-            )
-        );
+        let quit = gio::ActionEntry::builder("quit").activate(|app: &Self, _, _| app.quit()).build();
+        let toggle_dark_mode = gio::ActionEntry::builder("toggle-dark-mode")
+            .activate(|_: &Self, _, _| {
+                info!(target: "gtk", "Toggle dark mode action triggered");
+                let settings = Settings::default().expect("Failed to get default GtkSettings");
+                let mode: bool = settings.property("gtk-application-prefer-dark-theme");
+                settings.set_property("gtk-application-prefer-dark-theme", !mode);
+            })
+            .build();
+        let show_about = gio::ActionEntry::builder("show-about")
+            .activate(|app: &Self, _, _| {
+                info!(target: "gtk", "Show about dialog action triggered");
+                let about = About::create_dialog();
+                about.set_transient_for(app.active_window().as_ref());
+                about.present();
+            })
+            .build();
+        let show_shortcuts = gio::ActionEntry::builder("show-shortcuts")
+            .activate(|app: &Self, _, _| {
+                info!(target: "gtk", "Show about dialog action triggered");
+                let about = ShortcutsDialog::create_dialog(app);
+                about.present();
+            })
+            .build();
+        self.add_action_entries([quit, toggle_dark_mode, show_about, show_shortcuts]);
     }
 
     fn setup_accelerators(&self) {

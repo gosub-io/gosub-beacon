@@ -83,6 +83,9 @@ final class AboutWindowController: NSWindowController {
         toggleButton.target = self
         toggleButton.action = #selector(togglePage)
 
+        let licensesButton = NSButton(title: "Licences", target: self, action: #selector(openLicenses))
+        licensesButton.bezelStyle = .rounded
+
         let closeButton = NSButton(title: "Close", target: self, action: #selector(closeWindow))
         closeButton.bezelStyle = .rounded
         // Escape closes, which is what the GTK dialog binds and what a Mac panel should do
@@ -90,7 +93,7 @@ final class AboutWindowController: NSWindowController {
         closeButton.keyEquivalent = "\u{1b}"
 
         let info = NSTextField(
-            labelWithString: "Gosub Beacon \(Bundle.main.versionLabel) · Powered by the Gosub Engine · © 2026 Gosub Project"
+            labelWithString: "Gosub Beacon \(Bundle.main.versionLabel) · Powered by the Gosub Engine · © 2024-2026 Gosub contributors"
         )
         info.font = .systemFont(ofSize: 10)
         info.textColor = .secondaryLabelColor
@@ -113,7 +116,7 @@ final class AboutWindowController: NSWindowController {
         bar.orientation = .horizontal
         bar.spacing = 8
 
-        for view in [artPage!, creditsPage!, toggleButton, closeButton, bar] as [NSView] {
+        for view in [artPage!, creditsPage!, toggleButton, licensesButton, closeButton, bar] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             content.addSubview(view)
         }
@@ -121,12 +124,14 @@ final class AboutWindowController: NSWindowController {
         var constraints: [NSLayoutConstraint] = [
             toggleButton.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 12),
             toggleButton.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -10),
+            licensesButton.leadingAnchor.constraint(equalTo: toggleButton.trailingAnchor, constant: 8),
+            licensesButton.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -10),
             closeButton.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -12),
             closeButton.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -10),
 
             bar.centerXAnchor.constraint(equalTo: content.centerXAnchor),
             bar.centerYAnchor.constraint(equalTo: closeButton.centerYAnchor),
-            bar.leadingAnchor.constraint(greaterThanOrEqualTo: toggleButton.trailingAnchor, constant: 10),
+            bar.leadingAnchor.constraint(greaterThanOrEqualTo: licensesButton.trailingAnchor, constant: 10),
             bar.trailingAnchor.constraint(lessThanOrEqualTo: closeButton.leadingAnchor, constant: -10),
         ]
         // Both pages occupy the same rectangle; only alpha tells them apart.
@@ -288,6 +293,11 @@ final class AboutWindowController: NSWindowController {
         if let url = URL(string: "https://gosub.io") {
             NSWorkspace.shared.open(url)
         }
+    }
+
+    @objc private func openLicenses() {
+        NSApp.sendAction(#selector(AppDelegate.showLicensesPage(_:)), to: nil, from: self)
+        window?.close()
     }
 
     @objc private func togglePage() {

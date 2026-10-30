@@ -43,7 +43,7 @@ pub fn run() {
 
     // RUST_LOG wins when it is set, so a diagnostic run needs no rebuild:
     //   RUST_LOG=beacon_egui=debug ./gosub-beacon-egui https://example.org
-    let mut builder = colog::basic_builder();
+    let mut builder = env_logger::Builder::new();
     builder
         .filter(None, log::LevelFilter::Error)
         .filter(Some("beacon_egui"), log::LevelFilter::Warn)
