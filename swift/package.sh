@@ -41,7 +41,7 @@ set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="$(cd "$here/.." && pwd)"
-# Release builds use the toolchain in scripts/release-toolchain; RUSTUP_TOOLCHAIN overrides it.
+# Every build from this script uses scripts/release-toolchain; RUSTUP_TOOLCHAIN overrides it.
 export RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-$(cat "$root/scripts/release-toolchain")}"
 out="$here/build"
 app="$out/Gosub Beacon.app"

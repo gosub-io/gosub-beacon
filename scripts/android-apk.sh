@@ -22,7 +22,7 @@ for arg in "$@"; do
 done
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-# Release builds use the toolchain in scripts/release-toolchain; RUSTUP_TOOLCHAIN overrides it.
+# Every build from this script uses scripts/release-toolchain; RUSTUP_TOOLCHAIN overrides it.
 export RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN:-$(cat "$ROOT/scripts/release-toolchain")}
 export ANDROID_HOME=${ANDROID_HOME:-$HOME/Android/Sdk}
 export ANDROID_NDK_HOME=${ANDROID_NDK_HOME:-$(find "$ANDROID_HOME/ndk" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)}
