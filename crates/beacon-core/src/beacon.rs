@@ -693,7 +693,6 @@ mod tests {
     /// A gemini failure the user can act on is said beside the failure: a changed
     /// certificate with its fingerprint, and a request for an identity with what the
     /// server said. The same failure over https asks nothing.
-    #[cfg(feature = "gemini")]
     #[test]
     fn a_gemini_failure_the_user_can_answer_is_said_beside_it() {
         let (mut beacon, tab_id, engine_id) = beacon_with_tab();
@@ -714,9 +713,16 @@ mod tests {
             message: "changed".into(),
         };
 
+        // Without the feature the engine pins nothing for gemini://, so nothing is asked.
         let at = url::Url::parse("gemini://example.org/").unwrap();
         let out = fail(&mut beacon, at.as_str(), changed([7; 32]));
+        #[cfg(feature = "gemini")]
         assert!(out.contains(&BeaconEvent::CertificateChanged(tab_id, at, [7; 32])));
+        #[cfg(not(feature = "gemini"))]
+        assert!(
+            !out.iter().any(|e| matches!(e, BeaconEvent::CertificateChanged(..))),
+            "nothing to trust at {at}"
+        );
         let out = fail(&mut beacon, "https://example.org/", changed([7; 32]));
         assert!(!out.iter().any(|e| matches!(e, BeaconEvent::CertificateChanged(..))));
 
