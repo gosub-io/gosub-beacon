@@ -82,7 +82,7 @@ pub fn clear_logs() {
 /// A `log::Log` that copies everything into the panel buffer on its way to `inner`.
 ///
 /// Composed rather than substituted because a frontend has already chosen how it wants
-/// records printed — `colog` under GTK, a plain stderr line under the C ABI — and the panel
+/// records printed — `env_logger` under GTK, a plain stderr line under the C ABI — and the panel
 /// should not be the thing that takes that away.
 struct Tee {
     inner: Box<dyn log::Log>,

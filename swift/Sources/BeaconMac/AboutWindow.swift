@@ -83,15 +83,17 @@ final class AboutWindowController: NSWindowController {
         toggleButton.target = self
         toggleButton.action = #selector(togglePage)
 
+        let licensesButton = NSButton(title: "Licences", target: self, action: #selector(openLicenses))
+        licensesButton.bezelStyle = .rounded
+
         let closeButton = NSButton(title: "Close", target: self, action: #selector(closeWindow))
         closeButton.bezelStyle = .rounded
         // Escape closes, which is what the GTK dialog binds and what a Mac panel should do
         // anyway. AppKit routes Escape to whichever button claims it as its key equivalent.
         closeButton.keyEquivalent = "\u{1b}"
 
-        let info = NSTextField(
-            labelWithString: "Gosub Beacon \(Bundle.main.versionLabel) · Powered by the Gosub Engine · © 2026 Gosub Project"
-        )
+        // Two lines: on one the text would run under the buttons at this width.
+        let info = NSTextField(labelWithString: "Gosub Beacon \(Bundle.main.versionLabel) · Powered by the Gosub Engine")
         info.font = .systemFont(ofSize: 10)
         info.textColor = .secondaryLabelColor
         // The full build identity, for a bug report: hover, or select-and-copy from the label.
@@ -109,11 +111,20 @@ final class AboutWindowController: NSWindowController {
             ]
         )
 
-        let bar = NSStackView(views: [info, link])
-        bar.orientation = .horizontal
-        bar.spacing = 8
+        let copyright = NSTextField(labelWithString: "© 2024-2026 Gosub contributors")
+        copyright.font = .systemFont(ofSize: 10)
+        copyright.textColor = .secondaryLabelColor
 
-        for view in [artPage!, creditsPage!, toggleButton, closeButton, bar] as [NSView] {
+        let second = NSStackView(views: [copyright, link])
+        second.orientation = .horizontal
+        second.spacing = 8
+
+        let bar = NSStackView(views: [info, second])
+        bar.orientation = .vertical
+        bar.alignment = .centerX
+        bar.spacing = 2
+
+        for view in [artPage!, creditsPage!, toggleButton, licensesButton, closeButton, bar] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             content.addSubview(view)
         }
@@ -121,12 +132,14 @@ final class AboutWindowController: NSWindowController {
         var constraints: [NSLayoutConstraint] = [
             toggleButton.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 12),
             toggleButton.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -10),
+            licensesButton.leadingAnchor.constraint(equalTo: toggleButton.trailingAnchor, constant: 8),
+            licensesButton.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -10),
             closeButton.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -12),
             closeButton.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -10),
 
             bar.centerXAnchor.constraint(equalTo: content.centerXAnchor),
             bar.centerYAnchor.constraint(equalTo: closeButton.centerYAnchor),
-            bar.leadingAnchor.constraint(greaterThanOrEqualTo: toggleButton.trailingAnchor, constant: 10),
+            bar.leadingAnchor.constraint(greaterThanOrEqualTo: licensesButton.trailingAnchor, constant: 10),
             bar.trailingAnchor.constraint(lessThanOrEqualTo: closeButton.leadingAnchor, constant: -10),
         ]
         // Both pages occupy the same rectangle; only alpha tells them apart.
@@ -288,6 +301,11 @@ final class AboutWindowController: NSWindowController {
         if let url = URL(string: "https://gosub.io") {
             NSWorkspace.shared.open(url)
         }
+    }
+
+    @objc private func openLicenses() {
+        NSApp.sendAction(#selector(AppDelegate.showLicensesPage(_:)), to: nil, from: self)
+        window?.close()
     }
 
     @objc private func togglePage() {

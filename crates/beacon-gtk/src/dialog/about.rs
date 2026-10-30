@@ -51,6 +51,19 @@ impl About {
             }
         });
 
+        // Opens in a tab of the running window, through the same action a second launch uses.
+        let licenses_button = Button::with_label("Licences");
+        licenses_button.connect_clicked({
+            let window = window.clone();
+            move |_| {
+                if let Some(app) = gtk4::gio::Application::default() {
+                    let urls = vec!["gosub://licenses".to_string()];
+                    app.activate_action(crate::application::OPEN_URLS, Some(&(false, urls).to_variant()));
+                }
+                window.close();
+            }
+        });
+
         let close_button = Button::with_label("Close");
         close_button.connect_clicked({
             let window = window.clone();
@@ -59,6 +72,7 @@ impl About {
 
         let bar = ActionBar::new();
         bar.pack_start(&credits_button);
+        bar.pack_start(&licenses_button);
         bar.set_center_widget(Some(&Self::build_info_bar()));
         bar.pack_end(&close_button);
 
@@ -113,7 +127,7 @@ impl About {
         let label = Label::new(Some(concat!(
             "Gosub Beacon ",
             env!("CARGO_PKG_VERSION"),
-            " · Powered by the Gosub Engine · © 2026 Gosub Project"
+            " · Powered by the Gosub Engine · © 2024-2026 Gosub contributors"
         )));
         label.add_css_class("about-info-line");
         info.append(&label);

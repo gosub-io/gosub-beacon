@@ -158,6 +158,21 @@ internal sealed class AboutWindow : Window
         _toggle.Margin = new Thickness(12, 0, 0, 0);
         _toggle.Click += (_, _) => TogglePage();
 
+        var licenses = new Button
+        {
+            Content = "Licences",
+            Width = 80,
+            Height = 24,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(100, 0, 0, 0),
+        };
+        licenses.Click += (_, _) =>
+        {
+            (Owner as MainWindow)?.ShowLicenses();
+            Close();
+        };
+
         var close = new Button
         {
             Content = "Close",
@@ -174,12 +189,21 @@ internal sealed class AboutWindow : Window
             ? $"{v.Major}.{v.Minor}.{v.Build}"
             : "0.1.0";
 
+        // Two lines: on one the text would run under the buttons at this width.
         var info = new TextBlock
         {
             FontSize = 10,
             Foreground = Brushes.DimGray,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            Text = $"Gosub Beacon {version} · Powered by the Gosub Engine",
+        };
+
+        var copyright = new TextBlock
+        {
+            FontSize = 10,
+            Foreground = Brushes.DimGray,
             VerticalAlignment = VerticalAlignment.Center,
-            Text = $"Gosub Beacon {version} · Powered by the Gosub Engine · © 2026 Gosub Project  ",
+            Text = "© 2024-2026 Gosub contributors · ",
         };
 
         var link = new Hyperlink(new Run("https://gosub.io")) { NavigateUri = new Uri("https://gosub.io") };
@@ -202,17 +226,22 @@ internal sealed class AboutWindow : Window
         var linkBlock = new TextBlock { FontSize = 10, VerticalAlignment = VerticalAlignment.Center };
         linkBlock.Inlines.Add(link);
 
+        var second = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center };
+        second.Children.Add(copyright);
+        second.Children.Add(linkBlock);
+
         var centre = new StackPanel
         {
-            Orientation = Orientation.Horizontal,
+            Orientation = Orientation.Vertical,
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center,
         };
         centre.Children.Add(info);
-        centre.Children.Add(linkBlock);
+        centre.Children.Add(second);
 
         var bar = new Grid { Height = BarHeight, Background = SystemColors.ControlBrush };
         bar.Children.Add(_toggle);
+        bar.Children.Add(licenses);
         bar.Children.Add(centre);
         bar.Children.Add(close);
         return bar;

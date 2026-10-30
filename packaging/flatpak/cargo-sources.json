@@ -1672,19 +1672,6 @@
     {
         "type": "archive",
         "archive-type": "tar-gzip",
-        "url": "https://static.crates.io/crates/colog/colog-1.4.0.crate",
-        "sha256": "df62599ba6adc9c6c04a54278c8209125343dc4775f57b9d76c9a4287e58f2bd",
-        "dest": "cargo/vendor/colog-1.4.0"
-    },
-    {
-        "type": "inline",
-        "contents": "{\"package\": \"df62599ba6adc9c6c04a54278c8209125343dc4775f57b9d76c9a4287e58f2bd\", \"files\": {}}",
-        "dest": "cargo/vendor/colog-1.4.0",
-        "dest-filename": ".cargo-checksum.json"
-    },
-    {
-        "type": "archive",
-        "archive-type": "tar-gzip",
         "url": "https://static.crates.io/crates/color/color-0.3.3.crate",
         "sha256": "2ec7c5eb7a16992b1904d76c517d170ab353b0e0b3d5a0c81a8a0cd1037893cf",
         "dest": "cargo/vendor/color-0.3.3"
@@ -1719,19 +1706,6 @@
         "type": "inline",
         "contents": "{\"package\": \"1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570\", \"files\": {}}",
         "dest": "cargo/vendor/colorchoice-1.0.5",
-        "dest-filename": ".cargo-checksum.json"
-    },
-    {
-        "type": "archive",
-        "archive-type": "tar-gzip",
-        "url": "https://static.crates.io/crates/colored/colored-3.1.1.crate",
-        "sha256": "faf9468729b8cbcea668e36183cb69d317348c2e08e994829fb56ebfdfbaac34",
-        "dest": "cargo/vendor/colored-3.1.1"
-    },
-    {
-        "type": "inline",
-        "contents": "{\"package\": \"faf9468729b8cbcea668e36183cb69d317348c2e08e994829fb56ebfdfbaac34\", \"files\": {}}",
-        "dest": "cargo/vendor/colored-3.1.1",
         "dest-filename": ".cargo-checksum.json"
     },
     {
@@ -3773,19 +3747,6 @@
         "type": "inline",
         "contents": "{\"package\": \"5b7c7eb2e681ee896646cfb8872b431f24d09f53ba9283289d9b10caa6707088\", \"files\": {}}",
         "dest": "cargo/vendor/gsk4-sys-0.11.4",
-        "dest-filename": ".cargo-checksum.json"
-    },
-    {
-        "type": "archive",
-        "archive-type": "tar-gzip",
-        "url": "https://static.crates.io/crates/gtk-macros/gtk-macros-0.3.0.crate",
-        "sha256": "da5bf7748fd4cd0b2490df8debcc911809dbcbee4ece9531b96c29a9c729de5a",
-        "dest": "cargo/vendor/gtk-macros-0.3.0"
-    },
-    {
-        "type": "inline",
-        "contents": "{\"package\": \"da5bf7748fd4cd0b2490df8debcc911809dbcbee4ece9531b96c29a9c729de5a\", \"files\": {}}",
-        "dest": "cargo/vendor/gtk-macros-0.3.0",
         "dest-filename": ".cargo-checksum.json"
     },
     {

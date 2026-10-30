@@ -15,6 +15,7 @@ const PAGES: &[(&str, &str, &str)] = &[
     ("version", "Version", "Build, engine and render backend"),
     ("stats", "Stats", "Rendering diagnostics and engine timings"),
     ("blank", "Blank", "An empty page"),
+    ("licenses", "Licences", "Third-party licences"),
     ("help", "Help", "Every internal page"),
 ];
 
