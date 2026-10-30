@@ -5,9 +5,10 @@
 #   scripts/android-apk.sh [--install] [--debug]
 #
 # Needs: the Android SDK (platform + build-tools), the NDK, `cargo install cargo-ndk`,
-# `rustup target add aarch64-linux-android` (`armv7-linux-androideabi` for armeabi-v7a), and a
-# JDK for javac. ANDROID_HOME defaults to ~/Android/Sdk and ANDROID_NDK_HOME to the newest NDK
-# under it. Output: target/android/gosub-beacon.apk.
+# `rustup target add --toolchain "$(cat scripts/release-toolchain)" aarch64-linux-android`
+# (`armv7-linux-androideabi` for armeabi-v7a), and a JDK for javac. ANDROID_HOME defaults to
+# ~/Android/Sdk and ANDROID_NDK_HOME to the newest NDK under it.
+# Output: target/android/gosub-beacon.apk.
 set -euo pipefail
 
 INSTALL=0
@@ -21,6 +22,8 @@ for arg in "$@"; do
 done
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
+# Release builds use the toolchain in scripts/release-toolchain; RUSTUP_TOOLCHAIN overrides it.
+export RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN:-$(cat "$ROOT/scripts/release-toolchain")}
 export ANDROID_HOME=${ANDROID_HOME:-$HOME/Android/Sdk}
 export ANDROID_NDK_HOME=${ANDROID_NDK_HOME:-$(find "$ANDROID_HOME/ndk" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)}
 BUILD_TOOLS=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)

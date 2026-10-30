@@ -7,6 +7,9 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+# Release builds use the toolchain in scripts/release-toolchain; RUSTUP_TOOLCHAIN overrides it.
+export RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-$(cat scripts/release-toolchain)}"
+
 PROFILE="${1:-debug}"
 TARGET="x86_64-pc-windows-msvc"
 

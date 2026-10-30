@@ -693,6 +693,7 @@ mod tests {
     /// A gemini failure the user can act on is said beside the failure: a changed
     /// certificate with its fingerprint, and a request for an identity with what the
     /// server said. The same failure over https asks nothing.
+    #[cfg(feature = "gemini")]
     #[test]
     fn a_gemini_failure_the_user_can_answer_is_said_beside_it() {
         let (mut beacon, tab_id, engine_id) = beacon_with_tab();
