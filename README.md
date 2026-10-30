@@ -185,7 +185,7 @@ build-tools), the NDK, a JDK for `javac`, and:
 
 ```bash
 cargo install cargo-ndk
-rustup target add aarch64-linux-android
+rustup target add --toolchain "$(cat scripts/release-toolchain)" aarch64-linux-android
 ```
 
 `ANDROID_HOME` defaults to `~/Android/Sdk` and `ANDROID_NDK_HOME` to the newest NDK under
@@ -199,7 +199,7 @@ adb logcat -s beacon RustStdoutStderr   # the log; RUST_LOG cannot be set for an
 ```
 
 For a device running 32-bit ARM Android, build with `ANDROID_ABI=armeabi-v7a` (after
-`rustup target add armv7-linux-androideabi`). Devices with an Arm Mali GPU cannot draw pages
+`rustup target add --toolchain "$(cat scripts/release-toolchain)" armv7-linux-androideabi`). Devices with an Arm Mali GPU cannot draw pages
 yet; see [docs/known-issues.md](docs/known-issues.md).
 
 The script downloads two pinned jars on first use (the Java half of
