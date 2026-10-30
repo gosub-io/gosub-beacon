@@ -109,6 +109,7 @@ Prerequisites, none of which need root or Visual Studio:
 
 ```bash
 cargo install cargo-xwin                    # fetches the MS CRT + Windows SDK itself
+rustup toolchain install "$(cat scripts/release-toolchain)" --target x86_64-pc-windows-msvc
 ln -s "$(command -v clang)" ~/bin/clang-cl  # clang picks its MSVC mode from argv[0]
 # lld-link ships with lld, usually already at /usr/lib/llvm-*/bin/lld-link
 ```

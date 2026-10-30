@@ -78,7 +78,7 @@ Some devices run a 32-bit Android on 64-bit hardware; the SM-T510's Android 11 r
 - **APK does not install** (`INSTALL_FAILED_NO_MATCHING_ABIS`), since the default build is
   arm64 only. Fix: build a 32-bit APK with
   `ANDROID_ABI=armeabi-v7a scripts/android-apk.sh` (needs
-  `rustup target add armv7-linux-androideabi`).
+  `rustup toolchain install "$(cat scripts/release-toolchain)" --target armv7-linux-androideabi`).
 - **All engine settings lost:** an engine default of `u:4294967296` overflowed a 32-bit
   `usize`, and the engine dropped its whole settings schema. Fixed in
   [gosub-engine#1465](https://github.com/gosub-io/gosub-engine/pull/1465).

@@ -10,7 +10,9 @@ authors = ["Gosub Community <info@gosub.io>"]
 license = "MIT"
 
 [workspace.dependencies]
-gosub_engine = { path = "../gosub-engine/crates/gosub_engine", features = [
+# No defaults: they bring gopher, finger and gemini, which preview 1 leaves out.
+gosub_engine = { path = "../gosub-engine/crates/gosub_engine", default-features = false, features = [
+    "process-isolation",
     "sqlite_cookie_store",
     "sqlite_places",
     "sqlite_known_hosts",

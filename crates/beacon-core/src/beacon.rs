@@ -713,9 +713,16 @@ mod tests {
             message: "changed".into(),
         };
 
+        // Without the feature the engine pins nothing for gemini://, so nothing is asked.
         let at = url::Url::parse("gemini://example.org/").unwrap();
         let out = fail(&mut beacon, at.as_str(), changed([7; 32]));
+        #[cfg(feature = "gemini")]
         assert!(out.contains(&BeaconEvent::CertificateChanged(tab_id, at, [7; 32])));
+        #[cfg(not(feature = "gemini"))]
+        assert!(
+            !out.iter().any(|e| matches!(e, BeaconEvent::CertificateChanged(..))),
+            "nothing to trust at {at}"
+        );
         let out = fail(&mut beacon, "https://example.org/", changed([7; 32]));
         assert!(!out.iter().any(|e| matches!(e, BeaconEvent::CertificateChanged(..))));
 

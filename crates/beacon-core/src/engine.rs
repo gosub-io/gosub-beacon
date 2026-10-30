@@ -16,9 +16,9 @@ use beacon_profile::crypto::Store;
 use gosub_engine::cookies::SqliteCookieStore;
 use gosub_engine::events::EngineEvent;
 use gosub_engine::html::RenderConfiguration;
-use gosub_engine::net::protocols::identities::{
-    ClientIdentitiesHandle, ClientIdentity, IdentityScope, InMemoryClientIdentities, SqliteClientIdentities,
-};
+#[cfg(feature = "gemini")]
+use gosub_engine::net::protocols::identities::ClientIdentity;
+use gosub_engine::net::protocols::identities::{ClientIdentitiesHandle, IdentityScope, InMemoryClientIdentities, SqliteClientIdentities};
 use gosub_engine::net::protocols::known_hosts::{key_for, CertPin, InMemoryKnownHosts, KnownHostsHandle, SqliteKnownHosts};
 use gosub_engine::places::SqlitePlaces;
 use gosub_engine::storage::{InMemorySessionStore, PartitionPolicy, SqliteLocalStore, StorageService};
@@ -369,10 +369,17 @@ impl<C: BeaconConfig> BrowserEngine<C> {
     /// `BeaconEvent::IdentityAsked`), replacing one already there, so the next visit
     /// presents it. It covers the host and port of `url` and every path at or below its
     /// path. False for a page whose protocol presents none, or when making it failed.
+    /// Always false without the `gemini` feature.
     pub fn make_identity(&self, url: &url::Url, name: &str) -> bool {
         let Some(scope) = IdentityScope::for_url(url) else {
             return false;
         };
+        #[cfg(not(feature = "gemini"))]
+        {
+            let _ = (scope, name);
+            false
+        }
+        #[cfg(feature = "gemini")]
         match ClientIdentity::generate(scope, name) {
             Ok(identity) => {
                 self.client_identities.add(identity);

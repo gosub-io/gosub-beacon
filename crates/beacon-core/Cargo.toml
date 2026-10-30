@@ -11,6 +11,8 @@ license.workspace = true
 # GTK frontend's `isolation` feature, which also brings the rasterizer and font system the
 # renderer tier needs; on its own it only changes the default of the switch.
 isolated-by-default = []
+# The engine's gemini:// protocol, with the client identities it presents. Off for preview 1.
+gemini = ["gosub_engine/gemini"]
 
 [dependencies]
 gosub_engine.workspace = true
