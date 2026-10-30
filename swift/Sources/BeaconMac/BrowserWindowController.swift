@@ -179,7 +179,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
         addressField.delegate = self
         addressField.target = self
         addressField.action = #selector(addressEntered)
-        addressField.placeholderString = "Search or enter address"
+        addressField.placeholderString = "Enter address"
         addressField.font = .systemFont(ofSize: 13)
         addressField.bezelStyle = .roundedBezel
         addressField.focusRingType = .none

@@ -1,5 +1,6 @@
 /target
 gosub_cookies.db
+/bookmarks.db
 .gosub-beacon-*
 swift/build/
 swift/.build/

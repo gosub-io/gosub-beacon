@@ -19,11 +19,9 @@ const CREDITS: &[(&str, &[&str])] = &[
     ("HTML5 parser", &["Gosub Team"]),
     ("CSS3 parser", &["Gosub Team"]),
     ("Renderer", &["Gosub Team"]),
-    ("Javascript engine", &["Gosub Team"]),
     ("UI", &["Gosub Team"]),
     ("GTK integration", &["Gosub Team"]),
     ("Rust integration", &["Gosub Team"]),
-    ("Translations", &["Gosub Team"]),
 ];
 
 pub struct About;

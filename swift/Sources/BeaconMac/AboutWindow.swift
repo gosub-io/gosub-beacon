@@ -33,11 +33,9 @@ final class AboutWindowController: NSWindowController {
         ("HTML5 parser", ["Gosub Team"]),
         ("CSS3 parser", ["Gosub Team"]),
         ("Renderer", ["Gosub Team"]),
-        ("Javascript engine", ["Gosub Team"]),
         ("UI", ["Gosub Team"]),
         ("AppKit integration", ["Gosub Team"]),
         ("Rust integration", ["Gosub Team"]),
-        ("Translations", ["Gosub Team"]),
     ]
 
     /// Ink that reads on the artwork's pale left half, in either system appearance.

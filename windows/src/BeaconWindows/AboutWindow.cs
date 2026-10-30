@@ -41,11 +41,9 @@ internal sealed class AboutWindow : Window
         ("HTML5 parser", ["Gosub Team"]),
         ("CSS3 parser", ["Gosub Team"]),
         ("Renderer", ["Gosub Team"]),
-        ("Javascript engine", ["Gosub Team"]),
         ("UI", ["Gosub Team"]),
         ("Win32 integration", ["Gosub Team"]),
         ("Rust integration", ["Gosub Team"]),
-        ("Translations", ["Gosub Team"]),
     ];
 
     public AboutWindow()

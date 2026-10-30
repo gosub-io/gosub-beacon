@@ -198,13 +198,7 @@ impl<C: BeaconConfig> BrowserEngine<C> {
                 .map_err(|e| anyhow::anyhow!("places: {e:?}"))?,
         );
         if !private && places.bookmarks().is_empty() {
-            for (url, title) in [
-                ("https://gosub.io", "Gosub"),
-                ("https://github.com/gosub-io", "GitHub"),
-                ("https://news.ycombinator.com", "Hacker News"),
-            ] {
-                places.add_bookmark(url, title);
-            }
+            places.add_bookmark("https://gosub.io", "Gosub");
         }
 
         // gosub://bookmarks: rendered from the live store on every request.

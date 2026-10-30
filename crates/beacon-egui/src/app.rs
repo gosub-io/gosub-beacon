@@ -1255,7 +1255,7 @@ impl eframe::App for BeaconApp {
                     let response = ui.add_sized(
                         [ui.available_width() - trailing, ui.spacing().interact_size.y],
                         egui::TextEdit::singleline(&mut self.address_bar)
-                            .hint_text("Search or enter address")
+                            .hint_text("Enter address")
                             .vertical_align(egui::Align::Center),
                     );
                     self.address_bar_focused = response.has_focus();

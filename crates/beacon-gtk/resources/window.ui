@@ -131,7 +131,7 @@
                         <child>
                             <object class="GtkEntry" id="searchbar">
                                 <signal name="activate" handler="handle_searchbar_clicked" swapped="true"/>
-                                <property name="placeholder-text" translatable="yes">Search or enter address</property>
+                                <property name="placeholder-text" translatable="yes">Enter address</property>
                                 <property name="hexpand">True</property>
                                 <style>
                                     <class name="address-bar"/>
