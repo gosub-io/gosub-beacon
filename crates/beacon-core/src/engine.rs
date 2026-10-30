@@ -146,15 +146,8 @@ impl<C: BeaconConfig> BrowserEngine<C> {
                 .then(|| gosub_engine::internal_pages::PageResponse::html(crate::not_found_page::build(req.name, req.url.as_str(), known)))
         }));
 
-        // Identify as Beacon on the wire; the engine alone would send only its Gosub
-        // token. Only seeded when nothing is stored, so a user-customized UA survives
-        // restarts. Must land before start(), which reads the network settings once.
-        if engine.settings().get_string("net.user_agent").is_empty() {
-            let ua = gosub_engine::net::default_user_agent(Some(concat!("Beacon/", env!("CARGO_PKG_VERSION"))));
-            if let Err(e) = engine.settings().set("net.user_agent", gosub_engine::Setting::String(ua)) {
-                log::warn!("failed to set net.user_agent: {e:?}");
-            }
-        }
+        // Must land before start(), which reads the network settings once.
+        seed_user_agent(engine.settings());
 
         // The switch follows the command line (and the build: an `isolation` build is on
         // unless `--single-process`), so a plain run stays the single-process engine it
@@ -494,6 +487,18 @@ fn beacon_settings() -> gosub_engine::Config {
     ])
 }
 
+/// Identify as Beacon on the wire; the engine alone would send only its Gosub token. Set for
+/// this run only, so the next version's default replaces it; a UA the user stored wins.
+fn seed_user_agent(settings: &gosub_engine::Config) {
+    if !settings.get_string("net.user_agent").is_empty() {
+        return;
+    }
+    let ua = gosub_engine::net::default_user_agent(Some(concat!("Beacon/", env!("CARGO_PKG_VERSION"))));
+    if let Err(e) = settings.set_transient("net.user_agent", gosub_engine::Setting::String(ua)) {
+        log::warn!("failed to set net.user_agent: {e:?}");
+    }
+}
+
 /// A page that is Beacon's `html` while [`BEACON_PAGES`] is on, and declines otherwise.
 fn beacon_page(html: String) -> gosub_engine::internal_pages::PageProvider {
     Arc::new(move |req: &gosub_engine::internal_pages::PageRequest<'_>| {
@@ -567,6 +572,39 @@ mod tests {
         assert_eq!(serve(&home, &settings).as_deref(), Some("BEACON"), "on by default");
         settings.set_transient(BEACON_PAGES, gosub_engine::Setting::Bool(false)).unwrap();
         assert_eq!(serve(&home, &settings), None, "declines, so the engine's page answers");
+    }
+
+    fn settings_with_ua_schema() -> gosub_engine::Config {
+        let settings = gosub_engine::Config::new(vec![gosub_engine::SettingInfo {
+            key: "net.user_agent".to_string(),
+            description: String::new(),
+            default: gosub_engine::Setting::String(String::new()),
+            constraint: None,
+        }]);
+        settings.set_storage(Box::new(gosub_engine::config_storage::MemoryStorageAdapter::new()));
+        settings
+    }
+
+    #[test]
+    fn the_default_user_agent_is_not_stored() {
+        let settings = settings_with_ua_schema();
+        seed_user_agent(&settings);
+
+        assert!(settings
+            .get_string("net.user_agent")
+            .ends_with(concat!(" Beacon/", env!("CARGO_PKG_VERSION"))));
+        assert!(!settings.is_overridden("net.user_agent"), "an upgrade must bring its own default");
+    }
+
+    #[test]
+    fn a_stored_user_agent_is_kept() {
+        let settings = settings_with_ua_schema();
+        settings
+            .set("net.user_agent", gosub_engine::Setting::String("Custom/1.0".into()))
+            .unwrap();
+        seed_user_agent(&settings);
+
+        assert_eq!(settings.get_string("net.user_agent"), "Custom/1.0");
     }
 
     #[test]
