@@ -7,7 +7,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-# Every build from this script uses scripts/release-toolchain; RUSTUP_TOOLCHAIN overrides it.
+# Every Rust build from this script uses scripts/release-toolchain; RUSTUP_TOOLCHAIN overrides it.
 export RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-$(cat scripts/release-toolchain)}"
 
 PROFILE="${1:-debug}"

@@ -14,7 +14,7 @@
 #     ./package.sh --no-beaconctl leave beaconctl out of the bundle
 #
 # The default is universal (arm64 + x86_64), which needs the Intel Rust target once:
-# `rustup target add --toolchain "$(cat ../scripts/release-toolchain)" x86_64-apple-darwin`.
+# `rustup toolchain install "$(cat ../scripts/release-toolchain)" --target x86_64-apple-darwin`.
 # --native halves the build for local testing.
 #
 # beaconctl ships inside the bundle, at Contents/MacOS/beaconctl, for more than convenience:
@@ -41,7 +41,7 @@ set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="$(cd "$here/.." && pwd)"
-# Every build from this script uses scripts/release-toolchain; RUSTUP_TOOLCHAIN overrides it.
+# Every Rust build from this script uses scripts/release-toolchain; RUSTUP_TOOLCHAIN overrides it.
 export RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-$(cat "$root/scripts/release-toolchain")}"
 out="$here/build"
 app="$out/Gosub Beacon.app"
@@ -205,7 +205,7 @@ if command -v rustup >/dev/null; then
         triple="$(rust_triple "$arch")"
         if ! grep -qx "$triple" <<<"$installed"; then
             echo "error: the Rust target $triple is not installed; run" >&2
-            echo "       rustup target add --toolchain $RUSTUP_TOOLCHAIN $triple   (or ./package.sh --native)" >&2
+            echo "       rustup toolchain install $RUSTUP_TOOLCHAIN --target $triple   (or ./package.sh --native)" >&2
             exit 1
         fi
     done

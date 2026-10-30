@@ -43,8 +43,9 @@ boundary.
 
 The app is universal: it runs natively on Apple Silicon and on Intel Macs. Once per machine,
 the Intel Rust target has to be installed for the release toolchain in
-`scripts/release-toolchain`: `rustup target add --toolchain 1.99.0 x86_64-apple-darwin`. The
-script says so if it is missing. Both sides are built once per architecture and joined with
+`scripts/release-toolchain`:
+`rustup toolchain install "$(cat ../scripts/release-toolchain)" --target x86_64-apple-darwin`.
+The script says so if it is missing. Both sides are built once per architecture and joined with
 `lipo`, because SwiftPM needs Xcode to build several architectures in one go and the Command
 Line Tools are enough this way. `--native` skips the second architecture, which halves the
 build for local testing. The Intel slice runs on an Apple Silicon Mac under Rosetta
