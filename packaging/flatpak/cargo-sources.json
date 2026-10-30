@@ -4844,14 +4844,14 @@
     {
         "type": "archive",
         "archive-type": "tar-gzip",
-        "url": "https://static.crates.io/crates/libz-sys/libz-sys-1.1.29.crate",
-        "sha256": "85bc9657773828b90eeb625adff10eeac83cc21bbfd8e23a03eaa8a33c9e28d9",
-        "dest": "cargo/vendor/libz-sys-1.1.29"
+        "url": "https://static.crates.io/crates/libz-sys/libz-sys-1.1.31.crate",
+        "sha256": "ff20308ecabd635a2dc1dd5834a86c462cca20efba1d5d3ddab1f8aea3455cb2",
+        "dest": "cargo/vendor/libz-sys-1.1.31"
     },
     {
         "type": "inline",
-        "contents": "{\"package\": \"85bc9657773828b90eeb625adff10eeac83cc21bbfd8e23a03eaa8a33c9e28d9\", \"files\": {}}",
-        "dest": "cargo/vendor/libz-sys-1.1.29",
+        "contents": "{\"package\": \"ff20308ecabd635a2dc1dd5834a86c462cca20efba1d5d3ddab1f8aea3455cb2\", \"files\": {}}",
+        "dest": "cargo/vendor/libz-sys-1.1.31",
         "dest-filename": ".cargo-checksum.json"
     },
     {
