@@ -52,9 +52,27 @@ mod imp {
             obj.setup_actions();
             obj.setup_accelerators();
         }
+
+        // Quitting leaves the windows open; their engines stop before `run` returns.
+        fn shutdown(&self) {
+            for window in self.obj().windows() {
+                if let Ok(window) = window.downcast::<BrowserWindow>() {
+                    window.imp().shutdown_engine();
+                }
+            }
+            self.parent_shutdown();
+        }
     }
 
-    impl GtkApplicationImpl for Application {}
+    impl GtkApplicationImpl for Application {
+        // A closed window, the last one included, stops its engine as it goes.
+        fn window_removed(&self, window: &gtk4::Window) {
+            if let Some(window) = window.downcast_ref::<BrowserWindow>() {
+                window.imp().shutdown_engine();
+            }
+            self.parent_window_removed(window);
+        }
+    }
 }
 
 glib::wrapper! {

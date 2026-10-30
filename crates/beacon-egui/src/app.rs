@@ -112,7 +112,8 @@ pub struct BeaconApp {
     rt: &'static Runtime,
     /// The texture registry Vello renders into; the GPU path resolves ids through it.
     context: Arc<EguiContextProvider>,
-    engine: BrowserEngine<EguiConfig>,
+    /// Taken by `on_exit`, which stops it.
+    engine: Option<BrowserEngine<EguiConfig>>,
     beacon: Beacon,
     tabs: Arc<Mutex<GosubTabManager>>,
     event_rx: tokio::sync::broadcast::Receiver<EngineEvent>,
@@ -275,10 +276,11 @@ impl BeaconApp {
         let tabs = Arc::new(Mutex::new(GosubTabManager::new()));
         let beacon = Beacon::new(tabs.clone(), rt.handle().clone(), Rc::new(EguiPlatform::new(cc.egui_ctx.clone())));
 
+        let places = engine.places();
         let mut app = Self {
             rt,
             context,
-            engine,
+            engine: Some(engine),
             beacon,
             tabs,
             event_rx,
@@ -314,7 +316,7 @@ impl BeaconApp {
             #[cfg(target_os = "android")]
             egui_ctx: cc.egui_ctx.clone(),
         };
-        app.bookmarks = app.engine.places().bookmarks().into_iter().map(|b| (b.title, b.url)).collect();
+        app.bookmarks = places.bookmarks().into_iter().map(|b| (b.title, b.url)).collect();
 
         let urls = if urls.is_empty() { vec!["gosub://home".to_string()] } else { urls };
         for url in urls {
@@ -333,7 +335,7 @@ impl BeaconApp {
         let url = if dive { url::Url::parse("gosub://blank").ok()? } else { url };
 
         let mut tab = GosubTab::new(url.clone(), url.as_str());
-        let handle = match self.engine.create_tab(self.rt, url.as_str(), Some((1024, 768))) {
+        let handle = match self.engine.as_mut()?.create_tab(self.rt, url.as_str(), Some((1024, 768))) {
             Ok(handle) => handle,
             Err(e) => {
                 self.log.push(format!("could not create engine tab: {e}"));
@@ -684,7 +686,7 @@ impl BeaconApp {
         let Some(engine_id) = self.tabs.lock().unwrap().get_tab(tab_id).and_then(|t| t.engine_tab_id()) else {
             return;
         };
-        let Some(handle) = self.engine.compositor.frame_for(engine_id) else {
+        let Some(handle) = self.engine.as_ref().and_then(|e| e.compositor.frame_for(engine_id)) else {
             log::debug!("no composited frame yet for engine tab {engine_id:?}");
             return;
         };
@@ -1023,6 +1025,14 @@ fn free_path(dir: &std::path::Path, name: &str, reserved: &[std::path::PathBuf])
 }
 
 impl eframe::App for BeaconApp {
+    // Wait for the engine before the process exits, or its workers race SQLCipher's
+    // exit-time cleanup (see `BrowserEngine::shutdown`).
+    fn on_exit(&mut self) {
+        if let Some(engine) = self.engine.take() {
+            engine.shutdown(self.rt);
+        }
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         #[cfg(target_os = "android")]
@@ -1389,10 +1399,10 @@ impl eframe::App for BeaconApp {
             if let Some(view) = self.views.get_mut(&active) {
                 if !on_config {
                     view.config = None;
-                } else {
+                } else if let Some(engine) = &self.engine {
                     let config = view
                         .config
-                        .get_or_insert_with(|| crate::config_page::ConfigView::new(self.engine.settings().clone()));
+                        .get_or_insert_with(|| crate::config_page::ConfigView::new(engine.settings().clone()));
                     config.show(ui);
                     return;
                 }
@@ -1862,20 +1872,20 @@ impl BeaconApp {
                 return;
             }
             (Answer::Trust, Question::Certificate { url, fingerprint, .. }) => {
-                let trusted = self.engine.trust_certificate(url, fingerprint);
+                let trusted = self.engine.as_ref().is_some_and(|e| e.trust_certificate(url, fingerprint));
                 if trusted {
                     self.log.push(format!("Trusted the new certificate of {}", server(url)));
                 }
                 trusted.then(|| url.clone())
             }
             (Answer::Forget, Question::Identity { url, .. }) => {
-                if self.engine.forget_identity(url) {
+                if self.engine.as_ref().is_some_and(|e| e.forget_identity(url)) {
                     self.log.push(format!("Forgot the identity for {}", server(url)));
                 }
                 None
             }
             (Answer::Make, Question::Identity { url, name, .. }) => {
-                let made = self.engine.make_identity(url, name.trim());
+                let made = self.engine.as_ref().is_some_and(|e| e.make_identity(url, name.trim()));
                 if !made {
                     self.log.push(format!("Could not make an identity for {}", server(url)));
                 }
