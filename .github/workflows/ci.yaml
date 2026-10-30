@@ -82,6 +82,10 @@ jobs:
       - name: Run tests
         working-directory: gosub-beacon
         run: cargo test --verbose --all --no-fail-fast --all-targets
+      # gemini is off by default; keep the code behind it compiling and tested.
+      - name: Run beacon-core tests with gemini
+        working-directory: gosub-beacon
+        run: cargo test --verbose -p beacon-core --features gemini --no-fail-fast
 
   # The renderer tier end to end: a plain and an `--isolated` run of the GTK binary under
   # Xvfb against a fixture page, then the component processes, the log, the recorded
