@@ -15,13 +15,14 @@
 <p>Gosub Beacon is made from the open-source components below, each under its own licence.</p>
 <!-- NATIVE -->
 <h2>Rust crates</h2>
+{{!-- One section per distinct licence text; a licence's sections are adjacent. --}}
 <ul>
 {{#each overview}}
-    <li><a href="#{{id}}">{{name}}</a> ({{count}})</li>
+    <li><a href="#licence-{{indices.[0]}}">{{name}}</a> ({{count}})</li>
 {{/each}}
 </ul>
 {{#each licenses}}
-<h3 id="{{id}}">{{name}}</h3>
+<h3 id="licence-{{@index}}">{{name}}</h3>
 <p class="used-by">Used by:
 {{#each used_by}}
     {{crate.name}} {{crate.version}}{{#unless @last}},{{/unless}}
