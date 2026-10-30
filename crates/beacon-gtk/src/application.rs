@@ -135,7 +135,7 @@ impl Application {
             .build();
         let show_shortcuts = gio::ActionEntry::builder("show-shortcuts")
             .activate(|app: &Self, _, _| {
-                info!(target: "gtk", "Show about dialog action triggered");
+                info!(target: "gtk", "Show shortcuts dialog action triggered");
                 let about = ShortcutsDialog::create_dialog(app);
                 about.present();
             })

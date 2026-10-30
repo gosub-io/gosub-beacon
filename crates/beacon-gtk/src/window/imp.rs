@@ -461,6 +461,11 @@ impl BrowserWindow {
 
     #[template_callback]
     fn handle_view_source_clicked(&self, _btn: &Button) {
+        self.view_source();
+    }
+
+    /// Open the active tab's source in a new tab beside it.
+    pub(crate) fn view_source(&self) {
         let Some(tab_id) = self.active_tab_id() else {
             self.log("No active tab to view source for");
             return;
@@ -3108,7 +3113,22 @@ impl BrowserWindow {
         }
         drop(manager);
         self.refresh_tabs();
-        self.load_error_page(our_id, url, error);
+        self.load_error_page(our_id, url.as_str(), url.as_str(), error);
+    }
+
+    /// A typed address that is no URL at all. There is nothing to navigate to, so the error
+    /// page loads as `about:blank` and names what was typed.
+    fn show_invalid_address(&self, tab_id: TabId, address: &str, error: &str) {
+        let mut manager = self.tab_manager.lock().unwrap();
+        let Some(mut tab) = manager.get_tab(tab_id) else {
+            return;
+        };
+        tab.set_loading(false);
+        tab.set_showing_error(true);
+        manager.update_tab(tab_id, &tab);
+        drop(manager);
+        self.refresh_tabs();
+        self.load_error_page(tab_id, address, "about:blank", error);
     }
 
     /// A page's server showed another certificate than the one first seen there, and the
@@ -3302,8 +3322,10 @@ impl BrowserWindow {
     ///
     /// The page itself is `beacon_core::error_page`'s, shared with every other frontend;
     /// what is left here is getting it into this tab.
-    fn load_error_page(&self, tab_id: TabId, url: &url::Url, error: &str) {
-        let html = beacon_core::error_page::build(url.as_str(), error);
+    /// `address` is what the page names; `base_url` is what the tab loads it as, and has to
+    /// parse.
+    fn load_error_page(&self, tab_id: TabId, address: &str, base_url: &str, error: &str) {
+        let html = beacon_core::error_page::build(address, error);
 
         let manager = self.tab_manager.lock().unwrap();
         let Some(handle) = manager.get_tab(tab_id).and_then(|t| t.tab_handle()) else {
@@ -3311,7 +3333,7 @@ impl BrowserWindow {
         };
         drop(manager);
 
-        let base_url = url.to_string();
+        let base_url = base_url.to_string();
         runtime().spawn(async move {
             let _ = handle.send(EngineTabCommand::LoadHtml { html, base_url }).await;
             let _ = handle.send(EngineTabCommand::ResumeDrawing { fps: 30 }).await;
@@ -4793,9 +4815,13 @@ impl BrowserWindow {
             Message::LoadUrl(tab_id, url_str) => {
                 self.log(format!("Loading URL: {}", url_str).as_str());
 
-                let Ok((view_mode, url)) = GosubAddressParser::parse(url_str.as_str()) else {
-                    self.log("Cannot parse URL");
-                    return;
+                let (view_mode, url) = match GosubAddressParser::parse(url_str.as_str()) {
+                    Ok(parsed) => parsed,
+                    Err(e) => {
+                        self.log("Cannot parse URL");
+                        self.show_invalid_address(tab_id, &url_str, &e.to_string());
+                        return;
+                    }
                 };
 
                 // `view-source:`/`raw:` addresses render the target's source in-tab.
@@ -4807,7 +4833,10 @@ impl BrowserWindow {
                 // Update information in the given tab with the new url
                 let shell = Self::is_shell_rendered(&url);
                 let mut manager = self.tab_manager.lock().unwrap();
-                let mut tab = manager.get_tab(tab_id).unwrap().clone();
+                // The tab may have closed since this was queued.
+                let Some(mut tab) = manager.get_tab(tab_id) else {
+                    return;
+                };
 
                 tab.set_favicon(None);
                 tab.set_title(if shell { Self::shell_page_title(&url) } else { url.as_str() });
