@@ -5304,6 +5304,15 @@ impl BrowserWindow {
         area
     }
 
+    /// Stop the engine and wait for it, or its workers race SQLCipher's exit-time cleanup
+    /// (see `BrowserEngine::shutdown`). Later calls find nothing to stop.
+    pub fn shutdown_engine(&self) {
+        let engine = self.engine.borrow_mut().take();
+        if let Some(engine) = engine {
+            engine.shutdown(runtime());
+        }
+    }
+
     /// Start the engine and wire its redraw/event notifications into the GTK main loop.
     pub fn init_engine(&self) {
         let mut engine = match BrowserEngine::new(runtime(), self.private.get(), crate::render::backend()) {
