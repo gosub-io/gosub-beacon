@@ -92,9 +92,8 @@ final class AboutWindowController: NSWindowController {
         // anyway. AppKit routes Escape to whichever button claims it as its key equivalent.
         closeButton.keyEquivalent = "\u{1b}"
 
-        let info = NSTextField(
-            labelWithString: "Gosub Beacon \(Bundle.main.versionLabel) · Powered by the Gosub Engine · © 2024-2026 Gosub contributors"
-        )
+        // Two lines: on one the text would run under the buttons at this width.
+        let info = NSTextField(labelWithString: "Gosub Beacon \(Bundle.main.versionLabel) · Powered by the Gosub Engine")
         info.font = .systemFont(ofSize: 10)
         info.textColor = .secondaryLabelColor
         // The full build identity, for a bug report: hover, or select-and-copy from the label.
@@ -112,9 +111,18 @@ final class AboutWindowController: NSWindowController {
             ]
         )
 
-        let bar = NSStackView(views: [info, link])
-        bar.orientation = .horizontal
-        bar.spacing = 8
+        let copyright = NSTextField(labelWithString: "© 2024-2026 Gosub contributors")
+        copyright.font = .systemFont(ofSize: 10)
+        copyright.textColor = .secondaryLabelColor
+
+        let second = NSStackView(views: [copyright, link])
+        second.orientation = .horizontal
+        second.spacing = 8
+
+        let bar = NSStackView(views: [info, second])
+        bar.orientation = .vertical
+        bar.alignment = .centerX
+        bar.spacing = 2
 
         for view in [artPage!, creditsPage!, toggleButton, licensesButton, closeButton, bar] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
