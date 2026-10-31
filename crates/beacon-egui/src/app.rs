@@ -125,10 +125,13 @@ pub struct BeaconApp {
     address_bar_focused: bool,
     status: String,
     cursor: Cursor,
-    log: Vec<String>,
+    /// What went wrong, or what an answer did, shown to the user for a moment.
+    toasts: chrome::Toasts,
     favicons: Favicons,
-    /// Bookmarks, read from the engine's places store once at startup.
+    /// Bookmarks, read from the engine's places store at startup and after the star.
     bookmarks: Vec<(String, String)>,
+    /// The tabs as last saved, so the session is written only when they change.
+    session: Vec<beacon_core::session::SessionTab>,
     /// The fingers on the page, at most two, in the order they went down, and where each was
     /// last seen. One scrolls the page; two pinch it.
     touches: Vec<(egui::TouchId, egui::Pos2)>,
@@ -160,6 +163,9 @@ pub struct BeaconApp {
     question: Option<Question>,
     /// The About box is showing (menu > About).
     about_open: bool,
+    /// Why pages cannot be drawn on this GPU, shown in their place (see [`gpu_notice`]).
+    /// While it is set no tab is asked to draw.
+    gpu_notice: Option<String>,
     /// The native date or time dialog open over a form control, and what it is for.
     #[cfg(target_os = "android")]
     picker: Option<NativePicker>,
@@ -217,8 +223,7 @@ struct NativePicker {
 enum Published {
     Copying,
     Done,
-    /// Copying failed, or the system has no shared Downloads collection (before Android 10);
-    /// the file stays in the app's own storage.
+    /// Copying failed; the file stays in the app's own storage.
     Failed,
 }
 
@@ -282,6 +287,7 @@ impl BeaconApp {
         let tabs = Arc::new(Mutex::new(GosubTabManager::new()));
         let beacon = Beacon::new(tabs.clone(), rt.handle().clone(), Rc::new(EguiPlatform::new(egui_ctx.clone())));
 
+        let gpu_notice = render_state.and_then(|rs| gpu_notice(&rs.adapter.get_info().name));
         let places = engine.places();
         let mut app = Self {
             rt,
@@ -296,9 +302,10 @@ impl BeaconApp {
             address_bar_focused: false,
             status: String::new(),
             cursor: Cursor::Default,
-            log: Vec::new(),
+            toasts: Default::default(),
             favicons: Favicons::default(),
             bookmarks: Vec::new(),
+            session: Vec::new(),
             touches: Vec::new(),
             pinched: false,
             wheel_zoom: 1.0,
@@ -306,6 +313,7 @@ impl BeaconApp {
             last_pointer: None,
             question: None,
             about_open: false,
+            gpu_notice,
             touch_trail: Default::default(),
             fling: None,
             tab_list_open: false,
@@ -325,9 +333,25 @@ impl BeaconApp {
         };
         app.bookmarks = places.bookmarks().into_iter().map(|b| (b.title, b.url)).collect();
 
+        // URLs given become the startup tabs; without any (always, on Android) the previous
+        // session comes back, as in GTK, or else the home page.
+        let mut session = Vec::new();
+        let urls = if urls.is_empty() {
+            session = beacon_core::session::load();
+            session.iter().map(|t| t.url.clone()).collect()
+        } else {
+            urls
+        };
         let urls = if urls.is_empty() { vec!["gosub://home".to_string()] } else { urls };
-        for url in urls {
-            app.open_tab(&url);
+        let opened: Vec<Option<TabId>> = urls.iter().map(|url| app.open_tab(url)).collect();
+        for (restored, tab_id) in session.iter().zip(opened) {
+            let Some(tab_id) = tab_id else { continue };
+            if restored.pinned {
+                app.tabs.lock().unwrap().pin_tab(tab_id);
+            }
+            if restored.active {
+                app.activate(tab_id);
+            }
         }
         log::info!("beacon-egui ready with {} tab(s)", app.tabs.lock().unwrap().tab_count());
         Ok(app)
@@ -345,7 +369,7 @@ impl BeaconApp {
         let handle = match self.engine.as_mut()?.create_tab(self.rt, url.as_str(), Some((1024, 768))) {
             Ok(handle) => handle,
             Err(e) => {
-                self.log.push(format!("could not create engine tab: {e}"));
+                self.toasts.push(format!("could not create engine tab: {e}"));
                 return None;
             }
         };
@@ -361,11 +385,14 @@ impl BeaconApp {
 
         let target = url.to_string();
         log::debug!("open_tab: navigating engine tab {engine_id:?} to {target}");
+        let draw = self.draw_command();
         self.rt.spawn(async move {
             if let Err(e) = handle.send(TabCommand::Navigate { url: target }).await {
                 log::warn!("navigate command was not delivered: {e:?}");
             }
-            let _ = handle.send(TabCommand::ResumeDrawing { fps: DRAW_FPS }).await;
+            if let Some(draw) = draw {
+                let _ = handle.send(draw).await;
+            }
         });
         if dive {
             self.start_dive(tab_id);
@@ -425,6 +452,12 @@ impl BeaconApp {
         self.tabs.lock().unwrap().active()
     }
 
+    /// What starts a tab drawing, unless this GPU cannot draw pages: a page drawn on a Mali
+    /// loses the device, and egui's own drawing with it, and the app goes down.
+    fn draw_command(&self) -> Option<TabCommand> {
+        self.gpu_notice.is_none().then_some(TabCommand::ResumeDrawing { fps: DRAW_FPS })
+    }
+
     fn active_handle(&self) -> Option<gosub_engine::tab::TabHandle> {
         let id = self.active()?;
         self.tabs.lock().unwrap().get_tab(id)?.tab_handle()
@@ -438,6 +471,9 @@ impl BeaconApp {
     /// move followed whatever link the pointer was last over -- or none. So each tab gets one
     /// task that forwards its commands as they were queued.
     fn send_active(&self, command: TabCommand) {
+        if matches!(command, TabCommand::ResumeDrawing { .. }) && self.draw_command().is_none() {
+            return;
+        }
         let Some(tab_id) = self.active() else { return };
         let mut senders = self.senders.borrow_mut();
         if let std::collections::hash_map::Entry::Vacant(entry) = senders.entry(tab_id) {
@@ -589,10 +625,9 @@ impl BeaconApp {
                         self.cursor = cursor;
                     }
                 }
-                BeaconEvent::Log(message) => {
-                    log::warn!("{message}");
-                    self.log.push(message);
-                }
+                // Core's running commentary (downloads, failed loads); what matters of it is
+                // already on screen, in the downloads bar or the error page.
+                BeaconEvent::Log(message) => log::warn!("{message}"),
                 BeaconEvent::TabCrashed(tab_id, _) => {
                     self.views.remove(&tab_id);
                     self.senders.borrow_mut().remove(&tab_id);
@@ -682,9 +717,12 @@ impl BeaconApp {
             beacon_core::error_page::build(url.as_str(), error)
         };
         let base_url = url.to_string();
+        let draw = self.draw_command();
         self.rt.spawn(async move {
             let _ = handle.send(TabCommand::LoadHtml { html, base_url }).await;
-            let _ = handle.send(TabCommand::ResumeDrawing { fps: DRAW_FPS }).await;
+            if let Some(draw) = draw {
+                let _ = handle.send(draw).await;
+            }
         });
     }
 
@@ -814,7 +852,7 @@ impl BeaconApp {
             PickerKind::Time => (None, pv::parse_time(&value)),
             PickerKind::DateTimeLocal => pv::parse_date_time(&value),
             PickerKind::Color | PickerKind::Month | PickerKind::Week => {
-                self.log.push(format!(
+                self.toasts.push(format!(
                     "{kind:?} picker requested (current {value:?}); not available on Android yet"
                 ));
                 return;
@@ -1051,6 +1089,7 @@ impl eframe::App for BeaconApp {
         self.poll_picker();
         self.show_question(&ctx);
         self.show_about(&ctx);
+        self.save_session();
 
         let Some(active) = self.active() else { return };
 
@@ -1073,13 +1112,17 @@ impl eframe::App for BeaconApp {
 
         // The window runs under the status and navigation bars on Android; keep the chrome
         // and the page out from under them. Added first, so they are the outermost panels.
+        #[allow(unused_mut)]
+        let mut bottom_inset = 0.0;
         #[cfg(target_os = "android")]
         if let Some((_, top, _, bottom)) = crate::android::content_rect() {
             let ppp = ctx.pixels_per_point();
             let screen = ctx.content_rect().height() * ppp;
+            bottom_inset = (screen - bottom as f32) / ppp;
             inset(ui, egui::Panel::top("inset-top"), top as f32 / ppp, faint);
-            inset(ui, egui::Panel::bottom("inset-bottom"), (screen - bottom as f32) / ppp, faint);
+            inset(ui, egui::Panel::bottom("inset-bottom"), bottom_inset, faint);
         }
+        self.toasts.show(&ctx, bottom_inset);
 
         // ── scroll ────────────────────────────────────────────────────────
         // Raw wheel events, not egui's smoothed delta: the engine smooths scrolling itself,
@@ -1234,7 +1277,7 @@ impl eframe::App for BeaconApp {
                     } else if chrome::tool_button(ui, "\u{21bb}", "Reload", !diving).clicked() {
                         // A reload leaves the error page, as in GTK: core keeps the flag
                         // across a load of the same address, and a page that loads this time
-                        // would otherwise hand its taps (and space) to the game.
+                        // would otherwise hand its space key to the game.
                         {
                             let mut tabs = self.tabs.lock().unwrap();
                             if let Some(mut tab) = tabs.get_tab(active) {
@@ -1293,20 +1336,41 @@ impl eframe::App for BeaconApp {
                             .frame(false)
                             .min_size(egui::Vec2::splat(ui.spacing().interact_size.y));
                         egui::containers::menu::MenuButton::from_button(menu).ui(ui, |ui| {
-                            let mut showing = self.activity.is_some();
-                            if ui.checkbox(&mut showing, "Show activity").changed() {
-                                self.toggle_activity();
+                            let bookmarked = self.bookmarks.iter().any(|(_, b)| b.as_str() == url.as_str());
+                            if ui
+                                .button(if bookmarked { "Remove Bookmark" } else { "Bookmark This Page" })
+                                .clicked()
+                            {
+                                self.toggle_bookmark();
+                                ui.close();
+                            }
+                            // In a tab of their own, as in GTK, so the page being read stays.
+                            if ui.button("Settings").clicked() {
+                                self.open_in_front("gosub://config");
+                                ui.close();
+                            }
+                            if ui.button("Help").clicked() {
+                                self.open_in_front("gosub://help");
                                 ui.close();
                             }
                             if ui.button("About").clicked() {
                                 self.about_open = true;
                                 ui.close();
                             }
+                            ui.separator();
+                            ui.label(egui::RichText::new("Developer").small().weak());
+                            let mut showing = self.activity.is_some();
+                            if ui.checkbox(&mut showing, "Show activity").changed() {
+                                self.toggle_activity();
+                                ui.close();
+                            }
                         });
                     } else {
                         let bookmarked = self.bookmarks.iter().any(|(_, b)| b.as_str() == url.as_str());
                         let star = if bookmarked { "\u{2605}" } else { "\u{2606}" };
-                        chrome::tool_button(ui, star, "Bookmark this page", true);
+                        if chrome::tool_button(ui, star, "Bookmark this page", true).clicked() {
+                            self.toggle_bookmark();
+                        }
                     }
                 });
             });
@@ -1399,6 +1463,29 @@ impl eframe::App for BeaconApp {
                 self.send_active(TabCommand::ResumeDrawing { fps: DRAW_FPS });
             }
 
+            // A crashed tab's worker is gone, and its view with it, so no frame is coming: say
+            // so, and offer to start it again. The only tab included, which cannot be closed.
+            let crashed = self
+                .tabs
+                .lock()
+                .unwrap()
+                .get_tab(active)
+                .and_then(|t| t.crashed().map(str::to_string));
+            if let Some(error) = crashed {
+                let mut reload = false;
+                ui.vertical_centered(|ui| {
+                    ui.add_space(ui.available_height() / 3.0);
+                    ui.heading("This tab crashed");
+                    ui.label(egui::RichText::new(error).weak());
+                    ui.add_space(8.0);
+                    reload = ui.button("Reload Tab").clicked();
+                });
+                if reload {
+                    self.revive(active);
+                }
+                return;
+            }
+
             if let Some(dive) = self.views.get_mut(&active).and_then(|v| v.dive.as_mut()) {
                 let rect = ui.available_rect_before_wrap();
                 dive.show(ui, rect, !self.address_bar_focused);
@@ -1418,6 +1505,15 @@ impl eframe::App for BeaconApp {
                     config.show(ui);
                     return;
                 }
+            }
+
+            if let Some(notice) = &self.gpu_notice {
+                ui.vertical_centered(|ui| {
+                    ui.add_space(ui.available_height() / 3.0);
+                    ui.heading("Pages cannot be shown on this device yet");
+                    ui.label(notice);
+                });
+                return;
             }
 
             let texture = self.views.get(&active).and_then(|view| {
@@ -1592,8 +1688,6 @@ impl eframe::App for BeaconApp {
             }
             self.last_pointer = pointer;
 
-            // On a phone a tap on the error page starts the game, as space does elsewhere
-            // (the page says so). The page has nothing else to tap.
             // The fingers of a pinch lifting are no tap.
             let tapped = response.clicked() && !self.pinched;
             // Their release is this frame's click, so once they are all off the pinch is over
@@ -1601,9 +1695,7 @@ impl eframe::App for BeaconApp {
             if self.touches.is_empty() {
                 self.pinched = false;
             }
-            if tapped && cfg!(target_os = "android") && showing_error {
-                self.start_dive(active);
-            } else if tapped {
+            if tapped {
                 // The click's own position: a finger lifting takes the pointer away with it,
                 // so by now the context may have none.
                 if let Some(pos) = response.interact_pointer_pos() {
@@ -1915,20 +2007,20 @@ impl BeaconApp {
             (Answer::Trust, Question::Certificate { url, fingerprint, .. }) => {
                 let trusted = self.engine.as_ref().is_some_and(|e| e.trust_certificate(url, fingerprint));
                 if trusted {
-                    self.log.push(format!("Trusted the new certificate of {}", server(url)));
+                    self.toasts.push(format!("Trusted the new certificate of {}", server(url)));
                 }
                 trusted.then(|| url.clone())
             }
             (Answer::Forget, Question::Identity { url, .. }) => {
                 if self.engine.as_ref().is_some_and(|e| e.forget_identity(url)) {
-                    self.log.push(format!("Forgot the identity for {}", server(url)));
+                    self.toasts.push(format!("Forgot the identity for {}", server(url)));
                 }
                 None
             }
             (Answer::Make, Question::Identity { url, name, .. }) => {
                 let made = self.engine.as_ref().is_some_and(|e| e.make_identity(url, name.trim()));
                 if !made {
-                    self.log.push(format!("Could not make an identity for {}", server(url)));
+                    self.toasts.push(format!("Could not make an identity for {}", server(url)));
                 }
                 made.then(|| url.clone())
             }
@@ -1945,7 +2037,7 @@ impl BeaconApp {
     fn navigate_active(&mut self, address: &str) {
         self.fling = None;
         let Ok((_mode, url)) = beacon_core::address_parser::GosubAddressParser::parse(address) else {
-            self.log.push(format!("cannot parse address: {address}"));
+            self.toasts.push(format!("cannot parse address: {address}"));
             return;
         };
         let Some(active) = self.active() else { return };
@@ -1964,7 +2056,7 @@ impl BeaconApp {
                 tab.set_loading(true);
                 // Typing an address leaves the error page, as in GTK. Core cannot tell: the
                 // url is already the new one when the navigation starts, so the flag would
-                // stay and the next page's taps would start the game.
+                // stay and space on the next page would start the game.
                 tab.set_showing_error(false);
                 tabs.update_tab(active, &tab);
             }
@@ -1972,6 +2064,104 @@ impl BeaconApp {
         self.address_bar = url.to_string();
         self.send_active_and_draw(TabCommand::Navigate { url: url.to_string() });
     }
+
+    /// Open `url` in a new tab and switch to it.
+    fn open_in_front(&mut self, url: &str) {
+        if let Some(tab_id) = self.open_tab(url) {
+            self.activate(tab_id);
+        }
+    }
+
+    /// Bookmark the active tab's page, or drop its bookmark if it has one.
+    fn toggle_bookmark(&mut self) {
+        let Some(tab) = self.active().and_then(|id| self.tabs.lock().unwrap().get_tab(id)) else {
+            return;
+        };
+        let Some(engine) = &self.engine else { return };
+        let places = engine.places();
+        let url = tab.url().to_string();
+        if self.bookmarks.iter().any(|(_, b)| *b == url) {
+            places.remove_bookmark(&url);
+        } else {
+            places.add_bookmark(&url, if tab.title().is_empty() { &url } else { tab.title() });
+        }
+        self.bookmarks = places.bookmarks().into_iter().map(|b| (b.title, b.url)).collect();
+    }
+
+    /// Give a crashed tab a new engine worker and load its page again. The tab keeps its
+    /// place, its address and its history, as in GTK.
+    fn revive(&mut self, tab_id: TabId) {
+        let Some(url) = self.tabs.lock().unwrap().get_tab(tab_id).map(|t| t.url().to_string()) else {
+            return;
+        };
+        let Some(engine) = self.engine.as_mut() else { return };
+        let handle = match engine.create_tab(self.rt, &url, Some((1024, 768))) {
+            Ok(handle) => handle,
+            Err(e) => {
+                self.toasts.push(format!("could not restart the tab: {e}"));
+                return;
+            }
+        };
+        self.beacon.bind_engine_tab(handle.tab_id, tab_id);
+        {
+            let mut tabs = self.tabs.lock().unwrap();
+            if let Some(mut tab) = tabs.get_tab(tab_id) {
+                tab.set_tab_handle(handle.clone());
+                tab.set_crashed(None);
+                tab.set_loading(true);
+                tabs.update_tab(tab_id, &tab);
+            }
+        }
+        self.views.insert(tab_id, TabView::default());
+        let draw = self.draw_command();
+        self.rt.spawn(async move {
+            let _ = handle.send(TabCommand::Navigate { url }).await;
+            if let Some(draw) = draw {
+                let _ = handle.send(draw).await;
+            }
+        });
+    }
+
+    /// Save which tabs are open whenever that changed. Android ends the app without
+    /// asking, so this cannot wait for the way out; GTK saves after every tab change too.
+    fn save_session(&mut self) {
+        let active = self.active();
+        let session: Vec<beacon_core::session::SessionTab> = {
+            let tabs = self.tabs.lock().unwrap();
+            tabs.order()
+                .iter()
+                .filter_map(|id| {
+                    let tab = tabs.get_tab(*id)?;
+                    // A tab playing the game comes back to it, not to the page under it.
+                    let url = if self.is_diving(*id) {
+                        beacon_core::dive::URL.to_string()
+                    } else {
+                        tab.url().to_string()
+                    };
+                    Some(beacon_core::session::SessionTab {
+                        url,
+                        pinned: tab.is_pinned(),
+                        active: Some(*id) == active,
+                    })
+                })
+                .collect()
+        };
+        if !session.is_empty() && session != self.session {
+            beacon_core::session::save(&session);
+            self.session = session;
+        }
+    }
+}
+
+/// What to show in place of pages on a GPU that cannot draw them, by the adapter's name.
+/// Vello loses the Vulkan device on Arm Mali GPUs on the first page (GOS-162, KI-001).
+fn gpu_notice(adapter: &str) -> Option<String> {
+    adapter.contains("Mali").then(|| {
+        format!(
+            "Beacon's renderer does not work on this GPU ({adapter}) yet: the page stays blank. \
+             A fix is on its way in the renderer. Settings and the game work."
+        )
+    })
 }
 
 #[cfg(test)]
@@ -2001,5 +2191,23 @@ mod tests {
         // A name handed to a download that has not created its file yet is taken as well.
         assert_eq!(free_path(&dir, "b.zip", &[dir.join("b.zip")]), dir.join("b (2).zip"));
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_toolbar_glyphs_are_in_egui_s_own_fonts() {
+        // The app brings no fonts of its own, so what egui bundles is what a phone shows: a
+        // glyph missing there is a box on every device. Back, forward, stop, reload, the menu.
+        let mut fonts = egui::epaint::text::Fonts::new(Default::default(), egui::FontDefinitions::default());
+        let font = egui::FontId::proportional(14.0);
+        for glyph in ['\u{23f4}', '\u{23f5}', '\u{1f5d9}', '\u{21bb}', '\u{2630}'] {
+            assert!(fonts.has_glyph(&font, glyph), "U+{:04X} is missing", glyph as u32);
+        }
+    }
+
+    #[test]
+    fn only_a_mali_gpu_gets_the_notice() {
+        assert!(gpu_notice("Mali-G71").is_some_and(|n| n.contains("Mali-G71")));
+        assert!(gpu_notice("Adreno (TM) 740").is_none());
+        assert!(gpu_notice("AMD Radeon RX 7600 (RADV NAVI33)").is_none());
     }
 }
