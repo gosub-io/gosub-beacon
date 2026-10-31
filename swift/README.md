@@ -319,7 +319,7 @@ is identical on both.
 - No Mute Tab. The GTK tab menu has the item, but it is a `@todo` that logs "Tab should be
   muted"; the engine plays no audio yet.
 - No page console. The engine runs no scripts, so there is nothing for a page's own
-  `console.log` to have written. The Console tab shows the engine's log instead.
+  `console.log` to have written. The Log tab shows the engine's log instead.
 - No back-history menu. `beacon-core` exposes the forward branches of its history tree but
   not a flat back list, so press-and-hold works on Forward and has nothing to show on Back.
   Address-bar completion is a separate thing and does work: it searches the visited pages
