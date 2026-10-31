@@ -404,7 +404,7 @@ impl BeaconApp {
         if self.is_diving(tab_id) {
             beacon_core::dive::TITLE.to_string()
         } else if beacon_core::settings::is_editor_url(tab.url()) {
-            "Engine settings".to_string()
+            "Advanced settings".to_string()
         } else if tab.title().is_empty() {
             tab.url().to_string()
         } else {

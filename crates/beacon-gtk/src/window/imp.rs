@@ -3996,7 +3996,7 @@ impl BrowserWindow {
         if beacon_core::dive::is_dive(url) {
             beacon_core::dive::TITLE
         } else {
-            "Engine settings"
+            "Advanced settings"
         }
     }
 

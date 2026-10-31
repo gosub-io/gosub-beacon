@@ -281,10 +281,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         return submenu("Gosub Beacon", [
             about,
             .separator(),
-            // "Settings…" with ⌘, is where every Mac application keeps this, and since
-            // macOS 13 it is what the item is called. The GTK shell shows the same store as
-            // a gosub://config page.
-            item("Settings…", #selector(showSettings(_:)), ","),
+            // ⌘, is where every Mac application keeps its settings. "Advanced" because this is
+            // the raw engine store; the GTK shell shows the same as a gosub://config page.
+            item("Advanced Settings…", #selector(showSettings(_:)), ","),
             .separator(),
             hide, hideOthers, showAll,
             .separator(),

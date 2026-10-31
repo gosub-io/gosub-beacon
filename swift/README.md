@@ -192,7 +192,7 @@ so.
 The buffer, the request log and the timing wrapper live in `beacon_core::devtools`, not
 here. The GTK shell has the same pane over the same data; this file only draws it.
 
-### Settings
+### Advanced Settings
 
 `⌘,`. The engine's own settings store, one row per key, with the editor its type asks for: a
 switch for a boolean, a popup for a setting restricted to named values, a number field for a

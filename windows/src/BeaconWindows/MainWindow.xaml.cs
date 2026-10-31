@@ -556,7 +556,7 @@ public partial class MainWindow : Window
         tools.Items.Add(MenuItemFor("Reset Timing", () => _browser.ResetTiming()));
         tools.Items.Add(new Separator());
         tools.Items.Add(MenuItemFor("_Downloads\tCtrl+J", ShowDownloads));
-        tools.Items.Add(MenuItemFor("_Settings", ShowSettings));
+        tools.Items.Add(MenuItemFor("_Advanced Settings", ShowSettings));
 
         var help = new MenuItem { Header = "_Help" };
         help.Items.Add(MenuItemFor("_Licences", ShowLicenses));

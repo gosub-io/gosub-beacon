@@ -40,7 +40,10 @@ pub fn is_editor_url(url: &url::Url) -> bool {
     matches!(url.scheme(), "gosub" | "about") && gosub_engine::internal_pages::InternalPages::page_name(url) == "config"
 }
 
-/// Every key matching `filter`, sorted, with its schema and current value.
+/// Keys no editor lists: switches for features the engine does not have yet.
+pub const HIDDEN: &[&str] = &["useragent.content.javascript_enabled", "useragent.content.plugins_enabled"];
+
+/// Every key matching `filter` except [`HIDDEN`], sorted, with its schema and current value.
 ///
 /// An empty filter means every key. A filter containing `*` is handed to the store as a
 /// wildcard pattern; anything else is a case-insensitive substring, because that is what
@@ -55,6 +58,7 @@ pub fn rows(config: &Config, filter: &str) -> Vec<SettingRow> {
     if !filter.is_empty() && !filter.contains('*') {
         keys.retain(|key| key.to_lowercase().contains(&filter));
     }
+    keys.retain(|key| !HIDDEN.contains(&key.as_str()));
     keys.sort();
 
     keys.into_iter()
@@ -188,6 +192,24 @@ mod tests {
             assert!(!set_text(&config, "ui.scale", text), "{text} refused");
         }
         assert_eq!(config.get("ui.scale").unwrap(), Some(Setting::Float(1.5)));
+    }
+
+    #[test]
+    fn hidden_keys_are_not_listed() {
+        let info = |key: &str| SettingInfo {
+            key: key.to_string(),
+            description: String::new(),
+            default: Setting::Bool(false),
+            constraint: None,
+        };
+        let config = Config::new(vec![
+            info("useragent.content.plugins_enabled"),
+            info("useragent.content.images_enabled"),
+        ]);
+
+        let keys: Vec<_> = rows(&config, "").into_iter().map(|r| r.info.key).collect();
+        assert_eq!(keys, ["useragent.content.images_enabled"]);
+        assert!(rows(&config, "plugins").is_empty());
     }
 
     #[test]

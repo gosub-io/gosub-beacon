@@ -71,9 +71,9 @@ Text drawn over the picture uses explicit colours rather than theme ones, since 
 turned white on a dark theme would vanish into the picture's pale left half, and carries a
 drop shadow to stay legible where the lighthouse beam passes behind it.
 
-### Settings
+### Advanced Settings
 
-Tools -> Settings. The ABI hands over rows - key, description, type, value, default,
+Tools -> Advanced Settings. The ABI hands over rows - key, description, type, value, default,
 constraint - and this shell decides what each looks like: a checkbox for a bool, a popup
 where the schema restricts the value to literal choices, a text field otherwise with the
 accepted range beside it. Modified keys are bold and get a working Reset.
