@@ -3117,18 +3117,22 @@ impl BrowserWindow {
     }
 
     /// A typed address that is no URL at all. There is nothing to navigate to, so the error
-    /// page loads as `about:blank` and names what was typed.
+    /// page loads as `about:blank` and names what was typed. The tab takes that URL too:
+    /// left on the previous one, a tab that was on a shell page would stay on it.
     fn show_invalid_address(&self, tab_id: TabId, address: &str, error: &str) {
+        let blank = url::Url::parse("about:blank").expect("about:blank parses");
         let mut manager = self.tab_manager.lock().unwrap();
         let Some(mut tab) = manager.get_tab(tab_id) else {
             return;
         };
+        tab.set_favicon(None);
+        tab.set_url(blank.clone());
         tab.set_loading(false);
         tab.set_showing_error(true);
         manager.update_tab(tab_id, &tab);
         drop(manager);
         self.refresh_tabs();
-        self.load_error_page(tab_id, address, "about:blank", error);
+        self.load_error_page(tab_id, address, blank.as_str(), error);
     }
 
     /// A page's server showed another certificate than the one first seen there, and the
