@@ -232,8 +232,6 @@ impl BeaconApp {
         // enters the runtime for its own setup, and `create_tab` below does a `block_on` --
         // which panics if it runs while a runtime context is already entered. Holding a
         // guard here stalls startup before the first frame, with an empty log.
-        #[cfg(target_os = "android")]
-        crate::android::touch_style(egui_ctx);
 
         let context = Arc::new(
             EguiContextProvider::from_render_state(render_state)

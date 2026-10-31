@@ -33,6 +33,9 @@ impl Startup {
     /// `opened` is how opening the profile folder went, before the window: a failure there
     /// is shown, with no retry.
     pub fn new(cc: &eframe::CreationContext<'_>, rt: &'static Runtime, urls: Vec<String>, opened: anyhow::Result<()>) -> Self {
+        // Here rather than in the browser, so the startup screens get it too.
+        #[cfg(target_os = "android")]
+        crate::android::touch_style(&cc.egui_ctx);
         let state = match opened {
             Ok(()) => opening(),
             Err(e) => failed(&e, false),
