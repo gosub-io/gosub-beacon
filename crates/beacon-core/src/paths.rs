@@ -207,11 +207,14 @@ fn profile_key() -> anyhow::Result<&'static ProfileKey> {
                 LOCK.lock().unwrap().is_some(),
                 "the profile key is only read with the profile locked"
             );
-            // A copy: unlocking may write `[crypto]` into the manifest, and nothing else this
-            // process reads depends on it.
-            let mut profile = profile().clone();
-            let keys = key_store(&profile, keys_dir());
-            let key = match profile.unlock(keys.as_deref()) {
+            // Read again rather than copied: unlocking may write `[crypto]` into the manifest,
+            // nothing else this process reads depends on it, and on a retry `beaconctl` may
+            // have moved the profile to a new key since it was first read.
+            let unlocked = profile().reloaded().and_then(|mut profile| {
+                let keys = key_store(&profile, keys_dir());
+                profile.unlock(keys.as_deref())
+            });
+            let key = match unlocked {
                 Ok(key) => key,
                 Err(e) => {
                     // Nothing was opened with a key, so nothing needs the lock yet.
@@ -220,7 +223,7 @@ fn profile_key() -> anyhow::Result<&'static ProfileKey> {
                 }
             };
             // Kept before encrypting: the copy above is gone after this call, and a retry
-            // would unlock the stale copy over again. (The keychain now hands back the key
+            // would unlock it over again. (The keychain now hands back the key
             // it holds rather than taking a second one, so nothing is stranded either way.)
             KEY.get_or_init(|| key)
         }

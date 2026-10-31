@@ -569,6 +569,19 @@ impl Profile {
         })
     }
 
+    /// This profile as its manifest on disk says now: another process (`beaconctl`) may
+    /// have moved it to a new key since it was read.
+    pub fn reloaded(&self) -> Result<Self> {
+        let Some(manifest) = Manifest::read(&self.dir)? else {
+            bail!("{} holds no profile", self.dir.display());
+        };
+        Ok(Self {
+            dir: self.dir.clone(),
+            cache_dir: self.cache_dir.clone(),
+            manifest,
+        })
+    }
+
     /// `dir` as a profile, writing a manifest when it has none. A folder already holding
     /// the old flat layout keeps the old zone id, so its cookies and storage still match.
     /// A folder this makes is private; one that exists keeps its mode, since it may be
@@ -1691,6 +1704,22 @@ mod tests {
         assert!(p.key_from_passphrase("new").is_err());
         assert_eq!(p.unlock(Some(&keys)).unwrap().check(), third.check());
         assert!(p.rotate_key(&keys, Some(""), crypto::TEST_KDF, &mut fake_rekey).is_err());
+    }
+
+    #[test]
+    fn a_copy_read_before_a_rotation_unlocks_once_reloaded() {
+        let tmp = tempfile::tempdir().unwrap();
+        let roots = roots(&tmp);
+        let keys = crypto::MemoryKeyStore::default();
+        let mut p = roots.open(&Selection::Default, V).unwrap();
+        p.unlock(Some(&keys)).unwrap();
+        let before = p.clone();
+
+        let rotated = p.rotate_key(&keys, None, crypto::TEST_KDF, &mut fake_rekey).unwrap();
+        let err = before.key_from(Some(&keys)).unwrap_err();
+        assert!(err.downcast_ref::<Locked>().is_some_and(|l| l.stale), "{err:#}");
+        let key = before.reloaded().unwrap().key_from(Some(&keys)).unwrap();
+        assert_eq!(key.check(), rotated.check());
     }
 
     #[test]
