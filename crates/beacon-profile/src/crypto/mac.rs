@@ -228,11 +228,11 @@ fn cvt(status: OSStatus) -> std::result::Result<(), SecError> {
 
 fn describe(e: SecError, what: &str) -> anyhow::Error {
     if e.code() == INTERACTION_NOT_ALLOWED {
-        return anyhow!(
+        return anyhow!(super::KeychainError(format!(
             "{what}: the keychain has to ask on screen, and this session has none; run this once in a terminal on the Mac itself"
-        );
+        )));
     }
-    anyhow::Error::new(e).context(what.to_string())
+    anyhow::Error::new(e).context(super::KeychainError(what.to_string()))
 }
 
 #[cfg(test)]
@@ -278,5 +278,14 @@ mod tests {
     fn this_process_is_a_trusted_application() {
         assert!(trusted_application(None).is_ok());
         assert!(beacon_access().is_ok());
+    }
+
+    /// The startup dialog finds a keychain failure by this marker, whatever the code.
+    #[test]
+    fn keychain_failures_carry_the_marker() {
+        for code in [INTERACTION_NOT_ALLOWED, -25300] {
+            let e = describe(SecError::from_code(code), "reading");
+            assert!(e.downcast_ref::<super::super::KeychainError>().is_some(), "{code}: {e:#}");
+        }
     }
 }

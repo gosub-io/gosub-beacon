@@ -15,7 +15,7 @@ use beacon_core::command::BeaconCommand;
 use beacon_core::engine::BrowserEngine;
 use beacon_core::event::{BeaconEvent, Cursor};
 use beacon_core::tab::{GosubTab, GosubTabManager, TabId};
-use eframe::CreationContext;
+use eframe::egui_wgpu::RenderState;
 use gosub_engine::events::{EngineEvent, MouseButton, TabCommand};
 use gosub_render_pipeline::render::backend::ExternalHandle;
 use gosub_render_pipeline::render::{argb_u32_to_rgba8, composite_tiles, TileTarget};
@@ -223,16 +223,20 @@ enum Published {
 }
 
 impl BeaconApp {
-    pub fn new(cc: &CreationContext<'_>, rt: &'static Runtime, urls: Vec<String>) -> anyhow::Result<Self> {
+    /// Expects the profile to be open already: see [`crate::startup`].
+    pub fn new(
+        egui_ctx: &egui::Context,
+        render_state: Option<&RenderState>,
+        rt: &'static Runtime,
+        urls: Vec<String>,
+    ) -> anyhow::Result<Self> {
         // Deliberately NOT holding `rt.enter()` across this function. `BrowserEngine::new`
         // enters the runtime for its own setup, and `create_tab` below does a `block_on` --
         // which panics if it runs while a runtime context is already entered. Holding a
         // guard here stalls startup before the first frame, with an empty log.
-        #[cfg(target_os = "android")]
-        crate::android::touch_style(&cc.egui_ctx);
 
         let context = Arc::new(
-            EguiContextProvider::from_eframe(cc)
+            EguiContextProvider::from_render_state(render_state)
                 .ok_or_else(|| anyhow::anyhow!("eframe is not running its wgpu renderer; Beacon's egui frontend needs it"))?,
         );
         // On a phone, Vello rendering the whole HiDPI viewport takes longer than a frame (~55 ms
@@ -267,7 +271,7 @@ impl BeaconApp {
         // thing that knows a page changed, so without this egui would idle and the page
         // would appear frozen until the pointer moved.
         if let Some(mut redraw_rx) = engine.take_redraw_rx() {
-            let ctx = cc.egui_ctx.clone();
+            let ctx = egui_ctx.clone();
             rt.spawn(async move {
                 while redraw_rx.recv().await.is_some() {
                     ctx.request_repaint();
@@ -276,7 +280,7 @@ impl BeaconApp {
         }
 
         let tabs = Arc::new(Mutex::new(GosubTabManager::new()));
-        let beacon = Beacon::new(tabs.clone(), rt.handle().clone(), Rc::new(EguiPlatform::new(cc.egui_ctx.clone())));
+        let beacon = Beacon::new(tabs.clone(), rt.handle().clone(), Rc::new(EguiPlatform::new(egui_ctx.clone())));
 
         let places = engine.places();
         let mut app = Self {
@@ -317,7 +321,7 @@ impl BeaconApp {
             #[cfg(target_os = "android")]
             published: Default::default(),
             #[cfg(target_os = "android")]
-            egui_ctx: cc.egui_ctx.clone(),
+            egui_ctx: egui_ctx.clone(),
         };
         app.bookmarks = places.bookmarks().into_iter().map(|b| (b.title, b.url)).collect();
 

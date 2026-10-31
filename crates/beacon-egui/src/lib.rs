@@ -15,6 +15,7 @@ mod context;
 mod dive;
 mod picker_value;
 mod platform;
+mod startup;
 
 use std::sync::OnceLock;
 use tokio::runtime::Runtime;
@@ -35,11 +36,14 @@ pub fn run() {
     // Then argv (the lockdown needs `--user-data-dir`) and the lockdown, in every mode,
     // before any thread, the logger or the engine exist.
     beacon_core::cli::Cli::init();
-    if let Err(e) = beacon_core::paths::init() {
-        eprintln!("gosub-beacon: cannot open the profile: {e:#}");
-        std::process::exit(1);
+    // A profile that cannot be opened is shown in the window, which then only offers to
+    // quit: without a profile there is nothing to lock down to.
+    let opened = beacon_core::paths::init()
+        .map(|_| ())
+        .map_err(|e| e.context("cannot open the profile"));
+    if opened.is_ok() {
+        beacon_core::isolation::lock_down_broker();
     }
-    beacon_core::isolation::lock_down_broker();
 
     // RUST_LOG wins when it is set, so a diagnostic run needs no rebuild:
     //   RUST_LOG=beacon_egui=debug ./gosub-beacon-egui https://example.org
@@ -64,21 +68,17 @@ pub fn run() {
         renderer: eframe::Renderer::Wgpu,
         ..Default::default()
     };
-    start(options, urls);
+    start(options, urls, opened);
 }
 
 /// Run the event loop with `options` until the window closes, opening `urls` as startup
 /// tabs. Shared by the desktop entry above and the Android one, which differ only in how
-/// they get here.
-fn start(options: eframe::NativeOptions, urls: Vec<String>) {
+/// they get here. `opened` is how opening the profile folder went.
+fn start(options: eframe::NativeOptions, urls: Vec<String>, opened: anyhow::Result<()>) {
     let result = eframe::run_native(
         "Gosub Beacon",
         options,
-        Box::new(move |cc| {
-            app::BeaconApp::new(cc, runtime(), urls)
-                .map(|app| Box::new(app) as Box<dyn eframe::App>)
-                .map_err(|e| e.to_string().into())
-        }),
+        Box::new(move |cc| Ok(Box::new(startup::Startup::new(cc, runtime(), urls, opened)) as Box<dyn eframe::App>)),
     );
     if let Err(e) = result {
         log::error!("Beacon could not start: {e}");

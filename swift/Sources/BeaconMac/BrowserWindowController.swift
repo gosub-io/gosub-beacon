@@ -367,12 +367,16 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
     /// Open a tab and claim it for this window.
     ///
     /// `after` puts it beside the tab it came from rather than at the end of the strip,
-    /// which is what opening a link from a page means.
+    /// which is what opening a link from a page means. `report` false leaves saying so to
+    /// the caller.
     @discardableResult
-    func openTab(_ url: String, activate: Bool, after: BeaconTabId = 0) -> BeaconTabId {
+    func openTab(_ url: String, activate: Bool, after: BeaconTabId = 0, report: Bool = true) -> BeaconTabId {
         let tab = after == 0 ? browser.openTab(url) : browser.openTab(url, after: after)
         guard tab != 0 else {
             NSLog("beacon: could not open \(url)")
+            if report {
+                FailureAlert.show(Browser.Failure(reason: "Beacon could not open a tab for this address.", hint: nil, detail: url), on: window)
+            }
             return 0
         }
         if let index = ownedTabs.firstIndex(of: after) {
@@ -395,9 +399,13 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
     /// back what it recorded.
     func restore(_ session: [Browser.SessionTab]) {
         var front: BeaconTabId = 0
+        var failed: [String] = []
         for saved in session {
-            let tab = openTab(saved.url, activate: false)
-            guard tab != 0 else { continue }
+            let tab = openTab(saved.url, activate: false, report: false)
+            guard tab != 0 else {
+                failed.append(saved.url)
+                continue
+            }
             if saved.pinned {
                 browser.setPinned(tab, true)
             }
@@ -407,6 +415,13 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
         }
         // Something has to be in front. The saved active tab, or the first that opened.
         select(front != 0 ? front : (ownedTabs.first ?? 0))
+        // Once for the lot, not a sheet per tab.
+        if !failed.isEmpty {
+            let reason = failed.count == 1
+                ? "Beacon could not reopen a tab from the last session."
+                : "Beacon could not reopen \(failed.count) tabs from the last session."
+            FailureAlert.show(Browser.Failure(reason: reason, hint: nil, detail: failed.joined(separator: "\n")), on: window)
+        }
     }
 
     private func select(_ tab: BeaconTabId) {

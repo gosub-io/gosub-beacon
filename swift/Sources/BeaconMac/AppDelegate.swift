@@ -31,8 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        guard let browser = Browser(profileDirectory: nil, private: false) else {
-            NSLog("beacon: the engine would not start")
+        guard let browser = startBrowser() else {
             NSApp.terminate(nil)
             return
         }
@@ -42,6 +41,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         WindowRegistry.shared.onChange = { [weak self] in self?.pruneSessions() }
         openFirstWindow(browser: browser)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// The browser, or nil once the user gives up. A failed start says why and offers another
+    /// try: a profile held by a Beacon that is still quitting is free a moment later.
+    private func startBrowser() -> Browser? {
+        while true {
+            if let browser = Browser(profileDirectory: nil, private: false) { return browser }
+            let failure = Browser.lastFailure() ?? Browser.Failure(reason: "Beacon could not start.", hint: nil, detail: "")
+            NSLog("beacon: the engine would not start: \(failure.detail)")
+            guard FailureAlert.run(failure, retry: true) else { return nil }
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
@@ -94,7 +104,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             // of the engine's zone (memory-only cookies and storage, no visits recorded),
             // and there is no way to make one tab of a session private.
             guard let session = Browser(profileDirectory: nil, private: true) else {
-                NSLog("beacon: could not start a private session")
+                let failure = Browser.lastFailure() ?? Browser.Failure(reason: "Beacon could not start.", hint: nil, detail: "")
+                NSLog("beacon: could not start a private session: \(failure.detail)")
+                FailureAlert.show(
+                    Browser.Failure(reason: "Beacon could not open a private window.", hint: failure.hint, detail: failure.detail),
+                    on: front?.window
+                )
                 return
             }
             privateBrowser = session

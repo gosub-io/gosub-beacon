@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use eframe::CreationContext;
+use eframe::egui_wgpu::RenderState;
 use gosub_renderer_vello::WgpuContextProvider;
 use parking_lot::RwLock;
 use vello::wgpu;
@@ -24,8 +24,8 @@ pub struct EguiContextProvider {
 impl EguiContextProvider {
     /// `None` when eframe is not running its wgpu renderer, which the caller must treat as
     /// fatal — there is no software fallback here.
-    pub fn from_eframe(cc: &CreationContext) -> Option<Self> {
-        let state = cc.wgpu_render_state.as_ref()?;
+    pub fn from_render_state(state: Option<&RenderState>) -> Option<Self> {
+        let state = state?;
         Some(Self {
             device: Arc::new(state.device.clone()),
             queue: Arc::new(state.queue.clone()),

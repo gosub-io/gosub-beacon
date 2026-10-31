@@ -32,6 +32,30 @@ final class Browser {
         beacon_free(handle)
     }
 
+    /// Why a browser would not start: a sentence for the user, what they can do about it
+    /// when there is something, and the error underneath.
+    struct Failure {
+        let reason: String
+        let hint: String?
+        let detail: String
+    }
+
+    /// Why the last `init` returned nil. nil after one that worked.
+    static func lastFailure() -> Failure? {
+        guard let reason = ownedString(beacon_last_error()) else { return nil }
+        return Failure(
+            reason: reason,
+            hint: ownedString(beacon_last_error_hint()),
+            detail: ownedString(beacon_last_error_detail()) ?? ""
+        )
+    }
+
+    private static func ownedString(_ pointer: UnsafeMutablePointer<CChar>?) -> String? {
+        guard let pointer else { return nil }
+        defer { beacon_string_free(pointer) }
+        return String(cString: pointer)
+    }
+
     /// A private session: cookies and storage in memory only, no visited history recorded.
     /// Bookmarks and settings remain the shared persistent ones.
     var isPrivate: Bool { beacon_is_private(handle) }

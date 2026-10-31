@@ -30,6 +30,7 @@ pub mod processes;
 pub mod session;
 pub mod settings;
 pub mod source_page;
+pub mod startup;
 pub mod state;
 pub mod tab;
 pub mod timeline;

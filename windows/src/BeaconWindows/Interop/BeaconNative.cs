@@ -110,6 +110,15 @@ internal static partial class BeaconNative
     [DllImport(Lib, EntryPoint = "beacon_string_free")]
     public static extern void StringFree(IntPtr s);
 
+    [DllImport(Lib, EntryPoint = "beacon_last_error")]
+    public static extern IntPtr LastError();
+
+    [DllImport(Lib, EntryPoint = "beacon_last_error_hint")]
+    public static extern IntPtr LastErrorHint();
+
+    [DllImport(Lib, EntryPoint = "beacon_last_error_detail")]
+    public static extern IntPtr LastErrorDetail();
+
     [DllImport(Lib, EntryPoint = "beacon_is_private")]
     [return: MarshalAs(UnmanagedType.U1)]
     public static extern bool IsPrivate(IntPtr browser);

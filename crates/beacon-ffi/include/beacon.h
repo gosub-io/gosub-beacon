@@ -132,8 +132,17 @@ typedef struct {
 
 /* ── lifecycle ─────────────────────────────────────────────────────────────── */
 
-/* NULL if the engine could not start. `config` may be NULL for defaults. */
+/* NULL if the engine could not start; beacon_last_error then says why. `config` may be
+ * NULL for defaults. */
 BeaconBrowser *beacon_new(const BeaconConfig *config);
+/* Why the last beacon_new returned NULL, as a sentence for the user (another Beacon has the
+ * profile, the keychain did not answer, ...). NULL after a beacon_new that worked.
+ * beacon_last_error_hint says what the user can do about it, NULL when there is nothing to
+ * suggest; beacon_last_error_detail is the underlying error, for a bug report. Show the
+ * reason and the hint, offer to try again. Free each with beacon_string_free. */
+char *beacon_last_error(void);
+char *beacon_last_error_hint(void);
+char *beacon_last_error_detail(void);
 void beacon_free(BeaconBrowser *browser);
 /* Free a string this library returned. NULL is fine. */
 void beacon_string_free(char *s);

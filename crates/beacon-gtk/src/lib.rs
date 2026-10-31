@@ -41,9 +41,9 @@ pub fn run() {
 
     // The profile next: creating or migrating it writes outside the folders the lockdown
     // leaves open, and the lockdown needs to know which profile those are.
+    // On failure the process only shows why and ends, so it never reaches the lockdown.
     if let Err(e) = beacon_core::paths::init() {
-        eprintln!("gosub-beacon: cannot open the profile: {e:#}");
-        std::process::exit(1);
+        dialog::startup::fail(&e.context("cannot open the profile"));
     }
 
     // Before any thread, the logger or the engine exist: confine this process to what it
@@ -90,9 +90,9 @@ pub fn run() {
     app.connect_startup(|_| {
         // Only the primary instance gets here; a second launch has already handed off. So
         // this is where a profile another process holds, or one without a keychain for its
-        // key, is refused, before any window.
-        if let Err(e) = beacon_core::paths::lock_profile().and_then(|()| beacon_core::paths::unlock_profile()) {
-            eprintln!("gosub-beacon: {e:#}");
+        // key, is refused, before any window. It blocks `startup`, with a main loop of its
+        // own, so `activate` only runs once the profile is open.
+        if !dialog::startup::open_profile() {
             std::process::exit(1);
         }
         load_css();
