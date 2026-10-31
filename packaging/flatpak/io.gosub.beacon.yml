@@ -73,19 +73,12 @@ modules:
           - .git
 
       # The engine is a path dependency at ../gosub-engine, so it has to land beside
-      # Beacon in the build directory. A local directory by default, so the flatpak builds
-      # what you have checked out; for a reproducible/CI build swap in the git source
-      # below and make sure Cargo.lock was resolved against that same commit.
-      - type: dir
-        path: ../../../gosub-engine
+      # Beacon in the build directory. Pinned, so a bundle says which engine it holds:
+      # keep the commit at the engine `beacon` this Cargo.lock was resolved against.
+      - type: git
+        url: https://github.com/gosub-io/gosub-engine.git
+        commit: 68d0cfcaa69784dcc8c7c5cd0bb1dc41b31e53f9
         dest: gosub-engine
-        skip:
-          - target
-          - .git
-      # - type: git
-      #   url: https://github.com/gosub-io/gosub-engine.git
-      #   commit: 002e197c2eeabf05ea28ed49a37f1e6b16ce4ec2  # tip of `beacon`, keep in step with Cargo.lock
-      #   dest: gosub-engine
 
       # Prebuilt Skia, matching skia-bindings 0.153.3 and the feature set the GTK build
       # resolves to. Regenerate with ./refresh-skia.sh when skia-safe is bumped.
