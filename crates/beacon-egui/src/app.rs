@@ -1650,14 +1650,16 @@ impl BeaconApp {
 
     /// The Back key (Android's Back button or gesture, a keyboard's Back key). It unwinds
     /// whatever the chrome has open before it touches the page: the address bar's focus,
-    /// a menu, the tab list. Then it goes back in the tab's history, and with no history
-    /// left Beacon goes to the background on Android.
+    /// a menu, the About box, the tab list. Then it goes back in the tab's history, and with
+    /// no history left Beacon goes to the background on Android.
     fn back_key(&mut self, ctx: &egui::Context, active: TabId) {
         // Any text field: the address bar, or one on the settings page.
         if self.address_bar_focused || ctx.egui_wants_keyboard_input() {
             ctx.memory_mut(|m| m.stop_text_input());
         } else if egui::Popup::is_any_open(ctx) {
             egui::Popup::close_all(ctx);
+        } else if self.about_open {
+            self.about_open = false;
         } else if self.tab_list_open {
             self.tab_list_open = false;
         } else if self.leave_dive(active) {
