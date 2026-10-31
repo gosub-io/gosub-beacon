@@ -56,7 +56,7 @@ pub fn run() {
     let mut builder = env_logger::Builder::new();
     builder
         .filter(None, log::LevelFilter::Error)
-        .filter(Some("gtk"), log::LevelFilter::Info)
+        .filter(Some("gtk"), log::LevelFilter::Warn)
         // Our own warnings must not be swallowed by the global Error filter. These match
         // on module path, which starts with the crate name -- so they have to be kept in
         // step with the crate names, or our logging silently goes quiet.
@@ -79,7 +79,10 @@ pub fn run() {
     let max_level = logger.filter();
     beacon_core::devtools::install_logger(Box::new(logger), max_level);
 
-    gtk4::init().unwrap();
+    if let Err(e) = gtk4::init() {
+        eprintln!("gosub-beacon: cannot open a display: {e}");
+        std::process::exit(1);
+    }
 
     gio::resources_register_include!("gosub.gresource").expect("Failed to register resources.");
 
@@ -155,4 +158,25 @@ fn load_css() {
         &provider,
         gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use gtk4::prelude::ActionMapExt;
+
+    /// GTK greys out a menu item whose action nothing registers, without a word.
+    #[test]
+    fn every_menu_action_is_registered() {
+        let app = crate::application::Application::new("io.gosub.beacon.test");
+        app.setup_actions();
+        crate::window::BrowserWindow::connect_actions(&app);
+        let menu = include_str!("../resources/main_menu.ui");
+        let actions = menu
+            .split("<attribute name=\"action\">app.")
+            .skip(1)
+            .filter_map(|s| s.split('<').next());
+        for action in actions {
+            assert!(app.lookup_action(action).is_some(), "menu action app.{action} is not registered");
+        }
+    }
 }

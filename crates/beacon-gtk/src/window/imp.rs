@@ -461,6 +461,11 @@ impl BrowserWindow {
 
     #[template_callback]
     fn handle_view_source_clicked(&self, _btn: &Button) {
+        self.view_source();
+    }
+
+    /// Open the active tab's source in a new tab beside it.
+    pub(crate) fn view_source(&self) {
         let Some(tab_id) = self.active_tab_id() else {
             self.log("No active tab to view source for");
             return;
@@ -531,10 +536,15 @@ impl BrowserWindow {
     /// or stop it if it is still loading. Shell-rendered internal pages have nothing to
     /// reload; engine-rendered ones get their HTML pushed again.
     pub(crate) fn reload_or_stop(&self, tab_id: TabId) {
-        let (loading, url, handle) = {
+        let (loading, url, typed, handle) = {
             let manager = self.tab_manager.lock().unwrap();
             match manager.get_tab(tab_id) {
-                Some(tab) => (tab.is_loading(), tab.url().clone(), tab.tab_handle()),
+                Some(tab) => (
+                    tab.is_loading(),
+                    tab.url().clone(),
+                    tab.typed_address().map(str::to_string),
+                    tab.tab_handle(),
+                ),
                 None => return,
             }
         };
@@ -558,6 +568,13 @@ impl BrowserWindow {
             return;
         }
 
+        // An address that did not parse has no page to refetch; going to it again brings
+        // its error page back.
+        if let Some(typed) = typed {
+            let _ = self.get_sender().send_blocking(Message::LoadUrl(tab_id, typed));
+            return;
+        }
+
         // The shell-rendered config page has nothing to reload.
         if Self::is_shell_rendered(&url) {
             return;
@@ -577,13 +594,17 @@ impl BrowserWindow {
     /// every other browser. Unlike the button's reload this never stops a load in progress --
     /// asking for a fresh copy of a page is not the same as asking it to stop arriving.
     pub(crate) fn reload_ignoring_cache(&self, tab_id: TabId) {
-        let (url, handle) = {
+        let (url, typed, handle) = {
             let manager = self.tab_manager.lock().unwrap();
             match manager.get_tab(tab_id) {
-                Some(tab) => (tab.url().clone(), tab.tab_handle()),
+                Some(tab) => (tab.url().clone(), tab.typed_address().map(str::to_string), tab.tab_handle()),
                 None => return,
             }
         };
+        if let Some(typed) = typed {
+            let _ = self.get_sender().send_blocking(Message::LoadUrl(tab_id, typed));
+            return;
+        }
         // The same two pages the ordinary reload cannot refetch: one the shell drew, one the
         // shell built.
         if Self::is_shell_rendered(&url) {
@@ -3108,7 +3129,28 @@ impl BrowserWindow {
         }
         drop(manager);
         self.refresh_tabs();
-        self.load_error_page(our_id, url, error);
+        self.load_error_page(our_id, url.as_str(), url.as_str(), error);
+    }
+
+    /// A typed address that is no URL at all. There is nothing to navigate to, so the error
+    /// page loads as `about:blank` and names what was typed. The tab takes that URL too:
+    /// left on the previous one, a tab that was on a shell page would stay on it. What was
+    /// typed stays in the address bar, and a reload tries it again.
+    fn show_invalid_address(&self, tab_id: TabId, address: &str, error: &str) {
+        let blank = url::Url::parse("about:blank").expect("about:blank parses");
+        let mut manager = self.tab_manager.lock().unwrap();
+        let Some(mut tab) = manager.get_tab(tab_id) else {
+            return;
+        };
+        tab.set_favicon(None);
+        tab.set_url(blank.clone());
+        tab.set_typed_address(Some(address.to_string()));
+        tab.set_loading(false);
+        tab.set_showing_error(true);
+        manager.update_tab(tab_id, &tab);
+        drop(manager);
+        self.refresh_tabs();
+        self.load_error_page(tab_id, address, blank.as_str(), error);
     }
 
     /// A page's server showed another certificate than the one first seen there, and the
@@ -3302,8 +3344,10 @@ impl BrowserWindow {
     ///
     /// The page itself is `beacon_core::error_page`'s, shared with every other frontend;
     /// what is left here is getting it into this tab.
-    fn load_error_page(&self, tab_id: TabId, url: &url::Url, error: &str) {
-        let html = beacon_core::error_page::build(url.as_str(), error);
+    /// `address` is what the page names; `base_url` is what the tab loads it as, and has to
+    /// parse.
+    fn load_error_page(&self, tab_id: TabId, address: &str, base_url: &str, error: &str) {
+        let html = beacon_core::error_page::build(address, error);
 
         let manager = self.tab_manager.lock().unwrap();
         let Some(handle) = manager.get_tab(tab_id).and_then(|t| t.tab_handle()) else {
@@ -3311,7 +3355,7 @@ impl BrowserWindow {
         };
         drop(manager);
 
-        let base_url = url.to_string();
+        let base_url = base_url.to_string();
         runtime().spawn(async move {
             let _ = handle.send(EngineTabCommand::LoadHtml { html, base_url }).await;
             let _ = handle.send(EngineTabCommand::ResumeDrawing { fps: 30 }).await;
@@ -3714,10 +3758,10 @@ impl BrowserWindow {
         if let Some(tab) = manager.get_tab(tab_id) {
             // New-tab pages (blank, home) get an empty address bar, ready to type into.
             let page = gosub_engine::internal_pages::InternalPages::page_name(tab.url());
-            if matches!(tab.url().scheme(), "gosub" | "about") && matches!(page, "blank" | "home") {
+            if tab.typed_address().is_none() && matches!(tab.url().scheme(), "gosub" | "about") && matches!(page, "blank" | "home") {
                 self.show_address(None);
             } else {
-                self.show_address(Some(tab.url()));
+                self.show_tab_address(&tab);
             }
             let suffix = if self.private.get() { " (Private)" } else { "" };
             self.obj().set_title(Some(&format!("{} — Gosub Beacon{suffix}", tab.title())));
@@ -4206,6 +4250,18 @@ impl BrowserWindow {
         };
         self.searchbar.set_icon_from_icon_name(gtk4::EntryIconPosition::Primary, icon);
         self.searchbar.set_icon_tooltip_text(gtk4::EntryIconPosition::Primary, tooltip);
+    }
+
+    /// The address bar for `tab`: what was typed while it shows the error page for an
+    /// address that does not parse, its URL otherwise.
+    fn show_tab_address(&self, tab: &GosubTab) {
+        match tab.typed_address() {
+            Some(typed) => {
+                self.show_address(None);
+                self.searchbar.set_text(typed);
+            }
+            None => self.show_address(Some(tab.url())),
+        }
     }
 
     /// Add or remove the active tab's page from the bookmarks. Shared by the toolbar star and
@@ -4793,9 +4849,13 @@ impl BrowserWindow {
             Message::LoadUrl(tab_id, url_str) => {
                 self.log(format!("Loading URL: {}", url_str).as_str());
 
-                let Ok((view_mode, url)) = GosubAddressParser::parse(url_str.as_str()) else {
-                    self.log("Cannot parse URL");
-                    return;
+                let (view_mode, url) = match GosubAddressParser::parse(url_str.as_str()) {
+                    Ok(parsed) => parsed,
+                    Err(e) => {
+                        self.log("Cannot parse URL");
+                        self.show_invalid_address(tab_id, &url_str, &e.to_string());
+                        return;
+                    }
                 };
 
                 // `view-source:`/`raw:` addresses render the target's source in-tab.
@@ -4807,11 +4867,16 @@ impl BrowserWindow {
                 // Update information in the given tab with the new url
                 let shell = Self::is_shell_rendered(&url);
                 let mut manager = self.tab_manager.lock().unwrap();
-                let mut tab = manager.get_tab(tab_id).unwrap().clone();
+                // The tab may have closed since this was queued.
+                let Some(mut tab) = manager.get_tab(tab_id) else {
+                    return;
+                };
 
                 tab.set_favicon(None);
                 tab.set_title(if shell { Self::shell_page_title(&url) } else { url.as_str() });
                 tab.set_url(url.clone());
+                // Typing about:blank is no move to set_url, but it is a new address.
+                tab.set_typed_address(None);
                 tab.set_loading(!shell);
                 tab.set_showing_error(false);
 
@@ -5493,7 +5558,11 @@ impl BrowserWindow {
             }
             BeaconEvent::UrlChanged(tab_id, url) => {
                 if self.active_tab_id() == Some(tab_id) {
-                    self.show_address(Some(&url));
+                    let tab = self.tab_manager.lock().unwrap().get_tab(tab_id);
+                    match tab {
+                        Some(tab) => self.show_tab_address(&tab),
+                        None => self.show_address(Some(&url)),
+                    }
                 }
             }
             BeaconEvent::LoadingChanged(..) => {}

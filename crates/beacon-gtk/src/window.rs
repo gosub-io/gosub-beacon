@@ -49,7 +49,7 @@ impl BrowserWindow {
         menu_bar.add_css_class("header-menubar");
         window.imp().headerbar.pack_start(&menu_bar);
 
-        Self::connect_actions(app, &window);
+        Self::connect_actions(app);
         Self::connect_accelerators(app, &window);
 
         // Start the engine and wire its redraw/event notifications before opening any tabs.
@@ -204,7 +204,7 @@ impl BrowserWindow {
         app.active_window().and_then(|w| w.downcast::<Self>().ok())
     }
 
-    fn connect_actions(app: &Application, _window: &Self) {
+    pub(crate) fn connect_actions(app: &Application) {
         // Registered on every window construction; re-registration overwrites the
         // previous action, which is harmless since they all resolve the active window
         // at activation time.
@@ -481,6 +481,60 @@ impl BrowserWindow {
             }
         });
         app.add_action(&zoom_reset);
+
+        let view_source = SimpleAction::new("view-source", None);
+        view_source.connect_activate({
+            let app = app.clone();
+            move |_, _| {
+                let Some(window) = BrowserWindow::action_target(&app) else { return };
+                window.imp().view_source();
+            }
+        });
+        app.add_action(&view_source);
+
+        let downloads = SimpleAction::new("downloads", None);
+        downloads.connect_activate({
+            let app = app.clone();
+            move |_, _| {
+                let Some(window) = BrowserWindow::action_target(&app) else { return };
+                window.imp().btn_downloads.popup();
+            }
+        });
+        app.add_action(&downloads);
+
+        // Internal pages open in a tab of their own, as every browser's Settings does.
+        for (name, url, title) in [
+            ("settings", "gosub://config", "Settings"),
+            ("bookmarks", "gosub://bookmarks", "Bookmarks"),
+            ("show-help", "gosub://help", "Help"),
+        ] {
+            let action = SimpleAction::new(name, None);
+            action.connect_activate({
+                let app = app.clone();
+                move |_, _| {
+                    let Some(window) = BrowserWindow::action_target(&app) else { return };
+                    let _ = window
+                        .imp()
+                        .get_sender()
+                        .send_blocking(Message::OpenTabForeground(url.into(), title.into()));
+                }
+            });
+            app.add_action(&action);
+        }
+
+        // gosub://history lists the history of the tab it is loaded in, so it goes there.
+        let history = SimpleAction::new("history", None);
+        history.connect_activate({
+            let app = app.clone();
+            move |_, _| {
+                let Some(window) = BrowserWindow::action_target(&app) else { return };
+                let imp = window.imp();
+                if let Some(tab_id) = imp.active_tab_id() {
+                    let _ = imp.get_sender().send_blocking(Message::LoadUrl(tab_id, "gosub://history".into()));
+                }
+            }
+        });
+        app.add_action(&history);
 
         // Tab switching (chip clicks) is handled by `imp::BrowserWindow::activate_tab`,
         // which also syncs the address bar and nav buttons.

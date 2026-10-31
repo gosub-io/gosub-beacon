@@ -16,6 +16,11 @@ use gtk4::{gdk, PopoverMenu, PopoverMenuFlags};
 
 /// Build and pop up the page context menu at `point` (window coordinates) for `tab_id`.
 pub(crate) fn show(window: &super::BrowserWindow, tab_id: TabId, point: Point, hit: HitTestResponse) {
+    // The hit test is async. Back and Forward act on the active tab, so a menu for a tab
+    // switched away from in the meantime would navigate the wrong one.
+    if window.imp().active_tab_id() != Some(tab_id) {
+        return;
+    }
     let menu = Menu::new();
     let actions = SimpleActionGroup::new();
 
@@ -25,14 +30,23 @@ pub(crate) fn show(window: &super::BrowserWindow, tab_id: TabId, point: Point, h
     nav.append(Some("Forward"), Some("page.forward"));
     nav.append(Some("Reload"), Some("page.reload"));
     menu.append_section(None, &nav);
-    add_action(&actions, "back", {
+    let back = add_action(&actions, "back", {
         let window = window.clone();
         move || window.imp().navigate_back()
     });
-    add_action(&actions, "forward", {
+    let forward = add_action(&actions, "forward", {
         let window = window.clone();
         move || window.imp().dispatch(BeaconCommand::Forward(None))
     });
+    let (can_back, can_forward) = window
+        .imp()
+        .tab_manager
+        .lock()
+        .unwrap()
+        .get_tab(tab_id)
+        .map_or((false, false), |tab| (tab.history().can_go_back(), tab.history().can_go_forward()));
+    back.set_enabled(can_back);
+    forward.set_enabled(can_forward);
     add_action(&actions, "reload", {
         let window = window.clone();
         move || window.imp().reload_or_stop(tab_id)
@@ -115,10 +129,11 @@ pub(crate) fn show(window: &super::BrowserWindow, tab_id: TabId, point: Point, h
     popover.popup();
 }
 
-fn add_action(group: &SimpleActionGroup, name: &str, f: impl Fn() + 'static) {
+fn add_action(group: &SimpleActionGroup, name: &str, f: impl Fn() + 'static) -> SimpleAction {
     let action = SimpleAction::new(name, None);
     action.connect_activate(move |_, _| f());
     group.add_action(&action);
+    action
 }
 
 fn copy_text(window: &super::BrowserWindow, text: &str) {
