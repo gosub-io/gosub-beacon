@@ -162,20 +162,21 @@ fn load_css() {
 
 #[cfg(test)]
 mod tests {
+    use gtk4::prelude::ActionMapExt;
+
     /// GTK greys out a menu item whose action nothing registers, without a word.
     #[test]
     fn every_menu_action_is_registered() {
+        let app = crate::application::Application::new("io.gosub.beacon.test");
+        app.setup_actions();
+        crate::window::BrowserWindow::connect_actions(&app);
         let menu = include_str!("../resources/main_menu.ui");
-        let sources = [include_str!("application.rs"), include_str!("window.rs")];
         let actions = menu
             .split("<attribute name=\"action\">app.")
             .skip(1)
             .filter_map(|s| s.split('<').next());
         for action in actions {
-            assert!(
-                sources.iter().any(|src| src.contains(&format!("\"{action}\""))),
-                "menu action app.{action} is not registered"
-            );
+            assert!(app.lookup_action(action).is_some(), "menu action app.{action} is not registered");
         }
     }
 }

@@ -93,7 +93,7 @@ impl Application {
             .map_or_else(|| BrowserWindow::new(self, false), |w| w.downcast().unwrap())
     }
 
-    fn setup_actions(&self) {
+    pub(crate) fn setup_actions(&self) {
         let open_urls = gio::SimpleAction::new(OPEN_URLS, Some(&glib::VariantType::new("(bas)").unwrap()));
         open_urls.connect_activate(clone!(
             #[weak(rename_to=app)]

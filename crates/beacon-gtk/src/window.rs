@@ -49,7 +49,7 @@ impl BrowserWindow {
         menu_bar.add_css_class("header-menubar");
         window.imp().headerbar.pack_start(&menu_bar);
 
-        Self::connect_actions(app, &window);
+        Self::connect_actions(app);
         Self::connect_accelerators(app, &window);
 
         // Start the engine and wire its redraw/event notifications before opening any tabs.
@@ -204,7 +204,7 @@ impl BrowserWindow {
         app.active_window().and_then(|w| w.downcast::<Self>().ok())
     }
 
-    fn connect_actions(app: &Application, _window: &Self) {
+    pub(crate) fn connect_actions(app: &Application) {
         // Registered on every window construction; re-registration overwrites the
         // previous action, which is harmless since they all resolve the active window
         // at activation time.
