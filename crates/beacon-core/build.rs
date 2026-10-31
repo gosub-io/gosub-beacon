@@ -38,14 +38,23 @@ fn identity(var: &str, dir: &Path) -> String {
         return "unknown".to_string();
     };
     // In a worktree .git is a file, so ask git where HEAD, the index and the refs live.
+    // Cargo counts a missing path as changed, which would rerun this on every build.
+    let git_path = |path: &str| git(dir, &["rev-parse", "--git-path", path]).map(|p| dir.join(p));
     for path in ["HEAD", "index", "packed-refs"] {
-        if let Some(p) = git(dir, &["rev-parse", "--git-path", path]) {
-            println!("cargo:rerun-if-changed={}", dir.join(p).display());
+        if let Some(p) = git_path(path).filter(|p| p.exists()) {
+            println!("cargo:rerun-if-changed={}", p.display());
         }
     }
-    if let Some(head_ref) = git(dir, &["symbolic-ref", "-q", "HEAD"]) {
-        if let Some(p) = git(dir, &["rev-parse", "--git-path", &head_ref]) {
-            println!("cargo:rerun-if-changed={}", dir.join(p).display());
+    // A branch that lives only in packed-refs gets its loose file on the next commit, so
+    // watch the directory it will appear in.
+    if let Some(p) = git(dir, &["symbolic-ref", "-q", "HEAD"]).and_then(|r| git_path(&r)) {
+        let watched = if p.exists() {
+            Some(p.as_path())
+        } else {
+            p.parent().filter(|d| d.exists())
+        };
+        if let Some(w) = watched {
+            println!("cargo:rerun-if-changed={}", w.display());
         }
     }
     let dirty = git(dir, &["status", "--porcelain", "--untracked-files=no"]).is_some_and(|s| !s.is_empty());
