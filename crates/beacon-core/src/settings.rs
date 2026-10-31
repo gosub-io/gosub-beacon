@@ -213,6 +213,15 @@ mod tests {
     }
 
     #[test]
+    fn every_hidden_key_is_an_engine_setting() {
+        // A renamed key would quietly put its switch back in every editor.
+        let config = gosub_engine::default_settings();
+        for key in HIDDEN {
+            assert!(config.get_info(key).is_some(), "{key} is not in the engine's schema");
+        }
+    }
+
+    #[test]
     fn the_editor_answers_to_both_url_forms_and_nothing_else() {
         let url = |s: &str| url::Url::parse(s).unwrap();
         assert!(is_editor_url(&url("gosub://config")));
