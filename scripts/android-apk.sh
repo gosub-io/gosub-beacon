@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build Gosub Beacon for Android as a debug-signed APK, and install it with --install. arm64 by
+# Build Gosub Beacon for Android as a signed APK, and install it with --install. arm64 by
 # default; ANDROID_ABI=armeabi-v7a builds for 32-bit ARM Android instead.
 #
 #   scripts/android-apk.sh [--install] [--debug]
@@ -8,6 +8,10 @@
 # `rustup toolchain install "$(cat scripts/release-toolchain)" --target aarch64-linux-android`
 # (`armv7-linux-androideabi` for armeabi-v7a), and a JDK for javac. ANDROID_HOME defaults to
 # ~/Android/Sdk and ANDROID_NDK_HOME to the newest NDK under it.
+# Signing: BEACON_ANDROID_KEYSTORE (path), BEACON_ANDROID_KEY_ALIAS, BEACON_ANDROID_KEYSTORE_PASS
+# and BEACON_ANDROID_KEY_PASS (defaults to the keystore's) sign with the release key. Without
+# them it is the debug key, and a phone with a release build on it has to uninstall first,
+# which takes the profile with it.
 # Output: target/android/gosub-beacon-<version>-<abi>.apk.
 set -euo pipefail
 
@@ -31,16 +35,20 @@ PLATFORM=$(find "$ANDROID_HOME/platforms" -mindepth 1 -maxdepth 1 -type d | sort
 
 # Target 34 rather than the platform's: 35 forces edge-to-edge, which would put the tab
 # strip under the status bar.
-MIN_SDK=26
+# 29: the shared Downloads folder (MediaStore.Downloads) is Android 10 and up.
+MIN_SDK=29
 ABI=${ANDROID_ABI:-arm64-v8a}
 TARGET_SDK=34
 VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' "$ROOT/Cargo.toml" | head -1)
+# Android installs over a build only with a higher versionCode. The commit count climbs on
+# main; a build from a branch behind it counts lower and needs an uninstall first.
+VERSION_CODE=$(git -C "$ROOT" rev-list --count HEAD)
 
 OUT=$ROOT/target/android
 APK=$OUT/gosub-beacon-$VERSION-$ABI.apk
 STAGE=$OUT/stage
 rm -rf "$STAGE"
-mkdir -p "$STAGE/apk/lib" "$STAGE/res/mipmap-xxxhdpi"
+mkdir -p "$STAGE/apk/lib" "$STAGE/res"
 
 PROFILE_FLAG=()
 [ "$PROFILE" = release ] && PROFILE_FLAG=(--release)
@@ -89,16 +97,23 @@ find "$ROOT/packaging/android/java" -name '*.java' -print0 |
 "$BUILD_TOOLS/d8" --release --min-api "$MIN_SDK" --lib "$PLATFORM/android.jar" \
     --output "$STAGE/apk" "$STAGE/java/classes.jar" "$KOTLIN_STDLIB" "$STAGE/java/helper.jar"
 
-(cd "$ROOT" && cargo run -q --release -p beacon-icon -- 192 "$STAGE/res/mipmap-xxxhdpi/ic_launcher.png")
 unzip -q -o "$AAR" 'res/xml/*' -d "$STAGE"
-# Beacon's own XML resources (the backup and transfer rules the manifest names).
-cp "$ROOT"/packaging/android/res/xml/*.xml "$STAGE/res/xml/"
+# Beacon's own resources: the backup and transfer rules the manifest names, and the adaptive
+# icon around the foreground below.
+cp -R "$ROOT"/packaging/android/res/. "$STAGE/res/"
+# The adaptive icon's foreground is 108dp, of which a launcher shows the middle 72dp: the
+# circle fills those, and the background colour (the sky's edge) fills a mask's corners.
+for density in mdpi:108 hdpi:162 xhdpi:216 xxhdpi:324 xxxhdpi:432; do
+    mkdir -p "$STAGE/res/mipmap-${density%:*}"
+    (cd "$ROOT" && cargo run -q --release -p beacon-icon -- "${density#*:}" \
+        "$STAGE/res/mipmap-${density%:*}/ic_launcher_foreground.png" 0.6667)
+done
 "$BUILD_TOOLS/aapt2" compile --dir "$STAGE/res" -o "$STAGE/res.zip"
 "$BUILD_TOOLS/aapt2" link -o "$STAGE/unaligned.apk" \
     -I "$PLATFORM/android.jar" \
     --manifest "$ROOT/packaging/android/AndroidManifest.xml" \
     --min-sdk-version "$MIN_SDK" --target-sdk-version "$TARGET_SDK" \
-    --version-code 1 --version-name "$VERSION" \
+    --version-code "$VERSION_CODE" --version-name "$VERSION" \
     "$STAGE/res.zip"
 
 (cd "$STAGE/apk" && zip -qr "$STAGE/unaligned.apk" lib classes.dex)
@@ -106,16 +121,28 @@ cp "$ROOT"/packaging/android/res/xml/*.xml "$STAGE/res/xml/"
 # -P 16: 16 KB page alignment for the library, which Android 15+ devices may require.
 "$BUILD_TOOLS/zipalign" -f -P 16 4 "$STAGE/unaligned.apk" "$STAGE/aligned.apk"
 
-KEYSTORE=$HOME/.android/debug.keystore
-if [ ! -f "$KEYSTORE" ]; then
-    mkdir -p "$(dirname "$KEYSTORE")"
-    keytool -genkeypair -keystore "$KEYSTORE" -storepass android -keypass android \
-        -alias androiddebugkey -dname "CN=Android Debug,O=Android,C=US" \
-        -keyalg RSA -keysize 2048 -validity 10000
+if [ -n "${BEACON_ANDROID_KEYSTORE:-}" ]; then
+    : "${BEACON_ANDROID_KEY_ALIAS:?BEACON_ANDROID_KEYSTORE is set, so BEACON_ANDROID_KEY_ALIAS must be too}"
+    : "${BEACON_ANDROID_KEYSTORE_PASS:?BEACON_ANDROID_KEYSTORE is set, so BEACON_ANDROID_KEYSTORE_PASS must be too}"
+    export BEACON_ANDROID_KEY_PASS=${BEACON_ANDROID_KEY_PASS:-$BEACON_ANDROID_KEYSTORE_PASS}
+    # env: keeps the passwords out of the process list.
+    "$BUILD_TOOLS/apksigner" sign --ks "$BEACON_ANDROID_KEYSTORE" --ks-key-alias "$BEACON_ANDROID_KEY_ALIAS" \
+        --ks-pass env:BEACON_ANDROID_KEYSTORE_PASS --key-pass env:BEACON_ANDROID_KEY_PASS \
+        --out "$APK" "$STAGE/aligned.apk"
+    SIGNED="the release key"
+else
+    KEYSTORE=$HOME/.android/debug.keystore
+    if [ ! -f "$KEYSTORE" ]; then
+        mkdir -p "$(dirname "$KEYSTORE")"
+        keytool -genkeypair -keystore "$KEYSTORE" -storepass android -keypass android \
+            -alias androiddebugkey -dname "CN=Android Debug,O=Android,C=US" \
+            -keyalg RSA -keysize 2048 -validity 10000
+    fi
+    "$BUILD_TOOLS/apksigner" sign --ks "$KEYSTORE" --ks-pass pass:android --key-pass pass:android \
+        --out "$APK" "$STAGE/aligned.apk"
+    SIGNED="the debug key; set BEACON_ANDROID_KEYSTORE for a release"
 fi
-"$BUILD_TOOLS/apksigner" sign --ks "$KEYSTORE" --ks-pass pass:android --key-pass pass:android \
-    --out "$APK" "$STAGE/aligned.apk"
-echo "built $APK ($(du -h "$APK" | cut -f1))"
+echo "built $APK ($(du -h "$APK" | cut -f1)), versionCode $VERSION_CODE, signed with $SIGNED"
 
 if [ "$INSTALL" = 1 ]; then
     adb install -r "$APK"

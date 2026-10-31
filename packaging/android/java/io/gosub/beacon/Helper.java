@@ -10,7 +10,6 @@ import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
 import android.net.Uri;
-import android.os.Build;
 import android.os.Environment;
 import android.provider.MediaStore;
 import android.util.Log;
@@ -152,13 +151,9 @@ public final class Helper {
 
     /**
      * Copy the file at srcPath into the shared Downloads folder as displayName, and return
-     * its content:// URI, or null when that failed or the system is older than Android 10,
-     * which has no MediaStore Downloads collection.
+     * its content:// URI, or null when that failed.
      */
     public static String publishDownload(Context context, String srcPath, String displayName) {
-        if (Build.VERSION.SDK_INT < 29) {
-            return null;
-        }
         ContentResolver resolver = context.getContentResolver();
         ContentValues values = new ContentValues();
         values.put(MediaStore.MediaColumns.DISPLAY_NAME, displayName);

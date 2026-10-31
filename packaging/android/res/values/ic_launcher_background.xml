@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The outer edge of the lighthouse's sky (lighthouse.svg). -->
+    <color name="ic_launcher_background">#03213f</color>
+</resources>
