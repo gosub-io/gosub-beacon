@@ -21,11 +21,11 @@ public partial class MainWindow : Window
     private SettingsWindow? _settingsWindow;
     private DownloadsWindow? _downloadsWindow;
 
-    internal MainWindow(string[] startupUrls)
+    internal MainWindow(BeaconBrowser browser, string[] startupUrls)
     {
         InitializeComponent();
 
-        _browser = BeaconBrowser.Create();
+        _browser = browser;
         _page.Attach(_browser);
         _page.ContextRequested += ShowPageContextMenu;
         PageHost.Child = _page;

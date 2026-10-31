@@ -55,7 +55,7 @@ pub fn run(app: AndroidApp) -> ! {
             ..Default::default()
         });
     }
-    crate::start(options, Vec::new());
+    crate::start(options, Vec::new(), Ok(()));
 
     // The activity is gone, but Android may keep the process and later create a new
     // activity in it, calling `android_main` again. Beacon cannot start twice in one

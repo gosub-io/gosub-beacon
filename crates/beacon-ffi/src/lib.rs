@@ -30,6 +30,7 @@ use beacon_core::command::BeaconCommand;
 use beacon_core::devtools;
 use beacon_core::engine::BrowserEngine;
 use beacon_core::event::{BeaconEvent, Cursor, PickerKind};
+use beacon_core::startup::StartupError;
 use beacon_core::tab::{GosubTab, GosubTabManager, TabId};
 use gosub_engine::events::{DownloadId, EngineEvent, HitTestResponse, Modifiers, MouseButton, TabCommand};
 use gosub_render_pipeline::render::backend::ExternalHandle;
@@ -726,18 +727,22 @@ impl BeaconBrowser {
 /// Point the profile at `dir`, the way `--user-data-dir` does for the other shells: see
 /// [`beacon_core::paths::open_folder`]. NULL keeps whatever an earlier browser picked (the
 /// platform default if none did).
-fn pick_profile(dir: *const c_char) -> Result<(), String> {
+fn pick_profile(dir: *const c_char) -> anyhow::Result<()> {
     if dir.is_null() {
         return Ok(());
     }
     let dir = unsafe { CStr::from_ptr(dir) }
         .to_str()
         .map(std::path::PathBuf::from)
-        .map_err(|_| "user_data_dir is not UTF-8".to_string())?;
-    beacon_core::paths::open_folder(&dir).map_err(|e| format!("{e:#}"))
+        .map_err(|_| anyhow::anyhow!("user_data_dir is not UTF-8"))?;
+    beacon_core::paths::open_folder(&dir)
 }
 
-/// Create a browser. Returns NULL if the engine could not start.
+/// Why the last [`beacon_new`] failed, worded for the user; `None` after one that worked.
+static LAST_ERROR: Mutex<Option<StartupError>> = Mutex::new(None);
+
+/// Create a browser. Returns NULL if the engine could not start; [`beacon_last_error`]
+/// then says why.
 ///
 /// # Safety
 /// `config` may be NULL for defaults; if not, it must point at a valid `BeaconConfig`
@@ -745,48 +750,47 @@ fn pick_profile(dir: *const c_char) -> Result<(), String> {
 #[no_mangle]
 pub unsafe extern "C" fn beacon_new(config: *const BeaconConfig) -> *mut BeaconBrowser {
     init_logging();
+    let result = unsafe { new_browser(config) };
+    let mut last = LAST_ERROR.lock().unwrap_or_else(|e| e.into_inner());
+    match result {
+        Ok(browser) => {
+            *last = None;
+            Box::into_raw(browser)
+        }
+        Err(e) => {
+            log::error!("beacon_new: {e:#}");
+            *last = Some(StartupError::from_error(&e));
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// [`beacon_new`] without the bookkeeping.
+///
+/// # Safety
+/// As for [`beacon_new`].
+unsafe fn new_browser(config: *const BeaconConfig) -> anyhow::Result<Box<BeaconBrowser>> {
     let private = unsafe { config.as_ref() }.map(|c| c.private_mode).unwrap_or(false);
     let dir = unsafe { config.as_ref() }.map_or(std::ptr::null(), |c| c.user_data_dir);
-    if let Err(e) = pick_profile(dir) {
-        log::error!("beacon_new: {e}");
-        return std::ptr::null_mut();
-    }
+    pick_profile(dir)?;
 
     #[cfg(not(target_os = "macos"))]
     let backend = Arc::new(gosub_renderer_skia::SkiaBackend::new());
 
     #[cfg(target_os = "macos")]
     let (gpu_context, backend) = {
-        let context = match gpu::FfiWgpuContext::new(runtime()) {
-            Ok(c) => Arc::new(c),
-            Err(e) => {
-                log::error!("beacon_new: {e}");
-                return std::ptr::null_mut();
-            }
-        };
-        let backend = match gosub_renderer_vello::VelloBackend::new(context.clone()) {
-            Ok(b) => Arc::new(b),
-            Err(e) => {
-                log::error!("beacon_new: Vello backend: {e:?}");
-                return std::ptr::null_mut();
-            }
-        };
-        (context, backend)
+        let context = Arc::new(gpu::FfiWgpuContext::new(runtime()).map_err(|e| anyhow::anyhow!("{e}"))?);
+        let backend = gosub_renderer_vello::VelloBackend::new(context.clone()).map_err(|e| anyhow::anyhow!("Vello backend: {e:?}"))?;
+        (context, Arc::new(backend))
     };
 
-    let mut engine = match BrowserEngine::<FfiConfig>::new(runtime(), private, backend) {
-        Ok(engine) => engine,
-        Err(e) => {
-            log::error!("beacon_new: {e:#}");
-            return std::ptr::null_mut();
-        }
-    };
-    let Some(events) = engine.take_event_rx() else {
-        return std::ptr::null_mut();
-    };
-    let Some(resources) = engine.take_resource_rx() else {
-        return std::ptr::null_mut();
-    };
+    let mut engine = BrowserEngine::<FfiConfig>::new(runtime(), private, backend)?;
+    let events = engine
+        .take_event_rx()
+        .ok_or_else(|| anyhow::anyhow!("engine event stream already taken"))?;
+    let resources = engine
+        .take_resource_rx()
+        .ok_or_else(|| anyhow::anyhow!("engine resource stream already taken"))?;
     let redraw = engine.take_redraw_rx();
 
     let tabs = Arc::new(Mutex::new(GosubTabManager::new()));
@@ -796,7 +800,7 @@ pub unsafe extern "C" fn beacon_new(config: *const BeaconConfig) -> *mut BeaconB
         std::rc::Rc::new(beacon_core::platform::NullPlatform),
     );
 
-    Box::into_raw(Box::new(BeaconBrowser {
+    Ok(Box::new(BeaconBrowser {
         engine,
         beacon,
         tabs,
@@ -833,6 +837,32 @@ pub unsafe extern "C" fn beacon_new(config: *const BeaconConfig) -> *mut BeaconB
         #[cfg(target_os = "macos")]
         views: HashMap::new(),
     }))
+}
+
+/// Why the last [`beacon_new`] returned NULL, in a sentence for the user. NULL when it did
+/// not fail. Free with `beacon_string_free`.
+#[no_mangle]
+pub extern "C" fn beacon_last_error() -> *mut c_char {
+    last_error(|e| Some(e.reason.clone()))
+}
+
+/// What the user can do about [`beacon_last_error`] (a command to run, a keychain to
+/// unlock). NULL when there is nothing to suggest. Free with `beacon_string_free`.
+#[no_mangle]
+pub extern "C" fn beacon_last_error_hint() -> *mut c_char {
+    last_error(|e| e.hint.clone())
+}
+
+/// The error behind [`beacon_last_error`] as Beacon has it, for a bug report. Free with
+/// `beacon_string_free`.
+#[no_mangle]
+pub extern "C" fn beacon_last_error_detail() -> *mut c_char {
+    last_error(|e| Some(e.detail.clone()))
+}
+
+fn last_error(field: impl FnOnce(&StartupError) -> Option<String>) -> *mut c_char {
+    let last = LAST_ERROR.lock().unwrap_or_else(|e| e.into_inner());
+    last.as_ref().and_then(field).map_or(std::ptr::null_mut(), |s| to_c_string(&s))
 }
 
 /// Destroy a browser. Safe to call with NULL.

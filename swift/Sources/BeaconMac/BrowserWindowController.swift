@@ -373,6 +373,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
         let tab = after == 0 ? browser.openTab(url) : browser.openTab(url, after: after)
         guard tab != 0 else {
             NSLog("beacon: could not open \(url)")
+            FailureAlert.show(Browser.Failure(reason: "Beacon could not open a tab for this address.", hint: nil, detail: url), on: window)
             return 0
         }
         if let index = ownedTabs.firstIndex(of: after) {

@@ -468,6 +468,19 @@ pub trait KeyStore {
     fn delete(&self, profile: Uuid, slot: Slot) -> Result<()>;
 }
 
+/// The OS keychain itself failed (not there, not answering, refused), as opposed to the
+/// key it held being wrong. Find it with `err.downcast_ref::<KeychainError>()`.
+#[derive(Debug)]
+pub struct KeychainError(pub String);
+
+impl std::fmt::Display for KeychainError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for KeychainError {}
+
 /// The OS keychain: Keychain on macOS, Credential Manager on Windows, the Secret Service
 /// (GNOME Keyring, KWallet) on Linux.
 pub struct OsKeychain {
@@ -542,7 +555,7 @@ impl OsKeychain {
             Some(collection) if cfg!(target_os = "linux") => keyring::Entry::new_with_target(collection, KEYCHAIN_SERVICE, &account),
             _ => keyring::Entry::new(KEYCHAIN_SERVICE, &account),
         };
-        entry.context("opening the keychain")
+        entry.context(KeychainError("opening the keychain".into()))
     }
 }
 
@@ -595,20 +608,20 @@ impl KeyStore for OsKeychain {
                 Ok(Some(ProfileKey::from_filed(profile, &raw)?))
             }
             Err(keyring::Error::NoEntry) => Ok(None),
-            Err(e) => Err(e).context("reading the profile key from the keychain"),
+            Err(e) => Err(e).context(KeychainError("reading the profile key from the keychain".into())),
         }
     }
 
     fn set(&self, key: &ProfileKey, slot: Slot) -> Result<()> {
         let entry = self.entry(key.profile, slot)?;
-        patiently(|| entry.set_password(&key.filed())).context("storing the profile key in the keychain")
+        patiently(|| entry.set_password(&key.filed())).context(KeychainError("storing the profile key in the keychain".into()))
     }
 
     fn delete(&self, profile: Uuid, slot: Slot) -> Result<()> {
         let entry = self.entry(profile, slot)?;
         match patiently(|| entry.delete_credential()) {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(e) => Err(e).context("removing the profile key from the keychain"),
+            Err(e) => Err(e).context(KeychainError("removing the profile key from the keychain".into())),
         }
     }
 }
@@ -620,7 +633,7 @@ impl KeyStore for OsKeychain {
     }
 
     fn set(&self, _key: &ProfileKey, _slot: Slot) -> Result<()> {
-        bail!("this platform has no keychain Beacon can use")
+        Err(anyhow!(KeychainError("this platform has no keychain Beacon can use".into())))
     }
 
     fn delete(&self, _profile: Uuid, _slot: Slot) -> Result<()> {

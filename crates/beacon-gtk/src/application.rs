@@ -30,6 +30,11 @@ mod imp {
         fn activate(&self) {
             info!(target: "gtk", "GtkApplication<Application>::activate");
             self.parent_activate();
+            // A second launch while the profile is still opening: the first window comes
+            // once it is open.
+            if !crate::dialog::startup::profile_open() {
+                return;
+            }
 
             let obj = self.obj();
 
@@ -102,6 +107,10 @@ impl Application {
                 let Some((private, urls)) = param.and_then(|p| p.get::<(bool, Vec<String>)>()) else {
                     return;
                 };
+                if !crate::dialog::startup::profile_open() {
+                    info!(target: "gtk", "Dropping {} URL(s) from another launch: the profile is still opening", urls.len());
+                    return;
+                }
                 info!(target: "gtk", "Opening {} URL(s) from another launch", urls.len());
                 if private {
                     // Never in a regular window: that would load them with its cookies and

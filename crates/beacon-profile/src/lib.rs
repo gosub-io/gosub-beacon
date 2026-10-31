@@ -652,13 +652,10 @@ impl Profile {
             .with_context(|| format!("opening {}", path.display()))?;
         match file.try_lock() {
             Ok(()) => Ok(ProfileLock { _file: file }),
-            Err(fs::TryLockError::WouldBlock) => {
-                bail!(
-                    "profile {:?} is in use by another Beacon ({})",
-                    self.manifest.name,
-                    self.dir.display()
-                )
-            }
+            Err(fs::TryLockError::WouldBlock) => Err(anyhow!(InUse {
+                name: self.manifest.name.clone(),
+                dir: self.dir.clone(),
+            })),
             Err(fs::TryLockError::Error(e)) => Err(e).with_context(|| format!("locking {}", path.display())),
         }
     }
@@ -1012,6 +1009,13 @@ pub struct Locked {
     pub stale: bool,
 }
 
+impl Locked {
+    /// The command that unlocks it with its passphrase.
+    pub fn command(&self) -> String {
+        format!("beaconctl profile unlock {}", shell_arg(&self.name, self.id))
+    }
+}
+
 impl std::fmt::Display for Locked {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let held = if self.stale {
@@ -1022,9 +1026,9 @@ impl std::fmt::Display for Locked {
         if self.passphrase {
             write!(
                 f,
-                "profile {:?} is encrypted and {held}; unlock it with `beaconctl profile unlock {}`",
+                "profile {:?} is encrypted and {held}; unlock it with `{}`",
                 self.name,
-                shell_arg(&self.name, self.id)
+                self.command()
             )
         } else {
             write!(
@@ -1038,6 +1042,22 @@ impl std::fmt::Display for Locked {
 
 impl std::error::Error for Locked {}
 
+/// Another process holds the profile's lock ([`Profile::lock`]). Find it with
+/// `err.downcast_ref::<InUse>()`.
+#[derive(Debug)]
+pub struct InUse {
+    pub name: String,
+    pub dir: PathBuf,
+}
+
+impl std::fmt::Display for InUse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "profile {:?} is in use by another Beacon ({})", self.name, self.dir.display())
+    }
+}
+
+impl std::error::Error for InUse {}
+
 /// A key rotation ([`Profile::rotate_key`]) that was started and not finished. The new key
 /// is in the keychain's [`Slot::Next`], and the databases may be on either key; calling
 /// `rotate_key` again finishes it. Find it with `err.downcast_ref::<Rotating>()`.
@@ -1047,13 +1067,21 @@ pub struct Rotating {
     pub name: String,
 }
 
+impl Rotating {
+    /// The command that finishes the rotation (`remove-passphrase` does too, for a rotation
+    /// that was removing the passphrase).
+    pub fn command(&self) -> String {
+        format!("beaconctl profile passphrase {}", shell_arg(&self.name, self.id))
+    }
+}
+
 impl std::fmt::Display for Rotating {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "profile {:?} is partway through a key rotation that was interrupted; run `beaconctl profile passphrase {}` (or `remove-passphrase`) again to finish it",
+            "profile {:?} is partway through a key rotation that was interrupted; run `{}` (or `remove-passphrase`) again to finish it",
             self.name,
-            shell_arg(&self.name, self.id)
+            self.command()
         )
     }
 }

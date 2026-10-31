@@ -228,11 +228,11 @@ fn cvt(status: OSStatus) -> std::result::Result<(), SecError> {
 
 fn describe(e: SecError, what: &str) -> anyhow::Error {
     if e.code() == INTERACTION_NOT_ALLOWED {
-        return anyhow!(
+        return anyhow!(super::KeychainError(format!(
             "{what}: the keychain has to ask on screen, and this session has none; run this once in a terminal on the Mac itself"
-        );
+        )));
     }
-    anyhow::Error::new(e).context(what.to_string())
+    anyhow::Error::new(e).context(super::KeychainError(what.to_string()))
 }
 
 #[cfg(test)]

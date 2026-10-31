@@ -2,6 +2,17 @@ using System.Runtime.InteropServices;
 
 namespace Gosub.Beacon.Windows.Interop;
 
+/// <summary>
+/// Why the engine would not start: a sentence for the user (the message), what they can do
+/// about it when there is something, and the error underneath.
+/// </summary>
+internal sealed class BeaconStartException(string reason, string? hint, string detail)
+    : Exception(reason)
+{
+    public string? Hint { get; } = hint;
+    public string Detail { get; } = detail;
+}
+
 /// <summary>One row of the engine's settings store.</summary>
 internal readonly record struct SettingRow(
     string Key,
@@ -112,7 +123,7 @@ internal sealed class BeaconBrowser : IDisposable
 
     /// <summary>
     /// Start the engine. <paramref name="userDataDir"/> may be null for the platform
-    /// default. Throws on failure, since the message is the only diagnostic available.
+    /// default. Throws <see cref="BeaconStartException"/> saying why it would not start.
     /// </summary>
     public static BeaconBrowser Create(string? userDataDir = null, bool privateMode = false)
     {
@@ -123,8 +134,10 @@ internal sealed class BeaconBrowser : IDisposable
             var handle = BeaconNative.New(ref config);
             if (handle == IntPtr.Zero)
             {
-                throw new InvalidOperationException(
-                    "beacon_new returned NULL: the engine could not start.");
+                throw new BeaconStartException(
+                    BeaconStrings.Take(BeaconNative.LastError()) ?? "Beacon could not start.",
+                    BeaconStrings.Take(BeaconNative.LastErrorHint()),
+                    BeaconStrings.Take(BeaconNative.LastErrorDetail()) ?? string.Empty);
             }
 
             return new BeaconBrowser(handle);

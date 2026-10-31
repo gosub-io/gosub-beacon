@@ -240,13 +240,22 @@ int main(void) {
     /* A file is no profile folder: refused, and the process is still free to pick another. */
     BeaconConfig broken = {.user_data_dir = page_a, .private_mode = false};
     CHECK(beacon_new(&broken) == NULL, "a profile folder that cannot be opened is refused");
+    char *reason = beacon_last_error();
+    char *detail = beacon_last_error_detail();
+    CHECK(reason != NULL && reason[0] != '\0', "a failed start says why: %s", reason ? reason : "(null)");
+    CHECK(detail != NULL && strstr(detail, page_a) != NULL, "and keeps the error behind it: %s", detail ? detail : "(null)");
+    beacon_string_free(reason);
+    beacon_string_free(detail);
 
     BeaconConfig config = {.user_data_dir = "/tmp/beacon-ffi-profile", .private_mode = false};
     BeaconBrowser *browser = beacon_new(&config);
     if (!browser) {
-        fprintf(stderr, "beacon_new failed\n");
+        char *why = beacon_last_error_detail();
+        fprintf(stderr, "beacon_new failed: %s\n", why ? why : "(no reason)");
+        beacon_string_free(why);
         return 1;
     }
+    CHECK(beacon_last_error() == NULL, "a start that worked leaves no error behind");
 
     CHECK(!beacon_is_private(browser), "a browser made without private_mode is not private");
     BeaconConfig other = {.user_data_dir = "/tmp/beacon-ffi-other-profile", .private_mode = false};
