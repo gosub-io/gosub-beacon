@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- NativeActivity loads libbeacon_android.so and calls its android_main. The Java is
      rustls-platform-verifier's certificate check and Beacon's own helper (the date and time
-     dialogs, the Downloads folder), hence hasCode; the security config is the verifier's
-     (it lets Android fetch CRLs over plain HTTP).
+     dialogs, the Downloads folder, the clipboard), hence hasCode; the security config is the
+     verifier's (it lets Android fetch CRLs over plain HTTP).
      scripts/android-apk.sh fills in the version and builds the APK around this. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="io.gosub.beacon">
