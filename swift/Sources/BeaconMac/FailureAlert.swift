@@ -14,7 +14,8 @@ enum FailureAlert {
             alert.addButton(withTitle: "OK")
         }
         NSApp.activate(ignoringOtherApps: true)
-        return retry && alert.runModal() == .alertFirstButtonReturn
+        let answer = alert.runModal()
+        return retry && answer == .alertFirstButtonReturn
     }
 
     /// As a sheet on `window`, or modally when there is none.
