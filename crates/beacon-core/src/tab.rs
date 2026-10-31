@@ -183,6 +183,8 @@ pub struct GosubTab {
     crashed: Option<String>,
     /// The tab shows the error page (see `showing_error`).
     showing_error: bool,
+    /// What was typed when it is no URL at all (see `typed_address`).
+    typed_address: Option<String>,
     /// Title of the tab
     title: String,
     /// The tab's favicon, exactly as the engine fetched it: an encoded image, usually
@@ -215,6 +217,7 @@ impl GosubTab {
             history: History::default(),
             crashed: None,
             showing_error: false,
+            typed_address: None,
             title: title.to_string(),
             favicon: None,
             content: String::new(),
@@ -262,6 +265,16 @@ impl GosubTab {
         self.showing_error = showing;
     }
 
+    /// An address typed into the bar that does not parse. The tab shows the error page for
+    /// it under some stand-in URL; the address bar shows this instead, and a reload retries it.
+    pub fn typed_address(&self) -> Option<&str> {
+        self.typed_address.as_deref()
+    }
+
+    pub fn set_typed_address(&mut self, address: Option<String>) {
+        self.typed_address = address;
+    }
+
     pub fn is_loading(&self) -> bool {
         self.loading
     }
@@ -302,7 +315,11 @@ impl GosubTab {
         &self.content
     }
 
+    /// Moving to another URL drops the typed address: it belonged to the page before.
     pub fn set_url(&mut self, url: Url) {
+        if url != self.url {
+            self.typed_address = None;
+        }
         self.url = url
     }
 
@@ -665,6 +682,20 @@ mod test {
     /// `(title, depth)` per line, which is the shape of the drawing.
     fn shape(history: &History) -> Vec<(String, usize)> {
         history.tree().into_iter().map(|row| (row.title.unwrap(), row.depth)).collect()
+    }
+
+    #[test]
+    fn a_typed_address_lasts_until_the_tab_moves_on() {
+        let blank = Url::parse("about:blank").unwrap();
+        let mut tab = GosubTab::new(blank.clone(), "New Tab");
+        tab.set_typed_address(Some("http://exa mple.com".into()));
+
+        // The engine committing the stand-in URL is not a move.
+        tab.set_url(blank);
+        assert_eq!(tab.typed_address(), Some("http://exa mple.com"));
+
+        tab.set_url(Url::parse("https://example.com/").unwrap());
+        assert_eq!(tab.typed_address(), None);
     }
 
     #[test]
