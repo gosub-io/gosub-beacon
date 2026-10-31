@@ -16,6 +16,11 @@ use gtk4::{gdk, PopoverMenu, PopoverMenuFlags};
 
 /// Build and pop up the page context menu at `point` (window coordinates) for `tab_id`.
 pub(crate) fn show(window: &super::BrowserWindow, tab_id: TabId, point: Point, hit: HitTestResponse) {
+    // The hit test is async. Back and Forward act on the active tab, so a menu for a tab
+    // switched away from in the meantime would navigate the wrong one.
+    if window.imp().active_tab_id() != Some(tab_id) {
+        return;
+    }
     let menu = Menu::new();
     let actions = SimpleActionGroup::new();
 
