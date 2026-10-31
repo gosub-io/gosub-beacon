@@ -50,7 +50,8 @@ impl Startup {
 
     /// The profile is open: build the browser, or say why it would not start.
     fn run(&mut self, ctx: &egui::Context) -> State {
-        match BeaconApp::new(ctx, self.render_state.as_ref(), self.rt, std::mem::take(&mut self.urls)) {
+        // A clone: after a failure, Try Again still opens the tabs asked for.
+        match BeaconApp::new(ctx, self.render_state.as_ref(), self.rt, self.urls.clone()) {
             Ok(app) => State::Running(Box::new(app)),
             Err(e) => failed(&e, true),
         }
