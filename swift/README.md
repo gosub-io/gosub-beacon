@@ -152,7 +152,7 @@ and hold Forward to pick a branch when the history has forked.
 
 ### Engine Room
 
-The developer panel, shown as "Engine Room" in the menus. `⌥⌘I`, or the Develop menu. It docks under the page with four tabs, and its top edge is a
+The developer panel, shown as "Engine Room" in the menus. `⌥⌘I`, or the Engine Room menu. It docks under the page with three tabs, and its top edge is a
 grab strip: drag it to make the panel taller or shorter.
 
 **Log** (`⌥⌘L`). The browser's own records, from the engine's `log` crate: time, level,
@@ -160,10 +160,6 @@ source crate and message, filterable. It follows new records while you are scrol
 bottom, and stays put otherwise. What is captured depends on `BEACON_LOG` and `RUST_LOG`,
 which default to warnings only, so an empty log usually means the level rather than a broken
 panel. Try `BEACON_LOG=info swift run BeaconMac`.
-
-**Console** (`⌥⌘C`). The page's own `console.log`, which is empty and says so: that needs
-JavaScript, and the engine does not run any yet. It is a separate tab from the Log because
-they are different things, and the GTK shell splits them the same way.
 
 **Network** (`⌥⌘N`). Every request this tab made, with status, method, kind, size, elapsed
 time, and a waterfall bar split into waiting for the server and receiving the body. A

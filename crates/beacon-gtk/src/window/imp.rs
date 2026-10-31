@@ -904,7 +904,7 @@ impl BrowserWindow {
             // The Page report filters, but is the engine's account of the page, not a log to
             // clear: it is replaced by the next navigation's.
             let page = imp.devtools_page();
-            let has_content = !matches!(page.as_str(), "console" | "history");
+            let has_content = page != "history";
             // Nor is the process list, which is what is running, not what was recorded.
             // The Timeline keeps the last few loads on its own and has a picker instead.
             imp.devtools_action
@@ -947,9 +947,6 @@ impl BrowserWindow {
             "processes" => self.refresh_processes(&needle),
             "timeline" => self.refresh_timeline(&needle),
             "report" => self.refresh_report(&needle),
-            // The page's own console, which has nothing to say until scripts run. Its
-            // summary line would otherwise keep whatever the last page put there.
-            "console" => self.devtools_summary.set_text(""),
             _ => self.refresh_log(&needle),
         }
     }

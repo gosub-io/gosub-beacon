@@ -549,7 +549,7 @@ public partial class MainWindow : Window
         bookmarks.SubmenuOpened += (_, _) => FillBookmarksMenu(bookmarks);
 
         var tools = new MenuItem { Header = "_Tools" };
-        tools.Items.Add(MenuItemFor("_Developer Tools\tF12", ShowDeveloperPanel));
+        tools.Items.Add(MenuItemFor("_Engine Room\tF12", ShowDeveloperPanel));
         tools.Items.Add(new Separator());
         tools.Items.Add(MenuItemFor("Clear Network Log", () => _browser.ClearNetwork()));
         tools.Items.Add(MenuItemFor("Clear Console", () => _browser.ClearLog()));

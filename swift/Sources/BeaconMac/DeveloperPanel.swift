@@ -1,8 +1,8 @@
 import AppKit
 import CBeacon
 
-/// The developer panel: a console, the network log and the engine's timing table, docked
-/// under the page.
+/// The developer panel (the Engine Room): the log, the network log and the engine's timing
+/// table, docked under the page.
 ///
 /// Three tabs rather than three panels, because they answer the same question from
 /// different ends — *what did the engine do*, *what did it fetch*, *how long did it take* —
@@ -18,8 +18,6 @@ final class DeveloperPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
     enum Mode: Int {
         /// The browser's own records, from the engine's `log` crate.
         case log
-        /// The page's `console.log`, which needs JavaScript the engine does not run yet.
-        case console
         case network
         case timings
     }
@@ -30,12 +28,6 @@ final class DeveloperPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
     private let actionButton = NSButton()
     private let summaryLabel = NSTextField(labelWithString: "")
     private let table = BandedTableView()
-    /// Shown instead of a table on a page that has nothing to list.
-    private let placeholder = NSTextField(
-        wrappingLabelWithString:
-            "A page's console needs JavaScript, and the engine does not run any yet. "
-            + "The browser's own records are on the Log tab."
-    )
     private let scroller = NSScrollView()
 
     /// The request detail, beside the list. Its own scroller so a long header block does
@@ -102,7 +94,7 @@ final class DeveloperPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
     init(browser: Browser) {
         self.browser = browser
         modeControl = NSSegmentedControl(
-            labels: ["Log", "Console", "Network", "Timings"],
+            labels: ["Log", "Network", "Timings"],
             trackingMode: .selectOne,
             target: nil,
             action: nil
@@ -184,11 +176,6 @@ final class DeveloperPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
         scroller.drawsBackground = true
         scroller.backgroundColor = .windowBackgroundColor
 
-        placeholder.font = .systemFont(ofSize: 12)
-        placeholder.textColor = .secondaryLabelColor
-        placeholder.alignment = .center
-        placeholder.isHidden = true
-
         detailTabs.selectedSegment = 0
         detailTabs.target = self
         detailTabs.action = #selector(detailPageChanged)
@@ -268,7 +255,7 @@ final class DeveloperPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
         split.setHoldingPriority(NSLayoutConstraint.Priority(rawValue: 249), forSubviewAt: 0)
         split.setHoldingPriority(NSLayoutConstraint.Priority(rawValue: 250), forSubviewAt: 1)
 
-        for view in [modeControl, filterField, actionButton, summaryLabel, closeButton, split, placeholder] as [NSView] {
+        for view in [modeControl, filterField, actionButton, summaryLabel, closeButton, split] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             addSubview(view)
         }
@@ -295,10 +282,6 @@ final class DeveloperPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
             split.leadingAnchor.constraint(equalTo: leadingAnchor),
             split.trailingAnchor.constraint(equalTo: trailingAnchor),
             split.bottomAnchor.constraint(equalTo: bottomAnchor),
-
-            placeholder.centerXAnchor.constraint(equalTo: centerXAnchor),
-            placeholder.centerYAnchor.constraint(equalTo: split.centerYAnchor),
-            placeholder.widthAnchor.constraint(lessThanOrEqualToConstant: 420),
         ])
 
         rebuildColumns()
@@ -424,8 +407,6 @@ final class DeveloperPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
         let wasAtBottom = isScrolledToBottom
 
         switch mode {
-        case .console:
-            summaryLabel.stringValue = ""
         case .log:
             logs = browser.logSnapshot()
             summaryLabel.stringValue = "\(filteredLogs.count) of \(logs.count) records"
@@ -489,8 +470,6 @@ final class DeveloperPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
         }
         let columns: [(String, String, CGFloat)]
         switch mode {
-        case .console:
-            columns = []
         case .log:
             columns = [
                 ("time", "Time", 78), ("level", "Level", 52), ("target", "Source", 160), ("message", "Message", 600),
@@ -577,7 +556,6 @@ final class DeveloperPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
         }
         switch mode {
         case .log: return filteredLogs.count
-        case .console: return 0
         case .network: return filteredRequests.count
         case .timings: return filteredTimings.count
         }
@@ -621,8 +599,6 @@ final class DeveloperPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
         cell.toolTip = nil
 
         switch mode {
-        case .console:
-            return cell
         case .log:
             let entries = filteredLogs
             guard row < entries.count else { return cell }
@@ -1115,10 +1091,8 @@ final class DeveloperPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
     // ── actions ───────────────────────────────────────────────────────────
 
     @objc private func modeChanged() {
-        mode = Mode(rawValue: modeControl.selectedSegment) ?? .console
+        mode = Mode(rawValue: modeControl.selectedSegment) ?? .log
         switch mode {
-        case .console:
-            actionButton.title = "Clear"
         case .log:
             actionButton.title = "Clear"
             actionButton.toolTip = "Discard the captured log records"
@@ -1129,13 +1103,6 @@ final class DeveloperPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
             actionButton.title = "Reset"
             actionButton.toolTip = "Start timing again from nothing, so the next navigation is measured on its own"
         }
-        // Nothing to list, filter or clear on a console that cannot have entries.
-        let empty = mode == .console
-        placeholder.isHidden = !empty
-        split.isHidden = empty
-        actionButton.isHidden = empty
-        filterField.isHidden = empty
-
         rebuildColumns()
         reload()
         fillDetail()
@@ -1153,7 +1120,6 @@ final class DeveloperPanel: NSView, NSTableViewDataSource, NSTableViewDelegate {
 
     @objc private func actionClicked() {
         switch mode {
-        case .console: break
         case .log: browser.clearLogs()
         case .network:
             browser.clearRequests()

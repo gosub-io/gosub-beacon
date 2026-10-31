@@ -157,7 +157,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
     @objc private func toggleDeveloperTools(_ sender: Any?) { front?.toggleDeveloperTools(sender) }
     @objc private func showLog(_ sender: Any?) { front?.showLog(sender) }
-    @objc private func showConsole(_ sender: Any?) { front?.showConsole(sender) }
     @objc private func showTimings(_ sender: Any?) { front?.showTimings(sender) }
     @objc private func showNetwork(_ sender: Any?) { front?.showNetwork(sender) }
     @objc private func resetTimings(_ sender: Any?) { front?.resetTimings(sender) }
@@ -361,16 +360,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         ])
     }
 
-    /// A Develop menu, where a Mac browser keeps this. Safari's bindings where they exist:
-    /// ⌥⌘I for the inspector, ⌥⌘U for source.
+    /// The Engine Room menu, where Safari keeps its Develop menu, with Safari's bindings
+    /// where they exist: ⌥⌘I for the inspector, ⌥⌘U for source.
     private func developMenu() -> NSMenuItem {
         let toggle = item("Show Engine Room", #selector(toggleDeveloperTools(_:)), "i", [.command, .option])
         developToggleItem = toggle
-        return submenu("Develop", [
+        return submenu("Engine Room", [
             toggle,
             .separator(),
             item("Log", #selector(showLog(_:)), "l", [.command, .option]),
-            item("Console", #selector(showConsole(_:)), "c", [.command, .option]),
             item("Network", #selector(showNetwork(_:)), "n", [.command, .option]),
             item("Timings", #selector(showTimings(_:)), "t", [.command, .option]),
             item("Reset Timings", #selector(resetTimings(_:))),

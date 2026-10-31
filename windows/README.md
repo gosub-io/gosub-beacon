@@ -20,7 +20,7 @@ Working:
 - session restore on a bare start, matching the GTK shell
 - view-source, reopen-closed-tab, crash reporting in the status line
 
-- developer tools (F12): network, console and timing
+- Engine Room (F12): network, console and timing
 - settings editor over the engine's settings store
 - downloads: save dialog, progress, open when finished
 - the About dialog, sharing the macOS shell's artwork and credits crossfade
@@ -30,9 +30,9 @@ This shell binds 129 of the C ABI's 156 functions. Not yet bound: the form-contr
 per-request detail (cache, auth, upgrades, request changes, retries, preflights, TLS, and
 the failure fix and spec links).
 
-### Developer tools
+### Engine Room
 
-`F12`, or Tools -> Developer Tools. Three tabs, over the developer-panel families in
+`F12`, or Tools -> Engine Room. Three tabs, over the developer-panel families in
 `beacon.h`:
 
 - **Network** - status, method, type, URL, size, time, phase and initiator, with request and
@@ -173,7 +173,7 @@ windows/
     BookmarksBar.cs            the bar, plus a clipboard helper that cannot throw
     BookmarksWindow.cs         bookmark manager
     HistoryWindow.cs           visited pages with live search
-    DeveloperPanel.cs          network, console and timing
+    DeveloperPanel.cs          the Engine Room: network, console and timing
     SettingsWindow.cs          the engine's settings store, typed per row
     DownloadsWindow.cs         progress, and open when finished
     AboutWindow.cs             the artwork, and the credits crossfade
@@ -211,7 +211,7 @@ default is the four-byte Win32 `BOOL`.
 | Ctrl+H | history window |
 | Ctrl+Shift+O | bookmark manager |
 | Ctrl+U | view source |
-| F12 | developer tools |
+| F12 | Engine Room |
 | Ctrl+J | downloads |
 | F5 / Ctrl+F5 | reload / reload ignoring cache |
 | Esc | stop |

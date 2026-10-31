@@ -710,11 +710,6 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
         devPanel.show(.log)
     }
 
-    @objc func showConsole(_ sender: Any?) {
-        setDeveloperPanel(open: true)
-        devPanel.show(.console)
-    }
-
     @objc func showTimings(_ sender: Any?) {
         setDeveloperPanel(open: true)
         devPanel.show(.timings)
