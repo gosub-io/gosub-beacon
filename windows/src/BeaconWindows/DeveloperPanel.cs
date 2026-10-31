@@ -54,7 +54,7 @@ internal sealed class DeveloperPanel : Window
     public DeveloperPanel(BeaconBrowser browser)
     {
         _browser = browser;
-        Title = "Engine Room - Gosub Beacon";
+        Title = $"Engine Room - {BuildInfo.Product}";
         Width = 1100;
         Height = 700;
 

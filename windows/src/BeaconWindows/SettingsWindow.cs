@@ -25,7 +25,7 @@ internal sealed class SettingsWindow : Window
     public SettingsWindow(BeaconBrowser browser)
     {
         _browser = browser;
-        Title = "Advanced Settings - Gosub Beacon";
+        Title = $"Advanced Settings - {BuildInfo.Product}";
         Width = 900;
         Height = 680;
 
