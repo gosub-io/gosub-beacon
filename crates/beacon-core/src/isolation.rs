@@ -32,6 +32,9 @@ pub fn lock_down_broker() {
         // runtime dir and complains on every read when it cannot write it.
         if let Some(runtime) = dirs::runtime_dir() {
             writable.push(runtime.join("dconf"));
+            // Inside a flatpak the save dialog is a portal, and a location outside the
+            // sandbox comes back as a document portal path under here.
+            writable.push(runtime.join("doc"));
         }
     }
     let writable: Vec<&Path> = writable.iter().map(PathBuf::as_path).collect();
