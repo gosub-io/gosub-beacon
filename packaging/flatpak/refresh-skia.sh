@@ -12,7 +12,13 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$repo_root"
 
-key_file="$(find target -path '*/skia-bindings-*/out/skia/key.txt' -print -quit 2>/dev/null || true)"
+# The newest build's: target/ keeps the key of every skia-bindings build it has seen, and an
+# older one names an archive this Cargo.lock no longer builds against. Dated by its `out`
+# directory, which cargo makes when the build runs; key.txt itself comes out of the
+# archive with the archive's own date.
+key_file="$(find target -path '*/skia-bindings-*/out/skia/key.txt' 2>/dev/null |
+    while read -r f; do echo "$(stat -c %Y "$(dirname "$(dirname "$f")")") $f"; done |
+    sort -n | tail -1 | cut -d' ' -f2-)"
 if [[ -z "$key_file" ]]; then
     echo "no key.txt under target/: build the GTK frontend natively first" >&2
     exit 1
