@@ -77,7 +77,7 @@ impl ConfigView {
         let mut edit = None;
         egui::Frame::default().inner_margin(egui::Margin::symmetric(16, 12)).show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Engine settings").size(TEXT * 1.4).strong());
+                ui.label(egui::RichText::new("Advanced settings").size(TEXT * 1.4).strong());
                 ui.add_space(12.0);
                 let filter = text_field(ui, &mut self.filter, "Filter settings", ui.available_width());
                 if filter.changed() {

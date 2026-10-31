@@ -20,7 +20,7 @@ Working:
 - session restore on a bare start, matching the GTK shell
 - view-source, reopen-closed-tab, crash reporting in the status line
 
-- developer tools (F12): network, console and timing
+- Engine Room (F12): network, console and timing
 - settings editor over the engine's settings store
 - downloads: save dialog, progress, open when finished
 - the About dialog, sharing the macOS shell's artwork and credits crossfade
@@ -30,9 +30,9 @@ This shell binds 129 of the C ABI's 156 functions. Not yet bound: the form-contr
 per-request detail (cache, auth, upgrades, request changes, retries, preflights, TLS, and
 the failure fix and spec links).
 
-### Developer tools
+### Engine Room
 
-`F12`, or Tools -> Developer Tools. Three tabs, over the developer-panel families in
+`F12`, or Tools -> Engine Room. Three tabs, over the developer-panel families in
 `beacon.h`:
 
 - **Network** - status, method, type, URL, size, time, phase and initiator, with request and
@@ -71,9 +71,9 @@ Text drawn over the picture uses explicit colours rather than theme ones, since 
 turned white on a dark theme would vanish into the picture's pale left half, and carries a
 drop shadow to stay legible where the lighthouse beam passes behind it.
 
-### Settings
+### Advanced Settings
 
-Tools -> Settings. The ABI hands over rows - key, description, type, value, default,
+Tools -> Advanced Settings. The ABI hands over rows - key, description, type, value, default,
 constraint - and this shell decides what each looks like: a checkbox for a bool, a popup
 where the schema restricts the value to literal choices, a text field otherwise with the
 accepted range beside it. Modified keys are bold and get a working Reset.
@@ -173,10 +173,11 @@ windows/
     BookmarksBar.cs            the bar, plus a clipboard helper that cannot throw
     BookmarksWindow.cs         bookmark manager
     HistoryWindow.cs           visited pages with live search
-    DeveloperPanel.cs          network, console and timing
+    DeveloperPanel.cs          the Engine Room: network, console and timing
     SettingsWindow.cs          the engine's settings store, typed per row
     DownloadsWindow.cs         progress, and open when finished
     AboutWindow.cs             the artwork, and the credits crossfade
+    BuildInfo.cs               version and product name ("Gosub Beacon Preview")
     MainWindow.xaml[.cs]       menu bar, toolbar, the event pump, context menus
     App.xaml[.cs]              startup and the "beacon.dll is missing" message
 ```
@@ -210,7 +211,7 @@ default is the four-byte Win32 `BOOL`.
 | Ctrl+H | history window |
 | Ctrl+Shift+O | bookmark manager |
 | Ctrl+U | view source |
-| F12 | developer tools |
+| F12 | Engine Room |
 | Ctrl+J | downloads |
 | F5 / Ctrl+F5 | reload / reload ignoring cache |
 | Esc | stop |

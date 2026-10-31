@@ -43,12 +43,6 @@
                     <attribute name="action">app.toggle-activity</attribute>
                 </item>
             </section>
-            <section>
-                <item>
-                    <attribute name="label">Engine Room</attribute>
-                    <attribute name="action">app.toggle-log</attribute>
-                </item>
-            </section>
         </submenu>
 
         <submenu>
@@ -89,11 +83,6 @@
                             <attribute name="label">Log</attribute>
                             <attribute name="action">app.devtools-page</attribute>
                             <attribute name="target">log</attribute>
-                        </item>
-                        <item>
-                            <attribute name="label">Console</attribute>
-                            <attribute name="action">app.devtools-page</attribute>
-                            <attribute name="target">console</attribute>
                         </item>
                         <item>
                             <attribute name="label">Network</attribute>

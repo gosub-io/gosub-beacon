@@ -326,7 +326,7 @@ public partial class MainWindow : Window
     // ── chrome ─────────────────────────────────────────────────────────────────
 
     private void SetTitle(string? pageTitle) =>
-        Title = string.IsNullOrEmpty(pageTitle) ? "Gosub Beacon" : $"{pageTitle} - Gosub Beacon";
+        Title = string.IsNullOrEmpty(pageTitle) ? BuildInfo.Product : $"{pageTitle} - {BuildInfo.Product}";
 
     private void SyncActiveTab()
     {
@@ -549,14 +549,14 @@ public partial class MainWindow : Window
         bookmarks.SubmenuOpened += (_, _) => FillBookmarksMenu(bookmarks);
 
         var tools = new MenuItem { Header = "_Tools" };
-        tools.Items.Add(MenuItemFor("_Developer Tools\tF12", ShowDeveloperPanel));
+        tools.Items.Add(MenuItemFor("_Engine Room\tF12", ShowDeveloperPanel));
         tools.Items.Add(new Separator());
         tools.Items.Add(MenuItemFor("Clear Network Log", () => _browser.ClearNetwork()));
         tools.Items.Add(MenuItemFor("Clear Console", () => _browser.ClearLog()));
         tools.Items.Add(MenuItemFor("Reset Timing", () => _browser.ResetTiming()));
         tools.Items.Add(new Separator());
         tools.Items.Add(MenuItemFor("_Downloads\tCtrl+J", ShowDownloads));
-        tools.Items.Add(MenuItemFor("_Settings", ShowSettings));
+        tools.Items.Add(MenuItemFor("_Advanced Settings", ShowSettings));
 
         var help = new MenuItem { Header = "_Help" };
         help.Items.Add(MenuItemFor("_Licences", ShowLicenses));

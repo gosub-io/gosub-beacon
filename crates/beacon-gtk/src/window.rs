@@ -32,7 +32,9 @@ impl BrowserWindow {
         window.imp().private.set(private);
         if private {
             window.add_css_class("private-window");
-            window.set_title(Some("Gosub Beacon (Private)"));
+            window.set_title(Some(&format!("{} (Private)", beacon_core::build_info::product())));
+        } else {
+            window.set_title(Some(beacon_core::build_info::product()));
         }
 
         window.set_resizable(true);
@@ -102,7 +104,7 @@ impl BrowserWindow {
                 let private = window_clone.imp().private.get();
                 spawn_future_local(async move {
                     // URLs on the command line become the startup tabs; without any, the
-                    // previous session is restored (falling back to a default set). A
+                    // previous session is restored (falling back to the home page). A
                     // private window starts on the home page only.
                     let mut initial_urls: Vec<String> = beacon_core::cli::Cli::global().urls.clone();
                     let mut session = Vec::new();
@@ -113,9 +115,7 @@ impl BrowserWindow {
                     } else if initial_urls.is_empty() {
                         session = beacon_core::session::load();
                         initial_urls = if session.is_empty() {
-                            ["https://gosub.io", "https://adayinthelifeof.nl", "https://news.ycombinator.com"]
-                                .map(String::from)
-                                .to_vec()
+                            vec!["gosub://home".to_string()]
                         } else {
                             session.iter().map(|t| t.url.clone()).collect()
                         };

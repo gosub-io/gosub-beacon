@@ -27,7 +27,7 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
             backing: .buffered,
             defer: false
         )
-        window.title = "Settings"
+        window.title = "Advanced Settings"
         window.setFrameAutosaveName("BeaconSettingsWindow")
         super.init(window: window)
         build()

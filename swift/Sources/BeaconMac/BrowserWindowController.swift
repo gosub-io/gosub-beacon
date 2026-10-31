@@ -87,7 +87,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
         )
         super.init(window: window)
 
-        window.title = browser.isPrivate ? "Private Browsing" : "Gosub Beacon"
+        window.title = browser.isPrivate ? "Private Browsing" : Bundle.main.productName
         window.delegate = self
         if browser.isPrivate {
             // Dark chrome for a private window, which is the signal Chrome and Firefox both
@@ -179,7 +179,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
         addressField.delegate = self
         addressField.target = self
         addressField.action = #selector(addressEntered)
-        addressField.placeholderString = "Search or enter address"
+        addressField.placeholderString = "Enter address"
         addressField.font = .systemFont(ofSize: 13)
         addressField.bezelStyle = .roundedBezel
         addressField.focusRingType = .none
@@ -567,7 +567,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
     /// A private window keeps saying so in its title, because the page title is the one
     /// piece of chrome someone reads without looking.
     private func setWindowTitle(_ pageTitle: String) {
-        let base = pageTitle.isEmpty ? "Gosub Beacon" : pageTitle
+        let product = Bundle.main.productName
+        let base = pageTitle.isEmpty ? product : "\(pageTitle) — \(product)"
         window?.title = browser.isPrivate ? "\(base) — Private" : base
     }
 
@@ -707,11 +708,6 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
     @objc func showLog(_ sender: Any?) {
         setDeveloperPanel(open: true)
         devPanel.show(.log)
-    }
-
-    @objc func showConsole(_ sender: Any?) {
-        setDeveloperPanel(open: true)
-        devPanel.show(.console)
     }
 
     @objc func showTimings(_ sender: Any?) {

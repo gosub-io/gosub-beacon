@@ -925,7 +925,7 @@ impl BrowserWindow {
             // The Page report filters, but is the engine's account of the page, not a log to
             // clear: it is replaced by the next navigation's.
             let page = imp.devtools_page();
-            let has_content = !matches!(page.as_str(), "console" | "history");
+            let has_content = page != "history";
             // Nor is the process list, which is what is running, not what was recorded.
             // The Timeline keeps the last few loads on its own and has a picker instead.
             imp.devtools_action
@@ -968,9 +968,6 @@ impl BrowserWindow {
             "processes" => self.refresh_processes(&needle),
             "timeline" => self.refresh_timeline(&needle),
             "report" => self.refresh_report(&needle),
-            // The page's own console, which has nothing to say until scripts run. Its
-            // summary line would otherwise keep whatever the last page put there.
-            "console" => self.devtools_summary.set_text(""),
             _ => self.refresh_log(&needle),
         }
     }
@@ -3763,8 +3760,7 @@ impl BrowserWindow {
             } else {
                 self.show_tab_address(&tab);
             }
-            let suffix = if self.private.get() { " (Private)" } else { "" };
-            self.obj().set_title(Some(&format!("{} — Gosub Beacon{suffix}", tab.title())));
+            self.set_page_title(tab.title());
         }
         drop(manager);
         // The raster DPR is a process-wide atomic: re-store it for this tab's zoom.
@@ -4041,7 +4037,7 @@ impl BrowserWindow {
         if beacon_core::dive::is_dive(url) {
             beacon_core::dive::TITLE
         } else {
-            "Engine settings"
+            "Advanced settings"
         }
     }
 
@@ -4235,6 +4231,13 @@ impl BrowserWindow {
         self.btn_bookmark.connect_clicked(move |_| {
             window.imp().toggle_bookmark();
         });
+    }
+
+    /// "Page — Gosub Beacon Preview", with " (Private)" in a private window.
+    fn set_page_title(&self, page: &str) {
+        let suffix = if self.private.get() { " (Private)" } else { "" };
+        let product = beacon_core::build_info::product();
+        self.obj().set_title(Some(&format!("{page} — {product}{suffix}")));
     }
 
     /// Put `url` in the address bar, with what the engine says about its connection: a
@@ -5553,7 +5556,7 @@ impl BrowserWindow {
             }
             BeaconEvent::TitleChanged(tab_id, title) => {
                 if self.active_tab_id() == Some(tab_id) {
-                    self.obj().set_title(Some(&format!("{title} — Gosub Beacon")));
+                    self.set_page_title(&title);
                 }
             }
             BeaconEvent::UrlChanged(tab_id, url) => {

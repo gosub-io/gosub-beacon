@@ -192,7 +192,7 @@ rustup toolchain install "$(cat scripts/release-toolchain)" --target aarch64-lin
 it. Then:
 
 ```bash
-scripts/android-apk.sh              # release build, debug-signed: target/android/gosub-beacon.apk
+scripts/android-apk.sh              # release build, debug-signed: target/android/gosub-beacon-<version>-<abi>.apk
 scripts/android-apk.sh --install    # also installs it over adb and starts it
 scripts/android-apk.sh --debug      # debug profile instead of release
 adb logcat -s beacon RustStdoutStderr   # the log; RUST_LOG cannot be set for an app

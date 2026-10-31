@@ -24,7 +24,7 @@ pub fn build(config: Config) -> Widget {
     // Header: title + search.
     let header = gtk4::Box::new(gtk4::Orientation::Horizontal, 12);
     header.add_css_class("config-header");
-    let title = gtk4::Label::new(Some("Engine settings"));
+    let title = gtk4::Label::new(Some("Advanced settings"));
     title.add_css_class("config-title");
     title.set_halign(gtk4::Align::Start);
     header.append(&title);
@@ -70,21 +70,8 @@ fn populate(list: &gtk4::ListBox, config: &Config, filter: &str) {
         list.remove(&row);
     }
 
-    let filter = filter.trim().to_lowercase();
-    let mut keys = if filter.contains('*') {
-        config.find(&filter)
-    } else {
-        config.find("*")
-    };
-    if !filter.is_empty() && !filter.contains('*') {
-        keys.retain(|k| k.to_lowercase().contains(&filter));
-    }
-    keys.sort();
-
-    for key in keys {
-        let Some(info) = config.get_info(&key) else { continue };
-        let current = config.get(&key).ok().flatten().unwrap_or_else(|| info.default.clone());
-        list.append(&build_row(config.clone(), info, current));
+    for row in beacon_core::settings::rows(config, filter) {
+        list.append(&build_row(config.clone(), row.info, row.current));
     }
 }
 

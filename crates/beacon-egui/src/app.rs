@@ -158,6 +158,8 @@ pub struct BeaconApp {
     last_pointer: Option<egui::Pos2>,
     /// What a failed load of the active tab asks the user, shown over the page until answered.
     question: Option<Question>,
+    /// The About box is showing (menu > About).
+    about_open: bool,
     /// The native date or time dialog open over a form control, and what it is for.
     #[cfg(target_os = "android")]
     picker: Option<NativePicker>,
@@ -299,6 +301,7 @@ impl BeaconApp {
             finger: false,
             last_pointer: None,
             question: None,
+            about_open: false,
             touch_trail: Default::default(),
             fling: None,
             tab_list_open: false,
@@ -401,7 +404,7 @@ impl BeaconApp {
         if self.is_diving(tab_id) {
             beacon_core::dive::TITLE.to_string()
         } else if beacon_core::settings::is_editor_url(tab.url()) {
-            "Engine settings".to_string()
+            "Advanced settings".to_string()
         } else if tab.title().is_empty() {
             tab.url().to_string()
         } else {
@@ -1043,6 +1046,7 @@ impl eframe::App for BeaconApp {
         #[cfg(target_os = "android")]
         self.poll_picker();
         self.show_question(&ctx);
+        self.show_about(&ctx);
 
         let Some(active) = self.active() else { return };
 
@@ -1251,7 +1255,7 @@ impl eframe::App for BeaconApp {
                     let response = ui.add_sized(
                         [ui.available_width() - trailing, ui.spacing().interact_size.y],
                         egui::TextEdit::singleline(&mut self.address_bar)
-                            .hint_text("Search or enter address")
+                            .hint_text("Enter address")
                             .vertical_align(egui::Align::Center),
                     );
                     self.address_bar_focused = response.has_focus();
@@ -1288,6 +1292,10 @@ impl eframe::App for BeaconApp {
                             let mut showing = self.activity.is_some();
                             if ui.checkbox(&mut showing, "Show activity").changed() {
                                 self.toggle_activity();
+                                ui.close();
+                            }
+                            if ui.button("About").clicked() {
+                                self.about_open = true;
                                 ui.close();
                             }
                         });
@@ -1642,14 +1650,16 @@ impl BeaconApp {
 
     /// The Back key (Android's Back button or gesture, a keyboard's Back key). It unwinds
     /// whatever the chrome has open before it touches the page: the address bar's focus,
-    /// a menu, the tab list. Then it goes back in the tab's history, and with no history
-    /// left Beacon goes to the background on Android.
+    /// a menu, the About box, the tab list. Then it goes back in the tab's history, and with
+    /// no history left Beacon goes to the background on Android.
     fn back_key(&mut self, ctx: &egui::Context, active: TabId) {
         // Any text field: the address bar, or one on the settings page.
         if self.address_bar_focused || ctx.egui_wants_keyboard_input() {
             ctx.memory_mut(|m| m.stop_text_input());
         } else if egui::Popup::is_any_open(ctx) {
             egui::Popup::close_all(ctx);
+        } else if self.about_open {
+            self.about_open = false;
         } else if self.tab_list_open {
             self.tab_list_open = false;
         } else if self.leave_dive(active) {
@@ -1751,6 +1761,33 @@ impl BeaconApp {
             let max_y = (view.page_height - view.page_viewport_height()).max(0.0);
             view.scroll_x = (view.scroll_x + dx / scale).max(0.0);
             view.scroll_y = (view.scroll_y + dy / scale).clamp(0.0, max_y);
+        }
+    }
+
+    /// Name, version and the commits this build came from.
+    fn show_about(&mut self, ctx: &egui::Context) {
+        if !self.about_open {
+            return;
+        }
+        let mut licences = false;
+        let mut close = false;
+        let modal = egui::Modal::new(egui::Id::new("about")).show(ctx, |ui| {
+            ui.set_max_width(420.0);
+            ui.heading(beacon_core::build_info::product());
+            ui.label(format!("Version {}", beacon_core::build_info::VERSION));
+            ui.label(format!("Beacon {}", beacon_core::build_info::COMMIT));
+            ui.label(format!("Engine {}", beacon_core::build_info::ENGINE_COMMIT));
+            ui.label("© 2024-2026 Gosub contributors · https://gosub.io");
+            ui.horizontal(|ui| {
+                licences = ui.button("Licences").clicked();
+                close = ui.button("Close").clicked();
+            });
+        });
+        if licences {
+            self.navigate_active("gosub://licenses");
+        }
+        if licences || close || modal.should_close() {
+            self.about_open = false;
         }
     }
 

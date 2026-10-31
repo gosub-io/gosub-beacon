@@ -27,7 +27,7 @@ internal sealed class DownloadsWindow : Window
     public DownloadsWindow(BeaconBrowser browser)
     {
         _browser = browser;
-        Title = "Downloads - Gosub Beacon";
+        Title = $"Downloads - {BuildInfo.Product}";
         Width = 720;
         Height = 460;
 

@@ -41,16 +41,14 @@ internal sealed class AboutWindow : Window
         ("HTML5 parser", ["Gosub Team"]),
         ("CSS3 parser", ["Gosub Team"]),
         ("Renderer", ["Gosub Team"]),
-        ("Javascript engine", ["Gosub Team"]),
         ("UI", ["Gosub Team"]),
         ("Win32 integration", ["Gosub Team"]),
         ("Rust integration", ["Gosub Team"]),
-        ("Translations", ["Gosub Team"]),
     ];
 
     public AboutWindow()
     {
-        Title = "About Gosub Beacon";
+        Title = $"About {BuildInfo.Product}";
         Width = ArtWidth;
         Height = ArtHeight + BarHeight;
 
@@ -185,17 +183,13 @@ internal sealed class AboutWindow : Window
         };
         close.Click += (_, _) => Close();
 
-        var version = typeof(AboutWindow).Assembly.GetName().Version is { } v
-            ? $"{v.Major}.{v.Minor}.{v.Build}"
-            : "0.1.0";
-
         // Two lines: on one the text would run under the buttons at this width.
         var info = new TextBlock
         {
             FontSize = 10,
             Foreground = Brushes.DimGray,
             HorizontalAlignment = HorizontalAlignment.Center,
-            Text = $"Gosub Beacon {version} · Powered by the Gosub Engine",
+            Text = $"{BuildInfo.Product} {BuildInfo.Version} · Powered by the Gosub Engine",
         };
 
         var copyright = new TextBlock
