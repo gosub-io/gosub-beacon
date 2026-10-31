@@ -95,10 +95,11 @@ pub fn show_keyboard(show: bool) {
     }
 }
 
-/// Whether Beacon last asked for the keyboard, and whether a focused text field was tapped
-/// this frame; [`sync_keyboard`] reads both.
+/// Whether Beacon last asked for the keyboard, whether a focused text field was tapped this
+/// frame, and whether a text field on the page has focus; [`sync_keyboard`] reads them.
 static KEYBOARD_UP: AtomicBool = AtomicBool::new(false);
 static FIELD_TAPPED: AtomicBool = AtomicBool::new(false);
+static PAGE_FIELD: AtomicBool = AtomicBool::new(false);
 
 /// Note a tap on a text field that already has focus. Back with the keyboard up is
 /// Android's own: it hides the keyboard without Beacon seeing the key, so the field keeps
@@ -109,12 +110,22 @@ pub fn keyboard_for(field: &egui::Response) {
     }
 }
 
+/// Note that a text field on the page has focus this frame, and whether the page was tapped.
+/// Said every frame it holds: a frame that does not show the page (the tab list) drops the
+/// keyboard. The engine reports the focus a frame or more after the tap that moved it.
+pub fn page_field(tapped: bool) {
+    PAGE_FIELD.store(true, Ordering::Relaxed);
+    if tapped {
+        FIELD_TAPPED.store(true, Ordering::Relaxed);
+    }
+}
+
 /// Raise or drop the keyboard by where focus ended up this frame. Once a frame rather than
 /// per field: moving from one field to another is one losing focus and one gaining it in
 /// the same frame, and handled field by field the keyboard would end up following
 /// whichever was drawn last.
 fn sync_keyboard(ctx: &egui::Context) {
-    let wanted = ctx.text_edit_focused();
+    let wanted = ctx.text_edit_focused() || PAGE_FIELD.swap(false, Ordering::Relaxed);
     let tapped = FIELD_TAPPED.swap(false, Ordering::Relaxed);
     let up = KEYBOARD_UP.swap(wanted, Ordering::Relaxed);
     if wanted && (!up || tapped) {
@@ -125,12 +136,46 @@ fn sync_keyboard(ctx: &egui::Context) {
 }
 
 /// Runs [`sync_keyboard`] when dropped: held for the whole of a frame, it reconciles the
-/// keyboard however the frame ends, early returns included.
+/// keyboard however the frame ends, early returns included. It also hands what the frame
+/// copied to the system clipboard: egui-winit has none on Android and keeps the text to itself.
 pub struct KeyboardSync(pub egui::Context);
 
 impl Drop for KeyboardSync {
     fn drop(&mut self) {
         sync_keyboard(&self.0);
+        let copied = self.0.output(|o| {
+            o.commands.iter().rev().find_map(|c| match c {
+                egui::OutputCommand::CopyText(text) => Some(text.clone()),
+                _ => None,
+            })
+        });
+        if let Some(text) = copied {
+            helper::copy_text(&text);
+        }
+    }
+}
+
+/// Fill in this frame's pastes from the system clipboard. `requested` is a paste asked for from
+/// a menu. A Ctrl+V on a hardware keyboard arrives as egui-winit's paste of its own copy, which
+/// is replaced; egui-winit sends none while it has copied nothing yet.
+pub fn paste(events: &mut Vec<egui::Event>, requested: bool) {
+    let has_paste = events.iter().any(|e| matches!(e, egui::Event::Paste(_)));
+    if !requested && !has_paste {
+        return;
+    }
+    // Read once, and only when asked: Android 12 and later show a toast on every read.
+    let Some(text) = helper::paste_text().filter(|t| !t.is_empty()) else {
+        events.retain(|e| !matches!(e, egui::Event::Paste(_)));
+        return;
+    };
+    let text = text.replace("\r\n", "\n");
+    for event in events.iter_mut() {
+        if let egui::Event::Paste(contents) = event {
+            contents.clone_from(&text);
+        }
+    }
+    if requested {
+        events.push(egui::Event::Paste(text));
     }
 }
 

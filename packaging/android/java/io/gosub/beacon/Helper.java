@@ -4,6 +4,8 @@ import android.app.Activity;
 import android.app.DatePickerDialog;
 import android.app.TimePickerDialog;
 import android.content.ActivityNotFoundException;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.ContentResolver;
 import android.content.ContentValues;
 import android.content.Context;
@@ -27,8 +29,8 @@ import java.util.TimeZone;
 
 /**
  * What Beacon needs from Android that Rust cannot do on its own: a dialog needs a listener
- * class, and a finished download has to go through MediaStore to land in the Downloads
- * folder other apps can see. Static methods only, called over JNI from beacon-egui's
+ * class, a finished download has to go through MediaStore to land in the Downloads folder
+ * other apps can see, and the clipboard is a system service. Static methods only, called over JNI from beacon-egui's
  * android_helper module. Values go in and out as plain ints and strings; formatting and
  * parsing stay on the Rust side.
  */
@@ -148,6 +150,23 @@ public final class Helper {
                 answer(serial, "");
             }
         };
+    }
+
+    /** Put text on the system clipboard. */
+    public static void copyText(Context context, String text) {
+        ClipboardManager clipboard = (ClipboardManager) context.getSystemService(Context.CLIPBOARD_SERVICE);
+        clipboard.setPrimaryClip(ClipData.newPlainText("Beacon", text));
+    }
+
+    /** The clipboard's text, or null when it holds none. */
+    public static String pasteText(Context context) {
+        ClipboardManager clipboard = (ClipboardManager) context.getSystemService(Context.CLIPBOARD_SERVICE);
+        ClipData clip = clipboard.getPrimaryClip();
+        if (clip == null || clip.getItemCount() == 0) {
+            return null;
+        }
+        CharSequence text = clip.getItemAt(0).coerceToText(context);
+        return text == null ? null : text.toString();
     }
 
     /**

@@ -92,6 +92,8 @@ struct TabView {
     dive: Option<crate::dive::DiveView>,
     /// The settings editor, while the tab is on `gosub://config`.
     config: Option<crate::config_page::ConfigView>,
+    /// A text field on the page has focus, by the engine's last `FocusChanged`.
+    editable: bool,
 }
 
 impl TabView {
@@ -160,6 +162,16 @@ pub struct BeaconApp {
     question: Option<Question>,
     /// The About box is showing (menu > About).
     about_open: bool,
+    /// A menu asked for a paste; the clipboard's text goes into next frame's input.
+    paste_requested: bool,
+    /// The hit test a long press or right click on the page is waiting for: its token, and
+    /// where on screen and on the page it was.
+    menu_hit: Option<(u64, egui::Pos2, egui::Vec2)>,
+    next_hit_token: u64,
+    /// The text field menu to open over the page this frame, at that point.
+    open_field_menu: Option<(egui::Pos2, egui::Vec2)>,
+    /// Where the open text field menu is.
+    field_menu: Option<egui::Pos2>,
     /// The native date or time dialog open over a form control, and what it is for.
     #[cfg(target_os = "android")]
     picker: Option<NativePicker>,
@@ -306,6 +318,11 @@ impl BeaconApp {
             last_pointer: None,
             question: None,
             about_open: false,
+            paste_requested: false,
+            menu_hit: None,
+            next_hit_token: 0,
+            open_field_menu: None,
+            field_menu: None,
             touch_trail: Default::default(),
             fling: None,
             tab_list_open: false,
@@ -510,7 +527,7 @@ impl BeaconApp {
     }
 
     /// Drain everything the engine has said since the last frame.
-    fn pump_engine(&mut self) {
+    fn pump_engine(&mut self, ctx: &egui::Context) {
         loop {
             match self.resource_rx.try_recv() {
                 Ok(update) => self.beacon.on_resource_update(update),
@@ -550,12 +567,71 @@ impl BeaconApp {
                         }
                         continue;
                     }
+                    if self.page_input_event(ctx, &event) {
+                        continue;
+                    }
                     let out = self.beacon.on_engine_event(event);
                     self.absorb(out);
                 }
                 Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => continue,
                 Err(_) => break,
             }
+        }
+    }
+
+    /// The engine's side of typing into the page: where focus is, the clipboard, and the
+    /// hit test a text field menu waits for. Returns whether `event` was one of those.
+    fn page_input_event(&mut self, ctx: &egui::Context, event: &EngineEvent) -> bool {
+        let tab_for = |engine_id| self.beacon.tab_for_engine(engine_id);
+        match event {
+            EngineEvent::FocusChanged {
+                tab_id, focused, editable, ..
+            } => {
+                if let Some(view) = tab_for(*tab_id).and_then(|id| self.views.get_mut(&id)) {
+                    view.editable = *focused && *editable;
+                }
+            }
+            // A new page starts with nothing focused, and says nothing about it.
+            EngineEvent::Navigation {
+                tab_id,
+                event: gosub_engine::events::NavigationEvent::Started { .. },
+            } => {
+                if let Some(view) = tab_for(*tab_id).and_then(|id| self.views.get_mut(&id)) {
+                    view.editable = false;
+                }
+                return false;
+            }
+            EngineEvent::ClipboardWrite { text, .. } => ctx.copy_text(text.clone()),
+            EngineEvent::PasteRequested { tab_id } => {
+                if tab_for(*tab_id) == self.active() {
+                    self.request_paste(ctx);
+                }
+            }
+            EngineEvent::HitTestResult { token, hit, .. } => {
+                if let Some((wanted, pos, rel)) = self.menu_hit {
+                    if token.0 == wanted {
+                        self.menu_hit = None;
+                        if hit.is_editable {
+                            self.open_field_menu = Some((pos, rel));
+                            ctx.request_repaint();
+                        }
+                    }
+                }
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    /// Paste into whatever has focus, next frame: the clipboard's text arrives as egui's own
+    /// paste, which a text field in the chrome or the page takes.
+    fn request_paste(&mut self, ctx: &egui::Context) {
+        if cfg!(target_os = "android") {
+            // egui-winit's clipboard is its own copy there; see `raw_input_hook`.
+            self.paste_requested = true;
+            ctx.request_repaint();
+        } else {
+            ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
         }
     }
 
@@ -1046,7 +1122,7 @@ impl eframe::App for BeaconApp {
         let _keyboard = crate::android::KeyboardSync(ctx.clone());
         // Read once: the panel frames below need this while `ui` is borrowed mutably.
         let faint = ui.visuals().faint_bg_color;
-        self.pump_engine();
+        self.pump_engine(&ctx);
         #[cfg(target_os = "android")]
         self.poll_picker();
         self.show_question(&ctx);
@@ -1275,6 +1351,22 @@ impl eframe::App for BeaconApp {
                     }
                     #[cfg(target_os = "android")]
                     crate::android::keyboard_for(&response);
+                    response.context_menu(|ui| {
+                        if ui.button("Copy").clicked() {
+                            let selected = egui::TextEdit::load_state(ui.ctx(), response.id)
+                                .and_then(|state| state.cursor.char_range())
+                                .map(|range| {
+                                    let [start, end] = range.sorted_cursors().map(|c| c.index.0);
+                                    self.address_bar.chars().skip(start).take(end - start).collect::<String>()
+                                })
+                                .filter(|text| !text.is_empty());
+                            ui.ctx().copy_text(selected.unwrap_or_else(|| self.address_bar.clone()));
+                        }
+                        if ui.button("Paste").clicked() {
+                            response.request_focus();
+                            self.request_paste(ui.ctx());
+                        }
+                    });
                     if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                         let target = self.address_bar.clone();
                         self.navigate_active(&target);
@@ -1607,25 +1699,96 @@ impl eframe::App for BeaconApp {
                 // The click's own position: a finger lifting takes the pointer away with it,
                 // so by now the context may have none.
                 if let Some(pos) = response.interact_pointer_pos() {
+                    self.tap(pos - rect.min);
+                }
+            }
+
+            // A long press or a right click on a text field opens its menu. Whether it is
+            // on one is the engine's to say; the menu opens on the answer.
+            if response.secondary_clicked() && !self.pinched {
+                if let Some(pos) = response.interact_pointer_pos() {
                     let rel = pos - rect.min;
-                    // The engine follows the link under the pointer, and for a tap this is the
-                    // first it hears of where the finger is. For a mouse it is a no-op.
-                    self.send_active(TabCommand::MouseMove { x: rel.x, y: rel.y });
-                    // Press and release together: a press without its release would leave
-                    // the pointer holding whatever it went down on.
-                    self.send_active(TabCommand::MouseDown {
+                    self.next_hit_token += 1;
+                    self.menu_hit = Some((self.next_hit_token, pos, rel));
+                    self.send_active(TabCommand::QueryHitTest {
                         x: rel.x,
                         y: rel.y,
-                        button: MouseButton::Left,
-                    });
-                    self.send_active(TabCommand::MouseUp {
-                        x: rel.x,
-                        y: rel.y,
-                        button: MouseButton::Left,
+                        token: gosub_engine::events::HitTestToken(self.next_hit_token),
                     });
                 }
             }
+            let menu_id = response.id.with("field-menu");
+            if let Some((pos, rel)) = self.open_field_menu.take() {
+                // The menu acts on the focused field, so the field pressed gets the focus, as
+                // a tap would give it. The tap drops a selection, hence Copy all rather than
+                // Select all and Copy.
+                self.tap(rel);
+                response.request_focus();
+                self.field_menu = Some(pos);
+                egui::Popup::open_id(&ctx, menu_id);
+            }
+            let (mut paste, mut copy_all) = (false, false);
+            if let Some(pos) = self.field_menu {
+                let shown = egui::Popup::menu(&response)
+                    .id(menu_id)
+                    .open_memory(None)
+                    .at_position(pos)
+                    .show(|ui| {
+                        paste = ui.button("Paste").clicked();
+                        copy_all = ui.button("Copy all").clicked();
+                    });
+                if shown.is_none() {
+                    self.field_menu = None;
+                }
+            }
+            if paste || copy_all {
+                // The page keeps the keys: a paste arrives as next frame's input.
+                response.request_focus();
+            }
+            if paste {
+                self.request_paste(&ctx);
+            }
+            if copy_all {
+                self.send_active(crate::page_keys::chord('a'));
+                self.send_active(crate::page_keys::chord('c'));
+            }
+
+            // Keys go to the page once it was tapped or clicked, as in GTK, until something
+            // in the chrome takes the focus. Tab, the arrows and Escape stay the page's
+            // meanwhile; egui would move or drop its focus with them.
+            if tapped {
+                response.request_focus();
+            }
+            if response.has_focus() {
+                ui.memory_mut(|m| {
+                    m.set_focus_lock_filter(
+                        response.id,
+                        egui::EventFilter {
+                            tab: true,
+                            horizontal_arrows: true,
+                            vertical_arrows: true,
+                            escape: true,
+                        },
+                    )
+                });
+                for command in ctx.input(|i| crate::page_keys::commands(&i.events)) {
+                    self.send_active(command);
+                }
+                #[cfg(target_os = "android")]
+                if self.views.get(&active).is_some_and(|v| v.editable) {
+                    crate::android::page_field(tapped);
+                }
+            }
         });
+    }
+
+    /// Clipboard text to paste, from a menu. egui-winit has no system clipboard on Android,
+    /// so the text is put into the frame's input here, where egui's own paste would be.
+    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        #[cfg(target_os = "android")]
+        crate::android::paste(&mut raw_input.events, std::mem::take(&mut self.paste_requested));
+        #[cfg(not(target_os = "android"))]
+        let _ = raw_input;
     }
 }
 
@@ -1645,6 +1808,25 @@ fn inset(ui: &mut egui::Ui, panel: egui::Panel, size: f32, fill: egui::Color32) 
 impl BeaconApp {
     /// Show or hide the activity strip. Showing it subscribes to the engine's telemetry,
     /// which is what makes the engine announce its stages; hiding drops the subscription.
+    /// A tap on the page at `rel`, in screen points from its corner.
+    fn tap(&self, rel: egui::Vec2) {
+        // The engine follows the link under the pointer, and for a tap this is the first it
+        // hears of where the finger is. For a mouse it is a no-op.
+        self.send_active(TabCommand::MouseMove { x: rel.x, y: rel.y });
+        // Press and release together: a press without its release would leave the pointer
+        // holding whatever it went down on.
+        self.send_active(TabCommand::MouseDown {
+            x: rel.x,
+            y: rel.y,
+            button: MouseButton::Left,
+        });
+        self.send_active(TabCommand::MouseUp {
+            x: rel.x,
+            y: rel.y,
+            button: MouseButton::Left,
+        });
+    }
+
     fn toggle_activity(&mut self) {
         self.activity = match self.activity.take() {
             Some(_) => None,
@@ -1657,8 +1839,9 @@ impl BeaconApp {
     /// a menu, the About box, the tab list. Then it goes back in the tab's history, and with
     /// no history left Beacon goes to the background on Android.
     fn back_key(&mut self, ctx: &egui::Context, active: TabId) {
-        // Any text field: the address bar, or one on the settings page.
-        if self.address_bar_focused || ctx.egui_wants_keyboard_input() {
+        // Any text field in the chrome: the address bar, or one on the settings page. The page
+        // itself holds egui's focus too while it takes keys, and Back is not for that.
+        if self.address_bar_focused || ctx.text_edit_focused() {
             ctx.memory_mut(|m| m.stop_text_input());
         } else if egui::Popup::is_any_open(ctx) {
             egui::Popup::close_all(ctx);
