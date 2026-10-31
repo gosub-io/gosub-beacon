@@ -9,7 +9,7 @@ What is here:
 | File | What it is |
 |---|---|
 | `io.gosub.beacon.yml` | the manifest |
-| `cargo-sources.json` | ~760 vendored crates + the vello git checkout, generated from `Cargo.lock` |
+| `cargo-sources.json` | ~840 vendored crates + the vello git checkout, generated from `Cargo.lock` |
 | `io.gosub.beacon.desktop` | desktop entry |
 | `io.gosub.beacon.metainfo.xml` | AppStream metadata |
 | `refresh-skia.sh` | prints the prebuilt-Skia source stanza after a skia-safe bump |
@@ -23,9 +23,9 @@ flatpak run org.flatpak.Builder --force-clean --user --install \
 flatpak run io.gosub.beacon
 ```
 
-The `dir` sources resolve relative to the manifest file, not to the working directory —
-Beacon at `../..`, the engine at `../../../gosub-engine` — so only `build-dir` lands where
-you run it. `--install-deps-from=flathub` matters on a first run: the GNOME 50 runtime and
+Beacon is a `dir` source that resolves relative to the manifest file (`../..`), not to the
+working directory, so only `build-dir` lands where you run it. The engine is fetched from
+GitHub at the pinned commit. `--install-deps-from=flathub` matters on a first run: the GNOME 50 runtime and
 SDK, the rust-stable extension and the GL extension (~1.5 GB) are not installed yet. After
 that it compiles the engine and Beacon from scratch, so budget for it.
 
@@ -38,12 +38,14 @@ flatpak build-bundle ~/.local/share/flatpak/repo "GosubBeacon-$VERSION.flatpak" 
 
 ## Things that will bite
 
-**The engine is a `dir` source by default.** The manifest builds whatever you have checked
-out at `../gosub-engine`, which is what you want while iterating. For a reproducible or CI
-build, switch to the commented-out `git` source — but then the pinned commit must be the
-one `Cargo.lock` was resolved against. `cargo-sources.json` is derived from that lock, and
-the build runs `--locked --offline`, so a different engine commit with different
-dependencies fails with "the lock file needs to be updated" and no network to fix it.
+**The engine is pinned to a commit.** The `git` source names the engine `beacon` commit
+`Cargo.lock` was resolved against, so a bundle says which engine it holds. Move it with
+every engine bump: `cargo-sources.json` is derived from that lock and the build runs
+`--locked --offline`, so a commit with different dependencies fails with "the lock file
+needs to be updated" and no network to fix it. A release pins the tag as well
+(`tag: beacon-v<version>` next to `commit`). To build against a local engine checkout
+while iterating, swap in a `dir` source with `path: ../../../gosub-engine` and
+`skip: [target, .git]`.
 
 **`cargo-sources.json` must be regenerated whenever `Cargo.lock` changes:**
 
@@ -70,7 +72,11 @@ anyway, add `org.freedesktop.Sdk.Extension.llvm20` to `sdk-extensions`,
 to the env.
 
 **x86_64 only.** The Skia archive is per-architecture, hence `only-arches`. aarch64 needs
-its own stanza with the key a native aarch64 build prints.
+its own stanza with the key a native aarch64 build prints. Say so in the release notes.
+
+**No update channel.** A release is a single-file bundle (`flatpak build-bundle`), with no
+repository behind it, so `flatpak update` never finds a newer build. Users install the
+next bundle over the old one; the release notes have to say where new builds appear.
 
 **`file://` browsing is off by default.** The app gets no filesystem grant: `FileDialog`
 is portal-backed, so downloads and "save link as" work without one. Browsing local files
@@ -85,8 +91,8 @@ flatpak override --user --filesystem=host:ro io.gosub.beacon
 
 ## Flathub
 
-Not submitted. Flathub additionally requires the sources to be remote (no `dir` sources,
-so the engine must become the pinned git source), screenshots that resolve, and a passing
+Not submitted. Flathub additionally requires the sources to be remote (Beacon itself is
+still a `dir` source), screenshots that resolve, and a passing
 `flatpak run --command=flatpak-builder-lint org.flatpak.Builder manifest <manifest>`.
 
 ## Icons
