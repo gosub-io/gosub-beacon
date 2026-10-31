@@ -279,4 +279,13 @@ mod tests {
         assert!(trusted_application(None).is_ok());
         assert!(beacon_access().is_ok());
     }
+
+    /// The startup dialog finds a keychain failure by this marker, whatever the code.
+    #[test]
+    fn keychain_failures_carry_the_marker() {
+        for code in [INTERACTION_NOT_ALLOWED, -25300] {
+            let e = describe(SecError::from_code(code), "reading");
+            assert!(e.downcast_ref::<super::super::KeychainError>().is_some(), "{code}: {e:#}");
+        }
+    }
 }
