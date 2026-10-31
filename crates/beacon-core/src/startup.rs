@@ -83,7 +83,8 @@ const KEYCHAIN_HINT: &str = "Beacon keeps each profile's key in the system keych
 /// Lock and unlock the profile on a thread of its own, so a shell can keep drawing while
 /// the keychain takes its time (a Secret Service that never answers holds the call for two
 /// minutes). The result arrives on the returned channel. Safe to call again after a
-/// failure: nothing is kept until it succeeds.
+/// failure. A profile whose key could not be read is let go, so `beaconctl` can unlock it
+/// in the meantime.
 pub fn open_profile() -> std::sync::mpsc::Receiver<anyhow::Result<()>> {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::Builder::new()

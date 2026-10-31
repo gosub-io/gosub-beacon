@@ -8,12 +8,14 @@ use beacon_profile::crypto::{KeyStore, OsKeychain, ProfileKey, Store};
 use beacon_profile::{Profile, ProfileLock, Roots, Selection};
 use gosub_engine::storage::{is_plaintext_database, SqliteKey};
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 static PROFILE: OnceLock<Profile> = OnceLock::new();
 /// Where profile keys go in files, on a platform without a keychain; see [`keys_dir`].
 static KEYS_DIR: OnceLock<PathBuf> = OnceLock::new();
-static LOCK: OnceLock<ProfileLock> = OnceLock::new();
+/// Released again when the key cannot be read, so `beaconctl` can unlock the profile while
+/// the shell offers to try again.
+static LOCK: Mutex<Option<ProfileLock>> = Mutex::new(None);
 static KEY: OnceLock<ProfileKey> = OnceLock::new();
 static ENCRYPTED: OnceLock<()> = OnceLock::new();
 
@@ -91,7 +93,7 @@ pub fn open_folder(dir: &Path) -> anyhow::Result<()> {
     );
     let _ = KEYS_DIR.set(keys_dir);
     let _ = PROFILE.set(profile);
-    let _ = LOCK.set(lock);
+    *LOCK.lock().unwrap() = Some(lock);
     let _ = KEY.set(key);
     let _ = ENCRYPTED.set(());
     Ok(())
@@ -170,15 +172,14 @@ pub fn cache_dir() -> &'static Path {
 /// Take the profile for this process, once. Every window's engine calls this; only the
 /// first takes the lock. Not done in [`init`]: a second GTK launch runs `main` too, and
 /// must get as far as handing its URLs to the running instance rather than fail here.
-/// Not atomic across threads; every caller today is on the main thread.
 pub fn lock_profile() -> anyhow::Result<()> {
-    if LOCK.get().is_some() {
-        return Ok(());
+    let mut held = LOCK.lock().unwrap();
+    if held.is_none() {
+        // `init`, not `profile`: a host on the C ABI gets here first, and a profile that
+        // cannot be opened must come back as an error (`beacon_new` returns NULL), not end
+        // its process.
+        *held = Some(init()?.lock()?);
     }
-    // `init`, not `profile`: a host on the C ABI gets here first, and a profile that cannot
-    // be opened must come back as an error (`beacon_new` returns NULL), not end its process.
-    let lock = init()?.lock()?;
-    let _ = LOCK.set(lock);
     Ok(())
 }
 
@@ -202,12 +203,22 @@ fn profile_key() -> anyhow::Result<&'static ProfileKey> {
     let key = match KEY.get() {
         Some(key) => key,
         None => {
-            anyhow::ensure!(LOCK.get().is_some(), "the profile key is only read with the profile locked");
+            anyhow::ensure!(
+                LOCK.lock().unwrap().is_some(),
+                "the profile key is only read with the profile locked"
+            );
             // A copy: unlocking may write `[crypto]` into the manifest, and nothing else this
             // process reads depends on it.
             let mut profile = profile().clone();
             let keys = key_store(&profile, keys_dir());
-            let key = profile.unlock(keys.as_deref())?;
+            let key = match profile.unlock(keys.as_deref()) {
+                Ok(key) => key,
+                Err(e) => {
+                    // Nothing was opened with a key, so nothing needs the lock yet.
+                    *LOCK.lock().unwrap() = None;
+                    return Err(e);
+                }
+            };
             // Kept before encrypting: the copy above is gone after this call, and a retry
             // would unlock the stale copy over again. (The keychain now hands back the key
             // it holds rather than taking a second one, so nothing is stranded either way.)
