@@ -984,9 +984,8 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
         NSPasteboard.general.setString(text, forType: .string)
     }
 
-    /// Save a link's target rather than following it. The engine has no "fetch to disk"
-    /// command, so this navigates to it: anything it will not render arrives as a download
-    /// offer, which is the panel the user was asking for.
+    /// Save a link's target rather than following it: ask where, then download it from this
+    /// tab without loading it.
     @objc private func saveLinkAs(_ sender: NSMenuItem) {
         guard let link = sender.representedObject as? String, currentTab != 0, let window else { return }
         let tab = currentTab
