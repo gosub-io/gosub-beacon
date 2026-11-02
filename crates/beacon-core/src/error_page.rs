@@ -9,9 +9,13 @@
 //! only toolkit-specific part -- how the HTML reaches the tab -- is one command.
 
 /// Escape the two strings that go into the template. Neither is trusted: the URL is
-/// whatever was typed, and the error is whatever the network stack said.
+/// whatever was typed, and the error is whatever the network stack said. `{` too, so neither
+/// can spell a template marker that a later replace would fill in.
 fn escape(text: &str) -> String {
-    text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('{', "&#123;")
 }
 
 /// The error page for a failed navigation to `url`.
@@ -61,6 +65,14 @@ mod tests {
         assert!(!page.contains("<script>"));
         assert!(!page.contains("<img onerror=x>"));
         assert!(page.contains("&lt;script&gt;"));
+    }
+
+    #[test]
+    fn a_template_marker_in_the_url_stays_text() {
+        let page = build_for_touch("https://example.test/{{DIVE}}", "{{URL}}");
+        assert_eq!(page.matches(r#"href="gosub://dive""#).count(), 1);
+        assert!(page.contains("&#123;&#123;DIVE}}"));
+        assert!(page.contains("&#123;&#123;URL}}"));
     }
 
     #[test]
