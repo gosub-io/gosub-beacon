@@ -215,8 +215,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
     }
 
-    /// Clears the profile's data, whichever window is in front: a private session keeps its
-    /// own in memory and forgets it when its last window closes.
+    /// Clears the profile's data and the private session's cookies, whichever window is in
+    /// front. A private session records no history to clear.
     @objc private func clearData(_ sender: Any?) {
         guard let browser else { return }
         let history = NSButton(checkboxWithTitle: "History", target: nil, action: nil)
@@ -236,7 +236,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         if history.state == .on { browser.clearHistory() }
-        if cookies.state == .on { browser.clearCookies() }
+        if cookies.state == .on {
+            browser.clearCookies()
+            privateBrowser?.clearCookies()
+        }
     }
 
     @objc private func showHelpPage(_ sender: Any?) {
