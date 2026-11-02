@@ -817,9 +817,11 @@ unsafe fn new_browser(config: *const BeaconConfig) -> anyhow::Result<Box<BeaconB
     };
 
     // Locked here rather than by the engine, so the log has the engine's start too, a
-    // failed one included.
+    // failed one included. A private browser leaves no log behind.
     beacon_core::paths::lock_profile()?;
-    open_log_file();
+    if !private {
+        open_log_file();
+    }
     let mut engine = BrowserEngine::<FfiConfig>::new(runtime(), private, backend)?;
     let events = engine
         .take_event_rx()
