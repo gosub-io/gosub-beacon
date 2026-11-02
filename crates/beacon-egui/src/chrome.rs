@@ -333,6 +333,56 @@ impl LoadingBar {
     }
 }
 
+/// Messages for the user, shown briefly along the bottom of the window: what went wrong (an
+/// address that does not parse, a tab that could not be made) or what an answer did. The
+/// newest few, each for a few seconds from when it is first drawn.
+#[derive(Default)]
+pub struct Toasts {
+    /// Each message, and the time it goes once it has been drawn.
+    shown: std::collections::VecDeque<(String, Option<f64>)>,
+}
+
+impl Toasts {
+    /// How many are on screen at once; an older one gives way to a newer.
+    const MAX: usize = 3;
+    /// Seconds a message stays.
+    const SECONDS: f64 = 4.0;
+
+    /// Tell the user `message`. It goes to the log too.
+    pub fn push(&mut self, message: String) {
+        log::warn!("{message}");
+        if self.shown.len() == Self::MAX {
+            self.shown.pop_front();
+        }
+        self.shown.push_back((message, None));
+    }
+
+    /// Draw the messages above the bottom of the window, `bottom` points up from its edge.
+    pub fn show(&mut self, ctx: &egui::Context, bottom: f32) {
+        let now = ctx.input(|i| i.time);
+        self.shown.retain(|(_, until)| until.is_none_or(|until| until > now));
+        let Some(next) = self.shown.iter_mut().fold(None, |next: Option<f64>, (_, until)| {
+            let until = *until.get_or_insert(now + Self::SECONDS);
+            Some(next.map_or(until, |next| next.min(until)))
+        }) else {
+            return;
+        };
+        ctx.request_repaint_after(std::time::Duration::from_secs_f64((next - now).max(0.0)));
+        egui::Area::new(egui::Id::new("toasts"))
+            .anchor(egui::Align2::CENTER_BOTTOM, Vec2::new(0.0, -(bottom + 16.0)))
+            .order(egui::Order::Foreground)
+            .interactable(false)
+            .show(ctx, |ui| {
+                for (message, _) in &self.shown {
+                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        ui.set_max_width(ctx.content_rect().width() - 32.0);
+                        ui.label(message);
+                    });
+                }
+            });
+    }
+}
+
 /// The activity strip (Show activity): what the engine is doing right now, as
 /// [`beacon_core::activity`]'s four lines, over the bottom right of the page like GTK's. Holds
 /// the telemetry subscription, which is what makes the engine announce its stages at all, so

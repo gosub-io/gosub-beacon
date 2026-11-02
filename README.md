@@ -25,11 +25,10 @@ More in [docs/screenshots](./docs/screenshots/).
   It renders on the CPU (Skia), not the GPU. Both halves cross-compile from Linux with
   `windows/build.sh`; running it needs Windows. Not built in CI.
 - **Android**: the egui frontend as a NativeActivity (`crates/beacon-android`), built into
-  a debug-signed arm64 APK by `scripts/android-apk.sh`. Android 8.0 (API 26) and newer.
-  On top of the desktop egui it has downloads (copied into the shared Downloads folder on
-  Android 10 and newer; older versions keep them in the app's own storage) and the system
-  date and time pickers for form inputs. The engine runs in-process, without component
-  isolation. Not built in CI.
+  a debug-signed arm64 APK by `scripts/android-apk.sh`. Android 10 (API 29) and newer.
+  On top of the desktop egui it has downloads (copied into the shared Downloads folder)
+  and the system date and time pickers for form inputs. The engine runs in-process,
+  without component isolation. Not built in CI.
 
 ## Getting the source
 

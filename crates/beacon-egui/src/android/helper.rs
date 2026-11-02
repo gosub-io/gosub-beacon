@@ -142,8 +142,7 @@ pub fn paste_text() -> Option<String> {
 }
 
 /// Copy the finished download at `path` into the shared Downloads folder as `name`. Blocks
-/// for the copy, so call it off the UI thread. Returns whether it worked; Android before 10
-/// has no shared Downloads collection to put it in.
+/// for the copy, so call it off the UI thread. Returns whether it worked.
 pub fn publish_download(path: &Path, name: &str) -> bool {
     let uri = with_helper("cannot publish the download", |env, class, activity| {
         let src = env.new_string(path.to_string_lossy())?;

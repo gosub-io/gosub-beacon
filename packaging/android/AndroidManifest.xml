@@ -8,6 +8,8 @@
     package="io.gosub.beacon">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Pages are drawn by Vello on wgpu's Vulkan backend: Vulkan 1.1 (0x401000). -->
+    <uses-feature android:name="android.hardware.vulkan.version" android:version="0x401000" android:required="true" />
 
     <!-- NoActionBar: the default theme reserves an (empty) action bar, and the content rect
          the app keeps clear of the system bars would include it.

@@ -9,20 +9,24 @@
 //! only toolkit-specific part -- how the HTML reaches the tab -- is one command.
 
 /// Escape the two strings that go into the template. Neither is trusted: the URL is
-/// whatever was typed, and the error is whatever the network stack said.
+/// whatever was typed, and the error is whatever the network stack said. `{` too, so neither
+/// can spell a template marker that a later replace would fill in.
 fn escape(text: &str) -> String {
-    text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('{', "&#123;")
 }
 
 /// The error page for a failed navigation to `url`.
 pub fn build(url: &str, error: &str) -> String {
-    page(url, error, "press space")
+    page(url, error, "&#8226; Or press space and dive while you wait")
 }
 
-/// The error page for a shell on a touch screen, where a tap on the page starts the game:
-/// there is no space bar to press.
+/// The error page for a shell on a touch screen, which has no space bar: a button starts the
+/// game instead. The shell catches the navigation to it.
 pub fn build_for_touch(url: &str, error: &str) -> String {
-    page(url, error, "tap the page")
+    page(url, error, r#"<a class="dive" href="gosub://dive">Dive while you wait</a>"#)
 }
 
 fn page(url: &str, error: &str, dive: &str) -> String {
@@ -64,9 +68,19 @@ mod tests {
     }
 
     #[test]
+    fn a_template_marker_in_the_url_stays_text() {
+        let page = build_for_touch("https://example.test/{{DIVE}}", "{{URL}}");
+        assert_eq!(page.matches(r#"href="gosub://dive""#).count(), 1);
+        assert!(page.contains("&#123;&#123;DIVE}}"));
+        assert!(page.contains("&#123;&#123;URL}}"));
+    }
+
+    #[test]
     fn the_game_hint_names_the_input_there_is() {
         assert!(build("https://example.test/", "x").contains("Or press space and dive"));
-        assert!(build_for_touch("https://example.test/", "x").contains("Or tap the page and dive"));
+        let touch = build_for_touch("https://example.test/", "x");
+        assert!(touch.contains(r#"href="gosub://dive""#));
+        assert!(!touch.contains("press space"));
     }
 
     #[test]
