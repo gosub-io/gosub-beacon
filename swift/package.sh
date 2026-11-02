@@ -299,6 +299,10 @@ cat > "$app/Contents/Info.plist" <<PLIST
     <key>NSHighResolutionCapable</key>   <true/>
     <!-- The page is rendered on the GPU; let macOS keep a laptop on its integrated one. -->
     <key>NSSupportsAutomaticGraphicsSwitching</key> <true/>
+    <key>NSHumanReadableCopyright</key>  <string>Copyright (c) 2024-2026 Gosub contributors. MIT License.</string>
+    <key>LSApplicationCategoryType</key> <string>public.app-category.productivity</string>
+    <!-- Shown when a page on the local network is first opened (macOS 15 and later). -->
+    <key>NSLocalNetworkUsageDescription</key> <string>Gosub Beacon connects to devices on your local network when you open pages served from them.</string>
 </dict>
 </plist>
 PLIST
