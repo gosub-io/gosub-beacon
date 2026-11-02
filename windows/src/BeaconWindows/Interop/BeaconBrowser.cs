@@ -642,6 +642,8 @@ internal sealed class BeaconBrowser : IDisposable
         return rows;
     }
 
+    public BeaconNative.DownloadState DownloadState(ulong id) => BeaconNative.DownloadStateAt(Handle, id);
+
     /// <summary>Hand a finished download to the desktop's default application.</summary>
     public void OpenDownload(ulong id) => BeaconNative.DownloadOpen(Handle, id);
 

@@ -22,6 +22,9 @@ public partial class MainWindow : Window
     private SettingsWindow? _settingsWindow;
     private DownloadsWindow? _downloadsWindow;
 
+    /// <summary>The download the status line says is running, until it ends.</summary>
+    private (ulong Id, string Name) _statusDownload;
+
     internal MainWindow(BeaconBrowser browser, string[] startupUrls)
     {
         InitializeComponent();
@@ -258,8 +261,10 @@ public partial class MainWindow : Window
                     UpdateNavButtons();
                     break;
 
-                case BeaconNative.EventKind.Progress when ev.Tab == _page.Tab:
-                    StatusLine.Text = ev.Number < 0 ? "Loading..." : $"Loading... {ev.Number * 100:0}%";
+                // -1 clears the indicator; it follows a stop or a download offer, after the
+                // LoadingChanged that already said "Done".
+                case BeaconNative.EventKind.Progress when ev.Tab == _page.Tab && ev.Number >= 0:
+                    StatusLine.Text = $"Loading... {ev.Number * 100:0}%";
                     break;
 
                 case BeaconNative.EventKind.NavStateChanged:
@@ -309,6 +314,11 @@ public partial class MainWindow : Window
 
                 case BeaconNative.EventKind.DownloadChanged:
                     _downloadsWindow?.Reload();
+                    if (_statusDownload.Id != 0 && (ulong)ev.Number == _statusDownload.Id)
+                    {
+                        ShowDownloadEnd();
+                    }
+
                     break;
 
                 case BeaconNative.EventKind.Log:
@@ -685,13 +695,33 @@ public partial class MainWindow : Window
                 return;
             }
 
-            StatusLine.Text = $"Downloading {System.IO.Path.GetFileName(dialog.FileName)}...";
+            var name = System.IO.Path.GetFileName(dialog.FileName);
+            _statusDownload = (id, name);
+            StatusLine.Text = $"Downloading {name}...";
             ShowDownloads();
         }
         else
         {
             _browser.RejectDownload(offer);
             StatusLine.Text = "Download cancelled";
+        }
+    }
+
+    /// <summary>Say how the download the status line announced ended, once it has.</summary>
+    private void ShowDownloadEnd()
+    {
+        var (id, name) = _statusDownload;
+        var ended = _browser.DownloadState(id) switch
+        {
+            BeaconNative.DownloadState.Finished => $"Downloaded {name}",
+            BeaconNative.DownloadState.Failed => $"Download of {name} failed",
+            BeaconNative.DownloadState.Cancelled => $"Download of {name} cancelled",
+            _ => null,
+        };
+        if (ended is not null)
+        {
+            StatusLine.Text = ended;
+            _statusDownload = default;
         }
     }
 
