@@ -80,6 +80,12 @@ impl eframe::App for Startup {
         }
     }
 
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        if let State::Running(app) = &mut self.state {
+            app.raw_input_hook(ctx, raw_input);
+        }
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         let next = match &mut self.state {

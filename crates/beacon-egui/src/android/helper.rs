@@ -107,6 +107,40 @@ pub fn take_picker_result() -> Option<String> {
     .flatten()
 }
 
+/// Put `text` on the system clipboard.
+pub fn copy_text(text: &str) {
+    with_helper("cannot copy to the clipboard", |env, class, activity| {
+        let text = env.new_string(text)?;
+        env.call_static_method(
+            class,
+            jni_str!("copyText"),
+            jni_sig!("(Landroid/content/Context;Ljava/lang/String;)V"),
+            &[JValue::from(activity), JValue::from(&text)],
+        )?;
+        Ok(())
+    });
+}
+
+/// The text on the system clipboard, `None` when it holds none.
+pub fn paste_text() -> Option<String> {
+    with_helper("cannot read the clipboard", |env, class, activity| {
+        let text = env
+            .call_static_method(
+                class,
+                jni_str!("pasteText"),
+                jni_sig!("(Landroid/content/Context;)Ljava/lang/String;"),
+                &[JValue::from(activity)],
+            )?
+            .l()?;
+        if text.is_null() {
+            return Ok(None);
+        }
+        let text = env.cast_local::<JString>(text)?;
+        text.try_to_string(env).map(Some)
+    })
+    .flatten()
+}
+
 /// Copy the finished download at `path` into the shared Downloads folder as `name`. Blocks
 /// for the copy, so call it off the UI thread. Returns whether it worked; Android before 10
 /// has no shared Downloads collection to put it in.

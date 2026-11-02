@@ -13,6 +13,7 @@ mod chrome;
 mod config_page;
 mod context;
 mod dive;
+mod page_keys;
 mod picker_value;
 mod platform;
 mod startup;
