@@ -44,6 +44,10 @@ internal sealed class PageView : FrameworkElement
                 // from it would act on the new one.
                 _tab = value;
                 _pendingHitToken = 0;
+
+                // Nor may the old page stay up: a new tab (view source) has no frame yet.
+                _bitmap = null;
+                InvalidateVisual();
             }
         }
     }
