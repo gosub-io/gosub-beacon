@@ -1807,8 +1807,6 @@ fn inset(ui: &mut egui::Ui, panel: egui::Panel, size: f32, fill: egui::Color32) 
 }
 
 impl BeaconApp {
-    /// Show or hide the activity strip. Showing it subscribes to the engine's telemetry,
-    /// which is what makes the engine announce its stages; hiding drops the subscription.
     /// A tap on the page at `rel`, in screen points from its corner.
     fn tap(&self, rel: egui::Vec2) {
         // The engine follows the link under the pointer, and for a tap this is the first it
@@ -1828,6 +1826,8 @@ impl BeaconApp {
         });
     }
 
+    /// Show or hide the activity strip. Showing it subscribes to the engine's telemetry,
+    /// which is what makes the engine announce its stages; hiding drops the subscription.
     fn toggle_activity(&mut self) {
         self.activity = match self.activity.take() {
             Some(_) => None,
