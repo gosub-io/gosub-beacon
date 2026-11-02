@@ -29,6 +29,13 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
 
+        // 1240x820 does not fit a small or highly scaled screen, and a window larger than the
+        // work area opens, and restores, with its edges off screen.
+        var area = SystemParameters.WorkArea;
+        Width = Math.Min(Width, area.Width);
+        Height = Math.Min(Height, area.Height);
+        WindowStartupLocation = WindowStartupLocation.CenterScreen;
+
         _browser = browser;
         _page.Attach(_browser);
         _page.ContextRequested += ShowPageContextMenu;
