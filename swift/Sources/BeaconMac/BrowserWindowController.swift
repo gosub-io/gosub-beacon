@@ -429,6 +429,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
         if !editingAddress {
             addressField.stringValue = browser.url(of: tab)
         }
+        setWindowTitle(browser.title(of: tab))
         refreshChrome()
     }
 
@@ -521,6 +522,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
         if !ownedTabs.contains(currentTab) {
             currentTab = ownedTabs.first ?? 0
             if currentTab != 0 { pageView.show(tab: currentTab) }
+            setWindowTitle(currentTab == 0 ? "" : browser.title(of: currentTab))
         }
         // Keep this window's order in step with the browser's, so a drag survives a rebuild.
         let browserOrder = browser.tabs
