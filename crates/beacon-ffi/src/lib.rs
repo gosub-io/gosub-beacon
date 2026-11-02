@@ -1606,6 +1606,27 @@ pub unsafe extern "C" fn beacon_history_visit_count(browser: *mut BeaconBrowser,
     b.history.get(index).map(|page| page.visit_count).unwrap_or(0)
 }
 
+/// Forget every visited page. Bookmarks stay.
+///
+/// # Safety
+/// `browser` must be a live handle from [`beacon_new`].
+#[no_mangle]
+pub unsafe extern "C" fn beacon_clear_history(browser: *mut BeaconBrowser) {
+    let b = browser!(browser);
+    b.engine.clear_history();
+    b.history.clear();
+}
+
+/// Forget every cookie, on disk too.
+///
+/// # Safety
+/// `browser` must be a live handle from [`beacon_new`].
+#[no_mangle]
+pub unsafe extern "C" fn beacon_clear_cookies(browser: *mut BeaconBrowser) {
+    let b = browser!(browser);
+    b.engine.clear_cookies();
+}
+
 // ── developer panel: logs and timings ────────────────────────────────────────
 //
 // Both follow the same shape as the history search: take a snapshot, then read it by index.
@@ -1846,6 +1867,39 @@ pub unsafe extern "C" fn beacon_download_accept(browser: *mut BeaconBrowser, off
             url: pending.url,
             target_path: target,
             offer: Some(pending.offer),
+        },
+    );
+    id
+}
+
+/// Download `url` from `tab` into `path` without loading it first: a link's Save As. Returns
+/// a download id to track it with, or 0.
+///
+/// # Safety
+/// `browser` must be a live handle from [`beacon_new`]; `url` and `path` NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn beacon_download_url(browser: *mut BeaconBrowser, tab: u64, url: *const c_char, path: *const c_char) -> u64 {
+    let b = browser!(browser, 0);
+    let Some(tab_id) = b.tab(tab) else { return 0 };
+    let (Some(url), Some(path)) = (to_str(url), to_str(path)) else {
+        return 0;
+    };
+
+    let target = std::path::PathBuf::from(path);
+    let filename = target
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "download".to_string());
+
+    let id = b.beacon.downloads_mut().next_id();
+    b.beacon.downloads_mut().start(id, filename, target.clone());
+    b.send(
+        tab_id,
+        TabCommand::StartDownload {
+            id: DownloadId(id),
+            url: url.to_string(),
+            target_path: target,
+            offer: None,
         },
     );
     id

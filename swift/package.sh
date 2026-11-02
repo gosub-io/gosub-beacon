@@ -210,6 +210,23 @@ if command -v rustup >/dev/null; then
         fi
     done
 fi
+# No paths from this machine in the release binaries: panics and debug info name /src,
+# /cargo and /rustup instead. Encoded rather than RUSTFLAGS, so a path with a space survives.
+# It wins over RUSTFLAGS, so flags already given either way are carried over.
+remap=()
+if [[ -n "${CARGO_ENCODED_RUSTFLAGS:-}" ]]; then
+    IFS=$'\x1f' read -ra remap <<<"$CARGO_ENCODED_RUSTFLAGS"
+elif [[ -n "${RUSTFLAGS:-}" ]]; then
+    read -ra remap <<<"$RUSTFLAGS"
+fi
+remap+=(
+    "--remap-path-prefix=$(dirname "$root")=/src"
+    "--remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo"
+    "--remap-path-prefix=${RUSTUP_HOME:-$HOME/.rustup}=/rustup"
+)
+CARGO_ENCODED_RUSTFLAGS="$(IFS=$'\x1f'; echo "${remap[*]}")"
+export CARGO_ENCODED_RUSTFLAGS
+
 dylibs=()
 ctls=()
 for arch in "${archs[@]}"; do
@@ -261,6 +278,9 @@ mkdir -p "$app/Contents/MacOS" "$app/Contents/Frameworks" "$app/Contents/Resourc
 
 cp "$bin/BeaconMac" "$app/Contents/MacOS/BeaconMac"
 cp "$root/target/release/libbeacon.dylib" "$app/Contents/Frameworks/libbeacon.dylib"
+strip "$app/Contents/MacOS/BeaconMac"
+# -x keeps the global symbols: they are the ABI BeaconMac links against.
+strip -x "$app/Contents/Frameworks/libbeacon.dylib"
 # Beside BeaconMac, where each finds the other for the keychain's access list (see the top).
 if $with_beaconctl; then
     lipo -create -output "$app/Contents/MacOS/beaconctl" "${ctls[@]}"
@@ -299,6 +319,10 @@ cat > "$app/Contents/Info.plist" <<PLIST
     <key>NSHighResolutionCapable</key>   <true/>
     <!-- The page is rendered on the GPU; let macOS keep a laptop on its integrated one. -->
     <key>NSSupportsAutomaticGraphicsSwitching</key> <true/>
+    <key>NSHumanReadableCopyright</key>  <string>Copyright (c) 2024-2026 Gosub contributors. MIT License.</string>
+    <key>LSApplicationCategoryType</key> <string>public.app-category.productivity</string>
+    <!-- Shown when a page on the local network is first opened (macOS 15 and later). -->
+    <key>NSLocalNetworkUsageDescription</key> <string>Gosub Beacon connects to devices on your local network when you open pages served from them.</string>
 </dict>
 </plist>
 PLIST

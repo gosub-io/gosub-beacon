@@ -13,7 +13,7 @@
 use std::sync::Arc;
 
 use beacon_profile::crypto::Store;
-use gosub_engine::cookies::SqliteCookieStore;
+use gosub_engine::cookies::{CookieJarHandle, CookieStoreHandle, DefaultCookieJar, SqliteCookieStore};
 use gosub_engine::events::EngineEvent;
 use gosub_engine::html::RenderConfiguration;
 #[cfg(feature = "gemini")]
@@ -50,6 +50,8 @@ pub struct BrowserEngine<C: BeaconConfig> {
     known_hosts: KnownHostsHandle,
     /// The client certificates `gemini://` presents, shared with the engine's zone.
     client_identities: ClientIdentitiesHandle,
+    /// The zone's cookie jar, the one its tabs use. Held to clear it.
+    cookies: CookieJarHandle,
     /// Kept alive so the engine keeps running for the lifetime of the window; stopped by
     /// [`BrowserEngine::shutdown`].
     engine: GosubEngine<C>,
@@ -251,7 +253,10 @@ impl<C: BeaconConfig> BrowserEngine<C> {
             )
         };
 
+        let private_jar: Option<CookieJarHandle> = private.then(|| DefaultCookieJar::new().into());
+        let cookie_store: Option<CookieStoreHandle>;
         let zone_services = if private {
+            cookie_store = None;
             // Everything in memory, nothing recorded: gone when the window closes.
             ZoneServices {
                 storage: Arc::new(StorageService::new(
@@ -259,15 +264,15 @@ impl<C: BeaconConfig> BrowserEngine<C> {
                     Arc::new(InMemorySessionStore::new()),
                 )),
                 cookie_store: None,
-                cookie_jar: Some(gosub_engine::cookies::DefaultCookieJar::new().into()),
+                cookie_jar: private_jar.clone(),
                 partition_policy: PartitionPolicy::None,
                 places: None,
             }
         } else {
-            let cookie_store: gosub_engine::cookies::CookieStoreHandle =
-                SqliteCookieStore::open(data_dir.join(Store::Cookies.file_name()), Some(key(Store::Cookies)?))
-                    .map_err(|e| anyhow::anyhow!("cookie store: {e:?}"))?
-                    .into();
+            let store: CookieStoreHandle = SqliteCookieStore::open(data_dir.join(Store::Cookies.file_name()), Some(key(Store::Cookies)?))
+                .map_err(|e| anyhow::anyhow!("cookie store: {e:?}"))?
+                .into();
+            cookie_store = Some(store.clone());
             // Isolated: localStorage lives in file areas served by the engine's storage
             // process, the one store kind that process can serve; the SQLite store stays
             // in this process. The two builds therefore keep separate localStorage for the
@@ -289,7 +294,7 @@ impl<C: BeaconConfig> BrowserEngine<C> {
             let local: Arc<dyn gosub_engine::storage::LocalStore> = Arc::new(open_local_db()?);
             ZoneServices {
                 storage: Arc::new(StorageService::new(local, Arc::new(InMemorySessionStore::new()))),
-                cookie_store: Some(cookie_store),
+                cookie_store: Some(store),
                 cookie_jar: None,
                 partition_policy: PartitionPolicy::None,
                 places: Some(places.clone()),
@@ -305,11 +310,13 @@ impl<C: BeaconConfig> BrowserEngine<C> {
             .client_identities(client_identities.clone())
             .create()
             .map_err(|e| anyhow::anyhow!("create_zone: {e:?}"))?;
+        let cookies = zone_jar(&engine, zone.id, private_jar, cookie_store.as_ref())?;
 
         Ok(Self {
             places,
             known_hosts,
             client_identities,
+            cookies,
             engine,
             zone,
             compositor,
@@ -338,6 +345,17 @@ impl<C: BeaconConfig> BrowserEngine<C> {
     /// Bookmarks + visited history (star button, bookmarks bar, URL completion).
     pub fn places(&self) -> gosub_engine::places::PlacesHandle {
         self.places.clone()
+    }
+
+    /// Forget every visited page. Bookmarks stay.
+    pub fn clear_history(&self) {
+        self.places.clear_history();
+    }
+
+    /// Forget every cookie of this zone, on disk too. Open pages keep what they already
+    /// read; their next request goes out without.
+    pub fn clear_cookies(&self) {
+        self.cookies.write().clear();
     }
 
     /// Trust the certificate a refused visit to `url` was shown (`fingerprint`, from
@@ -457,6 +475,28 @@ impl<C: BeaconConfig> BrowserEngine<C> {
         let tab = rt.block_on(builder.create()).map_err(|e| anyhow::anyhow!("create_tab: {e:?}"))?;
         Ok(tab)
     }
+}
+
+/// The jar the engine gave the zone: the one passed in for a private zone, the vault's when
+/// one runs, else the store's, which hands every caller the same live jar.
+fn zone_jar<C: BeaconConfig>(
+    engine: &GosubEngine<C>,
+    zone: ZoneId,
+    private_jar: Option<CookieJarHandle>,
+    store: Option<&CookieStoreHandle>,
+) -> anyhow::Result<CookieJarHandle> {
+    if let Some(jar) = private_jar {
+        return Ok(jar);
+    }
+    #[cfg(target_os = "linux")]
+    if let Some(vault) = engine.cookie_vault() {
+        return Ok(gosub_engine::cookie_vault::client::VaultCookieJar::new(vault.clone(), zone).handle());
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = engine;
+    store
+        .and_then(|store| store.jar_for(zone))
+        .ok_or_else(|| anyhow::anyhow!("no cookie jar for zone {zone}"))
 }
 
 /// Beacon's own versions of the engine's home, help and not-found pages, or the engine's.
@@ -608,5 +648,30 @@ mod tests {
         let src = home.split(r#"class="logo" src=""#).nth(1).unwrap().split('"').next().unwrap();
         assert!(src.starts_with("data:image/svg+xml,%3Csvg "));
         assert!(!src.contains(['#', '<', '>']));
+    }
+
+    /// `clear_cookies` clears the jar `jar_for` hands out, which must be the zone's own and
+    /// must take the clear to disk.
+    #[test]
+    fn clearing_the_stores_jar_empties_the_database() {
+        let dir = std::env::temp_dir().join(format!("beacon-cookies-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("cookies.db");
+        let zone = ZoneId::new();
+        let url = url::Url::parse("https://example.org/").unwrap();
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.append("set-cookie", "session=1; Max-Age=3600".parse().unwrap());
+
+        let store: CookieStoreHandle = SqliteCookieStore::open(path.clone(), None).unwrap().into();
+        let tabs_jar = store.jar_for(zone).unwrap();
+        tabs_jar.write().store_response_cookies(&url, &headers, None);
+        assert!(!tabs_jar.read().get_all_cookies().is_empty());
+        store.jar_for(zone).unwrap().write().clear();
+        assert!(tabs_jar.read().get_all_cookies().is_empty(), "the zone's jar is the one cleared");
+        drop((tabs_jar, store));
+
+        let reopened: CookieStoreHandle = SqliteCookieStore::open(path, None).unwrap().into();
+        assert!(reopened.jar_for(zone).unwrap().read().get_all_cookies().is_empty());
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
