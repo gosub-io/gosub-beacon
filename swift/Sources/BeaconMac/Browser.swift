@@ -694,6 +694,11 @@ final class Browser {
 
     func removeListener(_ listener: BrowserListener) {
         listeners.removeAll { $0.listener == nil || $0.listener === listener }
+        // No window left to hand events to; the next one starts the pump again.
+        if listeners.isEmpty {
+            pump?.invalidate()
+            pump = nil
+        }
     }
 
     private func dispatchEvents() {
