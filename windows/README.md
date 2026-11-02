@@ -123,9 +123,9 @@ so.
 
 ### From Linux
 
-Both halves cross-compile **from Linux**, so the build loop does not need Windows at all -
-only running does. The cross-build is broken at the moment: vendored OpenSSL's Configure
-refuses a Linux perl for MSVC (GOS-231).
+**Broken at the moment**: vendored OpenSSL's Configure refuses a Linux perl for MSVC, so
+build on Windows with `package.ps1` (above). Once that is fixed, both halves cross-compile
+from Linux and only running needs Windows:
 
 ```bash
 ./windows/build.sh            # debug
