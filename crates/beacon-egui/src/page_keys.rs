@@ -12,6 +12,8 @@ use gosub_engine::events::{Modifiers, TabCommand};
 /// What the page gets for this frame's `events`, in order.
 pub fn commands(events: &[Event]) -> Vec<TabCommand> {
     let mut out = Vec::new();
+    // The modifiers of the press whose `Text` comes next: Shift+Space is not Space.
+    let mut typing = Modifiers::empty();
     for event in events {
         match event {
             Event::Key {
@@ -26,7 +28,10 @@ pub fn commands(events: &[Event]) -> Vec<TabCommand> {
                         Some(c) => c,
                         None => continue,
                     },
-                    None => continue,
+                    None => {
+                        typing = engine_modifiers(*modifiers);
+                        continue;
+                    }
                 };
                 let modifiers = engine_modifiers(*modifiers);
                 out.push(if *pressed {
@@ -46,7 +51,7 @@ pub fn commands(events: &[Event]) -> Vec<TabCommand> {
             Event::Text(text) if text.chars().count() == 1 => out.push(TabCommand::KeyDown {
                 key: text.clone(),
                 code: text.clone(),
-                modifiers: Modifiers::empty(),
+                modifiers: std::mem::replace(&mut typing, Modifiers::empty()),
             }),
             Event::Text(text) | Event::Paste(text) | Event::Ime(egui::ImeEvent::Commit(text)) if !text.is_empty() => {
                 out.push(TabCommand::TextInput { text: text.clone() })
@@ -163,7 +168,7 @@ mod tests {
         let shift = egui::Modifiers::SHIFT;
         same(
             commands(&[key(Key::A, true, shift), Event::Text("A".into()), key(Key::A, false, shift)]),
-            vec![down("A", Modifiers::empty()), up("A", Modifiers::SHIFT)],
+            vec![down("A", Modifiers::SHIFT), up("A", Modifiers::SHIFT)],
         );
     }
 
@@ -192,6 +197,19 @@ mod tests {
         same(
             commands(&[key(Key::Space, true, none), Event::Text(" ".into()), key(Key::Space, false, none)]),
             vec![down(" ", Modifiers::empty()), up(" ", Modifiers::empty())],
+        );
+    }
+
+    #[test]
+    fn text_without_a_press_has_no_modifiers() {
+        // A soft keyboard sends the character alone; a Shift from an earlier press does not stick.
+        same(
+            commands(&[
+                key(Key::Space, true, egui::Modifiers::SHIFT),
+                Event::Text(" ".into()),
+                Event::Text("b".into()),
+            ]),
+            vec![down(" ", Modifiers::SHIFT), down("b", Modifiers::empty())],
         );
     }
 
