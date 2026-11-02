@@ -717,6 +717,12 @@ public partial class MainWindow : Window
         var alt = (Keyboard.Modifiers & ModifierKeys.Alt) != 0;
         // With Alt held WPF reports Key.System and puts the key in SystemKey.
         var key = e.Key == Key.System ? e.SystemKey : e.Key;
+        // With Alt held only Alt+Left/Right are ours: Alt+F5 is not F5, and Ctrl+Alt is AltGr,
+        // which types (AltGr+L is a letter of its own on a Polish layout).
+        if (alt && key is not (Key.Left or Key.Right))
+        {
+            return;
+        }
 
         switch (key)
         {
