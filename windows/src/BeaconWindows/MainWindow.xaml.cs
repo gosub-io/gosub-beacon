@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -656,11 +657,18 @@ public partial class MainWindow : Window
     /// </summary>
     private void AnswerDownloadOffer(ulong offer, string suggestedName)
     {
+        // Offer the file's own type first, so a name typed without one keeps it.
+        var ext = System.IO.Path.GetExtension(suggestedName);
         var dialog = new Microsoft.Win32.SaveFileDialog
         {
             FileName = suggestedName,
             Title = "Save file",
             OverwritePrompt = true,
+            InitialDirectory = DownloadsFolder(),
+            DefaultExt = ext,
+            Filter = ext.Length > 1
+                ? $"{ext[1..].ToUpperInvariant()} file|*{ext}|All files|*.*"
+                : "All files|*.*",
         };
 
         if (_browser.DownloadOfferUrl(offer) is { Length: > 0 } url)
@@ -686,6 +694,33 @@ public partial class MainWindow : Window
             StatusLine.Text = "Download cancelled";
         }
     }
+
+    /// <summary>
+    /// The user's Downloads folder, wherever it was moved to; the home folder if Windows
+    /// does not say.
+    /// </summary>
+    private static string DownloadsFolder()
+    {
+        var downloads = new Guid("374DE290-123F-4565-9164-39C4925E467B");
+        if (SHGetKnownFolderPath(downloads, 0, IntPtr.Zero, out var path) == 0)
+        {
+            try
+            {
+                return Marshal.PtrToStringUni(path) ?? string.Empty;
+            }
+            finally
+            {
+                Marshal.FreeCoTaskMem(path);
+            }
+        }
+
+        return Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+    }
+
+    [DllImport("shell32.dll")]
+    private static extern int SHGetKnownFolderPath(
+        [MarshalAs(UnmanagedType.LPStruct)] Guid id,
+        uint flags, IntPtr token, out IntPtr path);
 
     private void ShowDownloads()
     {
