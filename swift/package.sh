@@ -210,6 +210,16 @@ if command -v rustup >/dev/null; then
         fi
     done
 fi
+# No paths from this machine in the release binaries: panics and debug info name /src,
+# /cargo and /rustup instead. Encoded rather than RUSTFLAGS, so a path with a space survives.
+remap=(
+    "--remap-path-prefix=$(dirname "$root")=/src"
+    "--remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo"
+    "--remap-path-prefix=${RUSTUP_HOME:-$HOME/.rustup}=/rustup"
+)
+CARGO_ENCODED_RUSTFLAGS="$(IFS=$'\x1f'; echo "${remap[*]}")"
+export CARGO_ENCODED_RUSTFLAGS
+
 dylibs=()
 ctls=()
 for arch in "${archs[@]}"; do
@@ -261,6 +271,9 @@ mkdir -p "$app/Contents/MacOS" "$app/Contents/Frameworks" "$app/Contents/Resourc
 
 cp "$bin/BeaconMac" "$app/Contents/MacOS/BeaconMac"
 cp "$root/target/release/libbeacon.dylib" "$app/Contents/Frameworks/libbeacon.dylib"
+strip "$app/Contents/MacOS/BeaconMac"
+# -x keeps the global symbols: they are the ABI BeaconMac links against.
+strip -x "$app/Contents/Frameworks/libbeacon.dylib"
 # Beside BeaconMac, where each finds the other for the keychain's access list (see the top).
 if $with_beaconctl; then
     lipo -create -output "$app/Contents/MacOS/beaconctl" "${ctls[@]}"
