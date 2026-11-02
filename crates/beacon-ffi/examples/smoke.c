@@ -588,6 +588,16 @@ int main(void) {
     }
     beacon_log_clear(browser);
     CHECK(beacon_log_snapshot(browser, 100) == 0, "clearing empties the log");
+    beacon_log_write(BEACON_LOG_ERROR, "smoke: a line from the shell");
+    size_t shell_lines = beacon_log_snapshot(browser, 100);
+    int shell_found = 0;
+    for (size_t i = 0; i < shell_lines && !shell_found; i++) {
+        char *line = beacon_log_message(browser, i);
+        shell_found = line != NULL && strstr(line, "smoke: a line from the shell") != NULL;
+        beacon_string_free(line);
+    }
+    CHECK(shell_found, "a shell's line reaches the log");
+    beacon_log_write(BEACON_LOG_ERROR, NULL);
 
     /* No download is in flight, so the queries must answer emptily rather than crash. */
     CHECK(beacon_download_count(browser) == 0, "no downloads yet");

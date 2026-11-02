@@ -25,10 +25,12 @@ Working:
 - downloads: save dialog, progress, open when finished
 - the About dialog, sharing the macOS shell's artwork and credits crossfade
 
-This shell binds 129 of the C ABI's 156 functions. Not yet bound: the form-control picker
-(`beacon_picker_*`, so date, time and color inputs open nothing) and the network panel's
+This shell binds 133 of the C ABI's 168 functions. Not yet bound: the form-control picker
+(`beacon_picker_*`, so date, time and color inputs open nothing), the network panel's
 per-request detail (cache, auth, upgrades, request changes, retries, preflights, TLS, and
-the failure fix and spec links).
+the failure fix and spec links), `beacon_question_*`, `beacon_clear_history`,
+`beacon_clear_cookies`, `beacon_certificate_trust`, `beacon_identity_make`,
+`beacon_identity_forget` and `beacon_download_url`.
 
 ### Engine Room
 
@@ -97,8 +99,33 @@ the bytes received.
 
 ## Building
 
-Both halves cross-compile **from Linux**, so the build loop does not need Windows at all -
-only running does.
+### The release zip, on Windows
+
+```powershell
+windows\package.ps1
+```
+
+This is what the `Windows` CI workflow runs, and the zip it uploads is the one to test and
+ship: `target\windows\GosubBeacon-<version>-win-x64.zip`. It builds `beacon.dll` in release,
+publishes the shell self-contained, copies the VC++ runtime DLLs `beacon.dll` imports next to
+it, and zips the lot. Nothing has to be installed to run it: no .NET runtime, no VC++
+redistributable. Not `+crt-static`: skia-binaries publishes no static-CRT build of the
+engine's Skia features, and building Skia from source needs LLVM and a long build.
+
+It needs the Rust toolchain in `scripts/release-toolchain`, the .NET SDK (10.0+), the
+Visual Studio C++ build tools (for the linker and the runtime DLLs), Perl and NASM (vendored
+OpenSSL). The icon is rendered from the lighthouse SVG by `beacon-icon` as
+part of the build, so cargo must be on the PATH for `dotnet build` too.
+
+The zip is not signed. SmartScreen stops the first start with "Windows protected your PC";
+"More info", then "Run anyway". `README-zip.txt` goes into the zip as `README.txt` and says
+so.
+
+### From Linux
+
+**Broken at the moment**: vendored OpenSSL's Configure refuses a Linux perl for MSVC, so
+build on Windows with `package.ps1` (above). Once that is fixed, both halves cross-compile
+from Linux and only running needs Windows:
 
 ```bash
 ./windows/build.sh            # debug
@@ -133,18 +160,21 @@ the Windows feature set to `svg` + `gl`.
 
 ## Running
 
-Copy the output directory to a Windows machine and run `GosubBeacon.exe`. The build is
-framework-dependent, so that machine needs the .NET 10 Desktop Runtime:
+Unzip the release zip and run `GosubBeacon.exe`. A plain `dotnet build` is
+framework-dependent instead, so the machine running it needs the .NET 10 Desktop Runtime:
 
 ```
 windows/src/BeaconWindows/bin/Debug/net10.0-windows/win-x64/
 ```
 
-`beacon.dll` is copied next to the exe by the build and must stay there. The MSVC build
-imports `VCRUNTIME140.dll`, so the target needs the Visual C++ redistributable - or build
-with `-C target-feature=+crt-static` to avoid it.
+`beacon.dll` is copied next to the exe by the build and must stay there: the debug one for a
+Debug build, the release one for Release.
 
 URLs on the command line become the startup tabs.
+
+The engine's log, and the shell's own lines, go to `beacon.log` in the profile folder
+(`%APPDATA%\gosub-beacon\profiles\...`); the previous run's is kept as `beacon.log.1`. A
+WinExe has no console, so stderr goes nowhere.
 
 ## Rendering: the CPU path, on purpose
 
@@ -165,6 +195,8 @@ a runtime backend choice in beacon-ffi first, then `PageView.cs`.
 windows/
   Directory.Build.props        EnableWindowsTargeting and shared settings
   build.sh                     builds beacon.dll and the exe, from Linux
+  package.ps1                  the release zip, on Windows (what CI runs)
+  README-zip.txt               the README.txt that goes into the zip
   src/BeaconWindows/
     Interop/BeaconNative.cs    raw P/Invoke, one-to-one with beacon.h
     Interop/BeaconBrowser.cs   safe wrapper: owns the handle, copies event strings
@@ -178,11 +210,12 @@ windows/
     DownloadsWindow.cs         progress, and open when finished
     AboutWindow.cs             the artwork, and the credits crossfade
     BuildInfo.cs               version and product name ("Gosub Beacon Preview")
+    Log.cs                     the shell's own lines, into beacon.log
     MainWindow.xaml[.cs]       menu bar, toolbar, the event pump, context menus
     App.xaml[.cs]              startup and the "beacon.dll is missing" message
 ```
 
-The C ABI has 156 functions and this shell binds 129 of them; see the list near the top for
+The C ABI has 168 functions and this shell binds 133 of them; see the list near the top for
 what is still missing.
 
 ### Rules from `beacon.h` that this shell must keep

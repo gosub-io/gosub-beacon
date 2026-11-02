@@ -858,6 +858,7 @@ version = "0.1.1-preview.1"
 dependencies = [
  "anyhow",
  "beacon-core",
+ "chrono",
  "gosub_engine",
  "gosub_render_pipeline",
  "gosub_renderer_skia",

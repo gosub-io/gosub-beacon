@@ -19,6 +19,7 @@ gosub_engine.workspace = true
 gosub_render_pipeline.workspace = true
 
 anyhow.workspace = true
+chrono.workspace = true
 log.workspace = true
 tokio.workspace = true
 url.workspace = true

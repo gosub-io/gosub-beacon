@@ -317,6 +317,9 @@ uint32_t beacon_log_level(BeaconBrowser *browser, size_t index);
 uint64_t beacon_log_timestamp(BeaconBrowser *browser, size_t index);
 /* Process-wide: there is one logger, so every window's console clears together. */
 void beacon_log_clear(BeaconBrowser *browser);
+/* Log a line from the shell at a BEACON_LOG_* level, into the engine's log: stderr, beacon.log
+ * in the profile, and this console. Needs no browser. */
+void beacon_log_write(uint32_t level, const char *message);
 
 /* One row of the engine's timing table, in microseconds. */
 typedef struct {

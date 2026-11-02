@@ -1,0 +1,82 @@
+name: Windows
+
+# The Windows shell: beacon.dll and the C#/WPF app, built natively and zipped by
+# windows/package.ps1. Only when something it is built from changes: a cold build is long.
+# A v* tag (path filters do not apply to tags) or a manual run builds it regardless. The zip
+# is uploaded either way, and that zip is the one to test and ship.
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+    paths:
+      - 'windows/**'
+      - 'crates/beacon-ffi/**'
+      - 'crates/beacon-core/**'
+      - 'crates/beacon-profile/**'
+      - 'crates/beacon-icon/**'
+      - 'swift/Sources/BeaconMac/Resources/about*.png'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.cargo/**'
+      - 'scripts/release-toolchain'
+      - '.github/workflows/windows.yaml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'windows/**'
+      - 'crates/beacon-ffi/**'
+      - 'crates/beacon-core/**'
+      - 'crates/beacon-profile/**'
+      - 'crates/beacon-icon/**'
+      - 'swift/Sources/BeaconMac/Resources/about*.png'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.cargo/**'
+      - 'scripts/release-toolchain'
+      - '.github/workflows/windows.yaml'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  # As in ci.yaml: the engine is a sibling checkout, at its `beacon` branch.
+  ENGINE_REPO: gosub-io/gosub-engine
+  ENGINE_REF: beacon
+
+jobs:
+  package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: gosub-beacon
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ env.ENGINE_REPO }}
+          ref: ${{ env.ENGINE_REF }}
+          path: gosub-engine
+      - name: Toolchain
+        id: toolchain
+        shell: bash
+        run: echo "version=$(cat gosub-beacon/scripts/release-toolchain)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.toolchain.outputs.version }}
+          targets: x86_64-pc-windows-msvc
+      # Vendored OpenSSL needs NASM; Strawberry Perl is already on the image.
+      - uses: ilammy/setup-nasm@v1
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: gosub-beacon
+          prefix-key: windows
+      - name: Build and zip
+        working-directory: gosub-beacon
+        shell: pwsh
+        run: windows\package.ps1
+      - uses: actions/upload-artifact@v7
+        with:
+          name: gosub-beacon-windows
+          path: gosub-beacon/target/windows/GosubBeacon-*-win-x64.zip
+          if-no-files-found: error

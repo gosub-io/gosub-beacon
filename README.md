@@ -22,8 +22,8 @@ More in [docs/screenshots](./docs/screenshots/).
   `crates/beacon-ffi`. Signed and notarized DMGs are published at
   [gosub.io/build](https://gosub.io/build).
 - **Windows**: a C#/WPF shell in [windows/](./windows/README.md), over the same C ABI.
-  It renders on the CPU (Skia), not the GPU. Both halves cross-compile from Linux with
-  `windows/build.sh`; running it needs Windows. Not built in CI.
+  It renders on the CPU (Skia), not the GPU. Built and zipped on Windows by
+  `windows/package.ps1`, which CI runs on PRs that touch it.
 - **Android**: the egui frontend as a NativeActivity (`crates/beacon-android`), built into
   a debug-signed arm64 APK by `scripts/android-apk.sh`. Android 10 (API 29) and newer.
   On top of the desktop egui it has downloads (copied into the shared Downloads folder)
@@ -172,10 +172,9 @@ x86_64) `.app` and DMG; that, and everything else about the Mac shell, is in
 
 ## Building on Windows
 
-The Windows shell is built from Linux: `./windows/build.sh` (or `./windows/build.sh
-release`) cross-compiles the Rust C ABI with `cargo-xwin` and the WPF app with the .NET
-SDK. Prerequisites, how to run it and why it renders on the CPU are in
-[windows/README.md](./windows/README.md).
+On Windows, `windows\package.ps1` builds the release zip. The cross-build from Linux
+(`./windows/build.sh`) is broken at the moment. Prerequisites, how to run it and why it
+renders on the CPU are in [windows/README.md](./windows/README.md).
 
 ## Building and running on Android
 
@@ -212,8 +211,9 @@ does not cover; update the version and checksum in the script then.
 `cargo fmt` and clippy's fixes. CI runs the same on Ubuntu, builds and tests the isolation
 build under Xvfb (`scripts/isolation-smoke.sh`; see [docs/isolation.md](docs/isolation.md)),
 and on `macos-14` builds the egui frontend, the C ABI with a headless C consumer, and the
-Swift app. The Windows and Android builds are not in CI; build them by hand when you
-touch the C ABI or `beacon-egui`.
+Swift app. A separate workflow builds the Windows zip on `windows-latest` when a PR
+touches the Windows shell or the crates it is built from. The Android build is not in CI;
+build it by hand when you touch `beacon-egui`.
 
 ## Running in a container
 

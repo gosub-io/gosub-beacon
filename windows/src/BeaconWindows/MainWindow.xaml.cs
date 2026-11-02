@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -21,9 +22,19 @@ public partial class MainWindow : Window
     private SettingsWindow? _settingsWindow;
     private DownloadsWindow? _downloadsWindow;
 
+    /// <summary>The download the status line says is running, until it ends.</summary>
+    private (ulong Id, string Name) _statusDownload;
+
     internal MainWindow(BeaconBrowser browser, string[] startupUrls)
     {
         InitializeComponent();
+
+        // 1240x820 does not fit a small or highly scaled screen, and a window larger than the
+        // work area opens, and restores, with its edges off screen.
+        var area = SystemParameters.WorkArea;
+        Width = Math.Min(Width, area.Width);
+        Height = Math.Min(Height, area.Height);
+        WindowStartupLocation = WindowStartupLocation.CenterScreen;
 
         _browser = browser;
         _page.Attach(_browser);
@@ -257,8 +268,10 @@ public partial class MainWindow : Window
                     UpdateNavButtons();
                     break;
 
-                case BeaconNative.EventKind.Progress when ev.Tab == _page.Tab:
-                    StatusLine.Text = ev.Number < 0 ? "Loading..." : $"Loading... {ev.Number * 100:0}%";
+                // -1 clears the indicator; it follows a stop or a download offer, after the
+                // LoadingChanged that already said "Done".
+                case BeaconNative.EventKind.Progress when ev.Tab == _page.Tab && ev.Number >= 0:
+                    StatusLine.Text = $"Loading... {ev.Number * 100:0}%";
                     break;
 
                 case BeaconNative.EventKind.NavStateChanged:
@@ -322,6 +335,11 @@ public partial class MainWindow : Window
 
                 case BeaconNative.EventKind.DownloadChanged:
                     _downloadsWindow?.Reload();
+                    if (_statusDownload.Id != 0 && (ulong)ev.Number == _statusDownload.Id)
+                    {
+                        ShowDownloadEnd();
+                    }
+
                     break;
 
                 case BeaconNative.EventKind.Log:
@@ -499,7 +517,7 @@ public partial class MainWindow : Window
         for (var i = 0; i < entries.Count; i++)
         {
             var index = i;
-            menu.Items.Add(MenuItemFor(entries[i], () => _browser.ForwardGo(index)));
+            menu.Items.Add(PageMenuItem(entries[i], () => _browser.ForwardGo(index)));
         }
 
         menu.PlacementTarget = ForwardButton;
@@ -512,6 +530,13 @@ public partial class MainWindow : Window
         item.Click += (_, _) => action();
         return item;
     }
+
+    /// <summary>
+    /// A menu item showing a page's title or URL. A string header is read for an access key,
+    /// so its first `_` would vanish (GOS-233); doubled, it shows as one.
+    /// </summary>
+    private static MenuItem PageMenuItem(string text, Action action) =>
+        MenuItemFor(text.Replace("_", "__"), action);
 
     // ── menu bar ───────────────────────────────────────────────────────────────
 
@@ -613,7 +638,7 @@ public partial class MainWindow : Window
             foreach (var bookmark in saved.Take(30))
             {
                 var label = string.IsNullOrWhiteSpace(bookmark.Title) ? bookmark.Url : bookmark.Title;
-                menu.Items.Add(MenuItemFor(label, () => Navigate(bookmark.Url)));
+                menu.Items.Add(PageMenuItem(label, () => Navigate(bookmark.Url)));
             }
         }
     }
@@ -663,11 +688,18 @@ public partial class MainWindow : Window
     /// </summary>
     private void AnswerDownloadOffer(ulong offer, string suggestedName)
     {
+        // Offer the file's own type first, so a name typed without one keeps it.
+        var ext = System.IO.Path.GetExtension(suggestedName);
         var dialog = new Microsoft.Win32.SaveFileDialog
         {
             FileName = suggestedName,
             Title = "Save file",
             OverwritePrompt = true,
+            InitialDirectory = DownloadsFolder(),
+            DefaultExt = ext,
+            Filter = ext.Length > 1
+                ? $"{ext[1..].ToUpperInvariant()} file|*{ext}|All files|*.*"
+                : "All files|*.*",
         };
 
         if (_browser.DownloadOfferUrl(offer) is { Length: > 0 } url)
@@ -684,7 +716,9 @@ public partial class MainWindow : Window
                 return;
             }
 
-            StatusLine.Text = $"Downloading {System.IO.Path.GetFileName(dialog.FileName)}...";
+            var name = System.IO.Path.GetFileName(dialog.FileName);
+            _statusDownload = (id, name);
+            StatusLine.Text = $"Downloading {name}...";
             ShowDownloads();
         }
         else
@@ -693,6 +727,51 @@ public partial class MainWindow : Window
             StatusLine.Text = "Download cancelled";
         }
     }
+
+    /// <summary>Say how the download the status line announced ended, once it has.</summary>
+    private void ShowDownloadEnd()
+    {
+        var (id, name) = _statusDownload;
+        var ended = _browser.DownloadState(id) switch
+        {
+            BeaconNative.DownloadState.Finished => $"Downloaded {name}",
+            BeaconNative.DownloadState.Failed => $"Download of {name} failed",
+            BeaconNative.DownloadState.Cancelled => $"Download of {name} cancelled",
+            _ => null,
+        };
+        if (ended is not null)
+        {
+            StatusLine.Text = ended;
+            _statusDownload = default;
+        }
+    }
+
+    /// <summary>
+    /// The user's Downloads folder, wherever it was moved to; the home folder if Windows
+    /// does not say.
+    /// </summary>
+    private static string DownloadsFolder()
+    {
+        var downloads = new Guid("374DE290-123F-4565-9164-39C4925E467B");
+        if (SHGetKnownFolderPath(downloads, 0, IntPtr.Zero, out var path) == 0)
+        {
+            try
+            {
+                return Marshal.PtrToStringUni(path) ?? string.Empty;
+            }
+            finally
+            {
+                Marshal.FreeCoTaskMem(path);
+            }
+        }
+
+        return Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+    }
+
+    [DllImport("shell32.dll")]
+    private static extern int SHGetKnownFolderPath(
+        [MarshalAs(UnmanagedType.LPStruct)] Guid id,
+        uint flags, IntPtr token, out IntPtr path);
 
     private void ShowDownloads()
     {

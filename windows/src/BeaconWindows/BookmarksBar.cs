@@ -115,7 +115,7 @@ internal static class ClipboardSafe
         }
         catch (Exception e)
         {
-            Console.Error.WriteLine($"[beacon] clipboard unavailable: {e.Message}");
+            Log.Warn($"clipboard unavailable: {e.Message}");
         }
     }
 

@@ -10,13 +10,26 @@
          then disagree with the other two shells. -->
     <Version>0.1.1-preview.1</Version>
     <AssemblyName>GosubBeacon</AssemblyName>
-    <ApplicationIcon></ApplicationIcon>
+    <Company>Gosub</Company>
+    <Product>Gosub Beacon</Product>
+    <Product Condition="$(Version.Contains('-preview'))">Gosub Beacon Preview</Product>
+    <Copyright>(c) 2024-2026 Gosub contributors</Copyright>
+
+    <!-- Rendered from the lighthouse SVG by beacon-icon before the build; see BeaconIcon. -->
+    <ApplicationIcon>$(MSBuildThisFileDirectory)../../../target/windows/beacon.ico</ApplicationIcon>
 
     <!-- The engine is x64 only (the skia prebuilts and the Rust target), so pin it here
          rather than let AnyCPU produce an exe that cannot load beacon.dll. -->
     <PlatformTarget>x64</PlatformTarget>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <!-- A build needs the .NET 10 Desktop Runtime; the release zip is published with
+         self-contained=true and does not (windows/package.ps1). -->
     <SelfContained>false</SelfContained>
+
+    <!-- The cargo profile beacon.dll is taken from. -->
+    <BeaconProfile>debug</BeaconProfile>
+    <BeaconProfile Condition="'$(Configuration)' == 'Release'">release</BeaconProfile>
+    <BeaconDll>$(MSBuildThisFileDirectory)../../../target/x86_64-pc-windows-msvc/$(BeaconProfile)/beacon.dll</BeaconDll>
   </PropertyGroup>
 
   <!-- The About artwork, shared with the macOS shell rather than copied, so the two cannot
@@ -29,16 +42,21 @@
               Link="Resources/about-credits.png" />
   </ItemGroup>
 
-  <!-- beacon.dll is built by cargo, not MSBuild. Copy whichever profile exists, newest last
-       so a release build wins over a stale debug one. A missing DLL is not a build error: the
-       managed half compiles without it and App.xaml.cs reports it at startup. -->
+  <!-- beacon.dll is built by cargo, not MSBuild: the debug one for Debug, the release one for
+       Release. A missing DLL is not a build error: the managed half compiles without it and
+       App.xaml.cs reports it at startup. -->
   <ItemGroup>
-    <None Include="$(MSBuildThisFileDirectory)../../../target/x86_64-pc-windows-msvc/debug/beacon.dll"
-          Condition="Exists('$(MSBuildThisFileDirectory)../../../target/x86_64-pc-windows-msvc/debug/beacon.dll')"
-          Link="beacon.dll" CopyToOutputDirectory="PreserveNewest" />
-    <None Include="$(MSBuildThisFileDirectory)../../../target/x86_64-pc-windows-msvc/release/beacon.dll"
-          Condition="Exists('$(MSBuildThisFileDirectory)../../../target/x86_64-pc-windows-msvc/release/beacon.dll')"
+    <None Include="$(BeaconDll)" Condition="Exists('$(BeaconDll)')"
           Link="beacon.dll" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
+
+  <!-- The lighthouse exists only as an SVG; the .ico is rendered from it, once. -->
+  <Target Name="BeaconIcon" BeforeTargets="BeforeBuild"
+          Inputs="$(MSBuildThisFileDirectory)../../../crates/beacon-core/resources/lighthouse.svg"
+          Outputs="$(ApplicationIcon)">
+    <MakeDir Directories="$([System.IO.Path]::GetDirectoryName('$(ApplicationIcon)'))" />
+    <Exec Command="cargo run -q --release -p beacon-icon -- 256 &quot;$(ApplicationIcon)&quot;"
+          WorkingDirectory="$(MSBuildThisFileDirectory)../../.." />
+  </Target>
 
 </Project>

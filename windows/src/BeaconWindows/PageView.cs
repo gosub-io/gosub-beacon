@@ -44,16 +44,20 @@ internal sealed class PageView : FrameworkElement
                 // from it would act on the new one.
                 _tab = value;
                 _pendingHitToken = 0;
+
+                // Nor may the old page stay up: a new tab (view source) has no frame yet.
+                _bitmap = null;
+                InvalidateVisual();
             }
         }
     }
 
+    /// <summary>DIPs per frame pixel: zoom over the frame's DPR.</summary>
+    private double _frameScale = 1;
+
     public PageView()
     {
         Focusable = true;
-
-        // The engine rasterizes at device resolution; smoothing here would blur it.
-        RenderOptions.SetBitmapScalingMode(this, BitmapScalingMode.NearestNeighbor);
         RenderOptions.SetEdgeMode(this, EdgeMode.Aliased);
     }
 
@@ -83,7 +87,7 @@ internal sealed class PageView : FrameworkElement
 
         _sentViewport = (Tab, width, height, scale);
         _browser.SetViewport(Tab, width, height, scale);
-        Console.Error.WriteLine($"[beacon] viewport tab={Tab} {width}x{height} @{scale}");
+        Log.Debug($"viewport tab={Tab} {width}x{height} @{scale}");
     }
 
     /// <summary>Pull the latest frame and paint it. Cheap to call on every BEACON_REDRAW.</summary>
@@ -108,18 +112,25 @@ internal sealed class PageView : FrameworkElement
             // The engine may return a different size than requested: a resize in flight, or
             // a frame rendered before the last viewport change landed. Follow the frame, its
             // DPR included: the same pixels at another DPR lay out at another logical size.
-            // A bitmap declared at 96*dpr DPI lays out at the right logical size.
-            var dpi = 96.0 * Math.Max(1u, frame.Dpr);
-            if (_bitmap is null || _bitmap.PixelWidth != frame.Width || _bitmap.PixelHeight != frame.Height
-                || _bitmap.DpiX != dpi)
+            if (_bitmap is null || _bitmap.PixelWidth != frame.Width || _bitmap.PixelHeight != frame.Height)
             {
-                _bitmap = new WriteableBitmap((int)frame.Width, (int)frame.Height, dpi, dpi,
+                _bitmap = new WriteableBitmap((int)frame.Width, (int)frame.Height, 96, 96,
                     PixelFormats.Pbgra32, palette: null);
-                Console.Error.WriteLine($"[beacon] first frame {frame.Width}x{frame.Height} dpr={frame.Dpr} stride={frame.Stride}");
+                Log.Debug($"first frame {frame.Width}x{frame.Height} dpr={frame.Dpr} stride={frame.Stride}");
             }
 
             var rect = new Int32Rect(0, 0, (int)frame.Width, (int)frame.Height);
             _bitmap.WritePixels(rect, frame.Pixels, (int)(frame.Stride * frame.Height), (int)frame.Stride);
+
+            // A zoomed page is laid out smaller and rasterized at ceil(scale * zoom), so the
+            // frame is drawn zoom / dpr DIPs a pixel, not 1 / dpr. Only where its pixels land
+            // 1:1 on the screen's is nearest-neighbour right; at 125% or a zoom they would
+            // alias, so those get filtered.
+            _frameScale = _browser.Zoom(Tab) / Math.Max(1u, frame.Dpr);
+            var onScreen = _frameScale * VisualTreeHelper.GetDpi(this).DpiScaleX;
+            RenderOptions.SetBitmapScalingMode(this, Math.Abs(onScreen - 1) < 0.001
+                ? BitmapScalingMode.NearestNeighbor
+                : BitmapScalingMode.HighQuality);
         });
 
         if (got)
@@ -137,9 +148,7 @@ internal sealed class PageView : FrameworkElement
 
         if (_bitmap is not null)
         {
-            // Width/Height are in DIPs and account for the bitmap's DPI, so device pixels
-            // land 1:1.
-            dc.DrawImage(_bitmap, new Rect(0, 0, _bitmap.Width, _bitmap.Height));
+            dc.DrawImage(_bitmap, new Rect(0, 0, _bitmap.PixelWidth * _frameScale, _bitmap.PixelHeight * _frameScale));
         }
     }
 
@@ -149,18 +158,33 @@ internal sealed class PageView : FrameworkElement
         SyncViewport();
     }
 
+    // Moved to a monitor at another scale: the engine rasterizes at the new DPR.
+    protected override void OnDpiChanged(DpiScale oldDpi, DpiScale newDpi)
+    {
+        base.OnDpiChanged(oldDpi, newDpi);
+        Refresh();
+    }
+
     // ── input ──────────────────────────────────────────────────────────────────
     //
     // Positions go to the engine in CSS pixels, and WPF's input coordinates already are
-    // CSS pixels, so no DPI conversion here, unlike the viewport above.
+    // CSS pixels, so no DPI conversion here, unlike the viewport above. A zoomed page is
+    // laid out smaller, so they are divided by the zoom, as on the Mac.
+
+    private (float X, float Y) PagePoint(MouseEventArgs e)
+    {
+        var p = e.GetPosition(this);
+        var zoom = _browser!.Zoom(Tab);
+        return ((float)(p.X / zoom), (float)(p.Y / zoom));
+    }
 
     protected override void OnMouseMove(MouseEventArgs e)
     {
         base.OnMouseMove(e);
         if (_browser is not null && Tab != 0)
         {
-            var p = e.GetPosition(this);
-            _browser.MouseMove(Tab, (float)p.X, (float)p.Y);
+            var (x, y) = PagePoint(e);
+            _browser.MouseMove(Tab, x, y);
         }
     }
 
@@ -175,8 +199,8 @@ internal sealed class PageView : FrameworkElement
         Focus();
         if (Map(e.ChangedButton) is { } button)
         {
-            var p = e.GetPosition(this);
-            _browser.MouseDown(Tab, (float)p.X, (float)p.Y, button);
+            var (x, y) = PagePoint(e);
+            _browser.MouseDown(Tab, x, y, button);
         }
     }
 
@@ -185,8 +209,8 @@ internal sealed class PageView : FrameworkElement
         base.OnMouseUp(e);
         if (_browser is not null && Tab != 0 && Map(e.ChangedButton) is { } button)
         {
-            var p = e.GetPosition(this);
-            _browser.MouseUp(Tab, (float)p.X, (float)p.Y, button);
+            var (x, y) = PagePoint(e);
+            _browser.MouseUp(Tab, x, y, button);
         }
     }
 
@@ -226,7 +250,8 @@ internal sealed class PageView : FrameworkElement
         // The engine answers from the layout tree on its own thread, so the menu cannot be
         // built here. Remember where we asked and wait for the event.
         _pendingHitAt = e.GetPosition(this);
-        _pendingHitToken = _browser.HitTest(Tab, _pendingHitAt.X, _pendingHitAt.Y);
+        var (x, y) = PagePoint(e);
+        _pendingHitToken = _browser.HitTest(Tab, x, y);
         e.Handled = true;
     }
 
@@ -242,7 +267,7 @@ internal sealed class PageView : FrameworkElement
         // about 20px a line matches the other shells. A precision touchpad reports finer
         // steps than a notch; those are applied as they come, notches are animated.
         bool precise = e.Delta % 120 != 0;
-        _browser.Scroll(Tab, 0, -(e.Delta / 120f) * 60f, precise);
+        _browser.Scroll(Tab, 0, -(e.Delta / 120f) * 60f / _browser.Zoom(Tab), precise);
         e.Handled = true;
     }
 
