@@ -5,8 +5,9 @@ import AppKit
 
 // No address on the command line means "carry on where the last session left off" — the
 // tabs Beacon saved as it ran. Only when there is nothing saved does a fresh window open on
-// the homepage.
-let startURL = CommandLine.arguments.dropFirst().first
+// the homepage. Arguments starting with "-" are the system's (an old Finder's -psn_), not
+// addresses.
+let startURL = CommandLine.arguments.dropFirst().first { !$0.hasPrefix("-") }
 
 let app = NSApplication.shared
 // .regular so it gets a Dock icon and a menu bar and can take focus, which an accessory
