@@ -125,7 +125,8 @@ pub fn page_field(tapped: bool) {
 /// the same frame, and handled field by field the keyboard would end up following
 /// whichever was drawn last.
 fn sync_keyboard(ctx: &egui::Context) {
-    let wanted = ctx.text_edit_focused() || PAGE_FIELD.swap(false, Ordering::Relaxed);
+    let page_field = PAGE_FIELD.swap(false, Ordering::Relaxed);
+    let wanted = ctx.text_edit_focused() || page_field;
     let tapped = FIELD_TAPPED.swap(false, Ordering::Relaxed);
     let up = KEYBOARD_UP.swap(wanted, Ordering::Relaxed);
     if wanted && (!up || tapped) {
