@@ -76,6 +76,10 @@ fn init_logging() {
         fn log(&self, record: &log::Record) {
             if self.enabled(record.metadata()) {
                 let _ = writeln!(std::io::stderr(), "beacon [{}] {}", record.level(), record.args());
+                if let Some(file) = LOG_FILE.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+                    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
+                    let _ = writeln!(file, "{now} [{}] {}", record.level(), record.args());
+                }
             }
         }
         fn flush(&self) {
@@ -88,6 +92,22 @@ fn init_logging() {
         let level = devtools::level_from_env();
         devtools::install_logger(Box::new(Stderr(level)), level);
     });
+}
+
+/// The log as a file, `beacon.log` in the profile, once a browser has one. A shell that is a
+/// GUI app (a WinExe, a .app) has a stderr nobody sees. The previous run's is kept as
+/// `beacon.log.1`, for the run that went wrong.
+static LOG_FILE: Mutex<Option<std::fs::File>> = Mutex::new(None);
+
+fn open_log_file() {
+    let mut file = LOG_FILE.lock().unwrap_or_else(|e| e.into_inner());
+    if file.is_some() {
+        return;
+    }
+    let dir = beacon_core::paths::profile_dir();
+    let path = dir.join("beacon.log");
+    let _ = std::fs::rename(&path, dir.join("beacon.log.1"));
+    *file = std::fs::File::create(&path).ok();
 }
 
 fn runtime() -> &'static Runtime {
@@ -797,6 +817,8 @@ unsafe fn new_browser(config: *const BeaconConfig) -> anyhow::Result<Box<BeaconB
     };
 
     let mut engine = BrowserEngine::<FfiConfig>::new(runtime(), private, backend)?;
+    // The engine has the profile locked now, so its folder is known and ours.
+    open_log_file();
     let events = engine
         .take_event_rx()
         .ok_or_else(|| anyhow::anyhow!("engine event stream already taken"))?;
@@ -1729,6 +1751,25 @@ pub unsafe extern "C" fn beacon_log_clear(browser: *mut BeaconBrowser) {
 pub unsafe extern "C" fn beacon_log_timestamp(browser: *mut BeaconBrowser, index: usize) -> u64 {
     let b = browser!(browser, 0);
     b.logs.get(index).map(|line| line.timestamp_ms).unwrap_or(0)
+}
+
+/// Log `message` from the shell itself, at one of the `BEACON_LOG_*` levels, into the same
+/// log as the engine: stderr, `beacon.log` in the profile, and the developer panel.
+///
+/// # Safety
+/// `message` must be NULL or a NUL-terminated string.
+#[no_mangle]
+pub unsafe extern "C" fn beacon_log_write(level: u32, message: *const c_char) {
+    let Some(message) = to_str(message) else { return };
+    let level = match level {
+        BEACON_LOG_ERROR => log::Level::Error,
+        BEACON_LOG_WARN => log::Level::Warn,
+        BEACON_LOG_INFO => log::Level::Info,
+        BEACON_LOG_DEBUG => log::Level::Debug,
+        _ => log::Level::Trace,
+    };
+    init_logging();
+    log::log!(target: "shell", level, "{message}");
 }
 
 /// One row of the engine's timing table, in microseconds.

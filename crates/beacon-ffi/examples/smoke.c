@@ -588,6 +588,9 @@ int main(void) {
     }
     beacon_log_clear(browser);
     CHECK(beacon_log_snapshot(browser, 100) == 0, "clearing empties the log");
+    beacon_log_write(BEACON_LOG_ERROR, "smoke: a line from the shell");
+    CHECK(beacon_log_snapshot(browser, 100) >= 1, "a shell's line reaches the log");
+    beacon_log_write(BEACON_LOG_ERROR, NULL);
 
     /* No download is in flight, so the queries must answer emptily rather than crash. */
     CHECK(beacon_download_count(browser) == 0, "no downloads yet");

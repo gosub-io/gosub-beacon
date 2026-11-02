@@ -211,7 +211,7 @@ internal sealed class AboutWindow : Window
             }
             catch (Exception ex)
             {
-                Console.Error.WriteLine($"[beacon] could not open {e.Uri}: {ex.Message}");
+                Log.Warn($"could not open {e.Uri}: {ex.Message}");
             }
 
             e.Handled = true;
@@ -282,7 +282,7 @@ internal sealed class AboutWindow : Window
         }
         catch (Exception e)
         {
-            Console.Error.WriteLine($"[beacon] About artwork '{name}' is not packed: {e.Message}");
+            Log.Warn($"About artwork '{name}' is not packed: {e.Message}");
             return null;
         }
     }

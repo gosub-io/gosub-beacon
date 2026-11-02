@@ -409,6 +409,9 @@ internal static partial class BeaconNative
     [DllImport(Lib, EntryPoint = "beacon_log_clear")]
     public static extern void LogClear(IntPtr browser);
 
+    [DllImport(Lib, EntryPoint = "beacon_log_write")]
+    public static extern void LogWrite(LogLevel level, [MarshalAs(UnmanagedType.LPUTF8Str)] string message);
+
     // ── developer panel: timing ────────────────────────────────────────────────
 
     /// <summary>One row of the engine's timing table, in microseconds.</summary>

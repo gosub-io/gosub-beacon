@@ -146,6 +146,10 @@ with `-C target-feature=+crt-static` to avoid it.
 
 URLs on the command line become the startup tabs.
 
+The engine's log, and the shell's own lines, go to `beacon.log` in the profile folder
+(`%APPDATA%\gosub-beacon\profiles\...`); the previous run's is kept as `beacon.log.1`. A
+WinExe has no console, so stderr goes nowhere.
+
 ## Rendering: the CPU path, on purpose
 
 The page is drawn with `beacon_acquire_frame`, which hands over finished BGRA pixels that
@@ -178,6 +182,7 @@ windows/
     DownloadsWindow.cs         progress, and open when finished
     AboutWindow.cs             the artwork, and the credits crossfade
     BuildInfo.cs               version and product name ("Gosub Beacon Preview")
+    Log.cs                     the shell's own lines, into beacon.log
     MainWindow.xaml[.cs]       menu bar, toolbar, the event pump, context menus
     App.xaml[.cs]              startup and the "beacon.dll is missing" message
 ```

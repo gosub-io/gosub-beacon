@@ -83,7 +83,7 @@ internal sealed class PageView : FrameworkElement
 
         _sentViewport = (Tab, width, height, scale);
         _browser.SetViewport(Tab, width, height, scale);
-        Console.Error.WriteLine($"[beacon] viewport tab={Tab} {width}x{height} @{scale}");
+        Log.Debug($"viewport tab={Tab} {width}x{height} @{scale}");
     }
 
     /// <summary>Pull the latest frame and paint it. Cheap to call on every BEACON_REDRAW.</summary>
@@ -115,7 +115,7 @@ internal sealed class PageView : FrameworkElement
             {
                 _bitmap = new WriteableBitmap((int)frame.Width, (int)frame.Height, dpi, dpi,
                     PixelFormats.Pbgra32, palette: null);
-                Console.Error.WriteLine($"[beacon] first frame {frame.Width}x{frame.Height} dpr={frame.Dpr} stride={frame.Stride}");
+                Log.Debug($"first frame {frame.Width}x{frame.Height} dpr={frame.Dpr} stride={frame.Stride}");
             }
 
             var rect = new Int32Rect(0, 0, (int)frame.Width, (int)frame.Height);
