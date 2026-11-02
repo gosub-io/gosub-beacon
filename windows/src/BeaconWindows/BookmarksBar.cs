@@ -97,8 +97,8 @@ internal sealed class BookmarksBar : UserControl
 }
 
 /// <summary>
-/// Clipboard.SetText throws when another process holds the clipboard open. A failed copy
-/// should not take the browser down with it.
+/// The clipboard calls throw when another process holds the clipboard open. A failed copy
+/// or paste should not take the browser down with it.
 /// </summary>
 internal static class ClipboardSafe
 {
@@ -116,6 +116,21 @@ internal static class ClipboardSafe
         catch (Exception e)
         {
             Console.Error.WriteLine($"[beacon] clipboard unavailable: {e.Message}");
+        }
+    }
+
+    /// <summary>The clipboard's text, or null when it holds none or another process has it
+    /// open.</summary>
+    public static string? GetText()
+    {
+        try
+        {
+            return Clipboard.ContainsText() ? Clipboard.GetText() : null;
+        }
+        catch (Exception e)
+        {
+            Console.Error.WriteLine($"[beacon] clipboard unavailable: {e.Message}");
+            return null;
         }
     }
 }

@@ -185,14 +185,19 @@ pub struct BeaconBrowser {
 /// Something waiting to be handed to the shell as a `BeaconCEvent`.
 ///
 /// Almost all of it is `beacon_core`'s own [`BeaconEvent`], which is the vocabulary every
-/// frontend shares. The exception is the hit-test answer: it is a reply to a question only
-/// this ABI asks (GTK asks the engine directly, having the engine's types to hand), so it
-/// is carried here rather than pushed into the shared enum, where it would be a variant
-/// the other frontends must match on and never emit.
+/// frontend shares. The exceptions go from the engine straight to the shell: the hit-test
+/// answer, a reply to a question only this ABI asks (GTK asks the engine directly, having
+/// the engine's types to hand), and the clipboard traffic of a text field, which only the
+/// shell can carry out. They are carried here rather than pushed into the shared enum,
+/// where they would be variants the other frontends must match on and never emit.
 enum Outgoing {
     Core(BeaconEvent),
     /// The engine answered hit test `token`; the answer is in `hit`.
     HitTest(TabId, u64),
+    /// A field copied or cut this text; it belongs on the system clipboard.
+    ClipboardWrite(TabId, String),
+    /// A field wants the clipboard's text, to come back as `beacon_text_input`.
+    PasteRequested(TabId),
 }
 
 /// The page area as the shell described it, in the shell's own terms: logical (CSS-ish)
@@ -276,6 +281,8 @@ pub enum BeaconEventKind {
     CertificateChanged = 18,
     IdentityAsked = 19,
     IdentityRefused = 20,
+    ClipboardWrite = 21,
+    PasteRequested = 22,
 }
 
 /// A rectangle in the page, in unzoomed CSS px of the viewport.
@@ -442,6 +449,16 @@ impl BeaconBrowser {
                     let Some(tab_id) = self.hit_tabs.remove(&token.0) else { continue };
                     self.hit = Some(hit);
                     self.pending.push(Outgoing::HitTest(tab_id, token.0));
+                }
+                Ok(EngineEvent::ClipboardWrite { tab_id, text }) => {
+                    if let Some(tab_id) = self.beacon.tab_for_engine(tab_id) {
+                        self.pending.push(Outgoing::ClipboardWrite(tab_id, text));
+                    }
+                }
+                Ok(EngineEvent::PasteRequested { tab_id }) => {
+                    if let Some(tab_id) = self.beacon.tab_for_engine(tab_id) {
+                        self.pending.push(Outgoing::PasteRequested(tab_id));
+                    }
                 }
                 Ok(event) => {
                     let out = self.beacon.on_engine_event(event);
@@ -2132,144 +2149,133 @@ pub unsafe extern "C" fn beacon_poll_events(browser: *mut BeaconBrowser, out: *m
     let batch: Vec<Outgoing> = b.pending.drain(..taking).collect();
 
     for (i, outgoing) in batch.into_iter().enumerate() {
-        let event = match outgoing {
-            Outgoing::Core(event) => event,
+        let (kind, tab_id, text, number) = match outgoing {
             // Not a `BeaconEvent`: the answer to a question only this ABI asks. The token
             // goes back so a shell with two menus in flight knows which one this answers.
-            Outgoing::HitTest(tab_id, token) => {
-                let tab = b.handle_for(tab_id);
-                unsafe {
-                    std::ptr::write(
-                        out.add(i),
-                        BeaconCEvent {
-                            kind: BeaconEventKind::HitTest,
-                            tab,
-                            text: std::ptr::null(),
-                            number: token as f64,
+            Outgoing::HitTest(tab_id, token) => (BeaconEventKind::HitTest, Some(tab_id), None, token as f64),
+            Outgoing::ClipboardWrite(tab_id, text) => (BeaconEventKind::ClipboardWrite, Some(tab_id), Some(text), 0.0),
+            Outgoing::PasteRequested(tab_id) => (BeaconEventKind::PasteRequested, Some(tab_id), None, 0.0),
+            Outgoing::Core(event) => match event {
+                BeaconEvent::Redraw => (BeaconEventKind::Redraw, None, None, 0.0),
+                BeaconEvent::TabsChanged => (BeaconEventKind::TabsChanged, None, None, 0.0),
+                BeaconEvent::ActiveTabChanged(t) => (BeaconEventKind::ActiveTabChanged, Some(t), None, 0.0),
+                BeaconEvent::TitleChanged(t, title) => (BeaconEventKind::TitleChanged, Some(t), Some(title), 0.0),
+                BeaconEvent::UrlChanged(t, url) => (BeaconEventKind::UrlChanged, Some(t), Some(url.to_string()), 0.0),
+                BeaconEvent::LoadingChanged(t, loading) => {
+                    (BeaconEventKind::LoadingChanged, Some(t), None, if loading { 1.0 } else { 0.0 })
+                }
+                BeaconEvent::LoadProgress(t, fraction) => (BeaconEventKind::Progress, Some(t), None, fraction.unwrap_or(-1.0)),
+                BeaconEvent::FaviconChanged(t) => (BeaconEventKind::FaviconChanged, Some(t), None, 0.0),
+                BeaconEvent::NavStateChanged(t) => (BeaconEventKind::NavStateChanged, Some(t), None, 0.0),
+                // The tab already has the error page in it (see `queue`); this says what
+                // happened, for a shell that wants to put it in a status line or its own log.
+                BeaconEvent::NavigationFailed(t, url, error) => {
+                    (BeaconEventKind::NavigationFailed, Some(t), Some(format!("{url}: {error}")), 0.0)
+                }
+                BeaconEvent::TabCrashed(t, error) => (BeaconEventKind::TabCrashed, Some(t), Some(error), 0.0),
+                // Parked with an id, as a download offer is: the shell answers when the user
+                // does, and the answer acts on what was asked, not on anything it passes back.
+                BeaconEvent::CertificateChanged(t, url, fingerprint) => {
+                    let question = b.ask(t, url, Some(fingerprint), false);
+                    (
+                        BeaconEventKind::CertificateChanged,
+                        Some(t),
+                        Some(beacon_core::devtools::format_fingerprint(&fingerprint)),
+                        question as f64,
+                    )
+                }
+                BeaconEvent::IdentityAsked {
+                    tab_id,
+                    url,
+                    message,
+                    presented,
+                    ..
+                } => {
+                    let question = b.ask(tab_id, url, None, presented);
+                    let kind = if presented {
+                        BeaconEventKind::IdentityRefused
+                    } else {
+                        BeaconEventKind::IdentityAsked
+                    };
+                    (kind, Some(tab_id), Some(message), question as f64)
+                }
+                BeaconEvent::HoverUrl(t, url) => (BeaconEventKind::HoverUrl, Some(t), url, 0.0),
+                BeaconEvent::CursorChanged(t, cursor) => (
+                    BeaconEventKind::CursorChanged,
+                    Some(t),
+                    None,
+                    match cursor {
+                        Cursor::Default => 0.0,
+                        Cursor::Pointer => 1.0,
+                        Cursor::Text => 2.0,
+                        // Additive: the Swift side falls through to the arrow for a code it does
+                        // not know, so it keeps working until it grows a case for this one.
+                        Cursor::Resize => 3.0,
+                    },
+                ),
+                // An offer is parked here with an id rather than pushed at the shell whole: the
+                // shell answers asynchronously (a save panel is modal and takes as long as the
+                // user does), and by then a second offer may have arrived. The id is what keeps
+                // an answer attached to the offer it answers.
+                BeaconEvent::DownloadOffered {
+                    tab_id,
+                    offer: engine_offer,
+                    url,
+                    suggested_filename,
+                    ..
+                } => {
+                    let offer = b.next_offer;
+                    b.next_offer += 1;
+                    b.offers.insert(
+                        offer,
+                        PendingOffer {
+                            tab_id,
+                            offer: engine_offer,
+                            url,
+                            suggested_filename: suggested_filename.clone(),
                         },
                     );
+                    (
+                        BeaconEventKind::DownloadOffered,
+                        Some(tab_id),
+                        Some(suggested_filename),
+                        offer as f64,
+                    )
                 }
-                continue;
-            }
-        };
-        let (kind, tab_id, text, number) = match event {
-            BeaconEvent::Redraw => (BeaconEventKind::Redraw, None, None, 0.0),
-            BeaconEvent::TabsChanged => (BeaconEventKind::TabsChanged, None, None, 0.0),
-            BeaconEvent::ActiveTabChanged(t) => (BeaconEventKind::ActiveTabChanged, Some(t), None, 0.0),
-            BeaconEvent::TitleChanged(t, title) => (BeaconEventKind::TitleChanged, Some(t), Some(title), 0.0),
-            BeaconEvent::UrlChanged(t, url) => (BeaconEventKind::UrlChanged, Some(t), Some(url.to_string()), 0.0),
-            BeaconEvent::LoadingChanged(t, loading) => (BeaconEventKind::LoadingChanged, Some(t), None, if loading { 1.0 } else { 0.0 }),
-            BeaconEvent::LoadProgress(t, fraction) => (BeaconEventKind::Progress, Some(t), None, fraction.unwrap_or(-1.0)),
-            BeaconEvent::FaviconChanged(t) => (BeaconEventKind::FaviconChanged, Some(t), None, 0.0),
-            BeaconEvent::NavStateChanged(t) => (BeaconEventKind::NavStateChanged, Some(t), None, 0.0),
-            // The tab already has the error page in it (see `queue`); this says what
-            // happened, for a shell that wants to put it in a status line or its own log.
-            BeaconEvent::NavigationFailed(t, url, error) => {
-                (BeaconEventKind::NavigationFailed, Some(t), Some(format!("{url}: {error}")), 0.0)
-            }
-            BeaconEvent::TabCrashed(t, error) => (BeaconEventKind::TabCrashed, Some(t), Some(error), 0.0),
-            // Parked with an id, as a download offer is: the shell answers when the user
-            // does, and the answer acts on what was asked, not on anything it passes back.
-            BeaconEvent::CertificateChanged(t, url, fingerprint) => {
-                let question = b.ask(t, url, Some(fingerprint), false);
-                (
-                    BeaconEventKind::CertificateChanged,
-                    Some(t),
-                    Some(beacon_core::devtools::format_fingerprint(&fingerprint)),
-                    question as f64,
-                )
-            }
-            BeaconEvent::IdentityAsked {
-                tab_id,
-                url,
-                message,
-                presented,
-                ..
-            } => {
-                let question = b.ask(tab_id, url, None, presented);
-                let kind = if presented {
-                    BeaconEventKind::IdentityRefused
-                } else {
-                    BeaconEventKind::IdentityAsked
-                };
-                (kind, Some(tab_id), Some(message), question as f64)
-            }
-            BeaconEvent::HoverUrl(t, url) => (BeaconEventKind::HoverUrl, Some(t), url, 0.0),
-            BeaconEvent::CursorChanged(t, cursor) => (
-                BeaconEventKind::CursorChanged,
-                Some(t),
-                None,
-                match cursor {
-                    Cursor::Default => 0.0,
-                    Cursor::Pointer => 1.0,
-                    Cursor::Text => 2.0,
-                    // Additive: the Swift side falls through to the arrow for a code it does
-                    // not know, so it keeps working until it grows a case for this one.
-                    Cursor::Resize => 3.0,
-                },
-            ),
-            // An offer is parked here with an id rather than pushed at the shell whole: the
-            // shell answers asynchronously (a save panel is modal and takes as long as the
-            // user does), and by then a second offer may have arrived. The id is what keeps
-            // an answer attached to the offer it answers.
-            BeaconEvent::DownloadOffered {
-                tab_id,
-                offer: engine_offer,
-                url,
-                suggested_filename,
-                ..
-            } => {
-                let offer = b.next_offer;
-                b.next_offer += 1;
-                b.offers.insert(
-                    offer,
-                    PendingOffer {
-                        tab_id,
-                        offer: engine_offer,
-                        url,
-                        suggested_filename: suggested_filename.clone(),
-                    },
-                );
-                (
-                    BeaconEventKind::DownloadOffered,
-                    Some(tab_id),
-                    Some(suggested_filename),
-                    offer as f64,
-                )
-            }
-            BeaconEvent::DownloadChanged(id) => (BeaconEventKind::DownloadChanged, None, None, id as f64),
-            // One picker is ever open, so the details are a single slot rather than a
-            // table keyed like the download offers; the value rides along as the event's
-            // text and the kind as its number.
-            BeaconEvent::PickerRequested {
-                tab_id,
-                kind,
-                x,
-                y,
-                width,
-                height,
-                value,
-                min,
-                max,
-                step,
-            } => {
-                b.picker = Some(PickerDetails {
-                    anchor: BeaconRect { x, y, width, height },
+                BeaconEvent::DownloadChanged(id) => (BeaconEventKind::DownloadChanged, None, None, id as f64),
+                // One picker is ever open, so the details are a single slot rather than a
+                // table keyed like the download offers; the value rides along as the event's
+                // text and the kind as its number.
+                BeaconEvent::PickerRequested {
+                    tab_id,
+                    kind,
+                    x,
+                    y,
+                    width,
+                    height,
+                    value,
                     min,
                     max,
                     step,
-                });
-                let kind = match kind {
-                    PickerKind::Color => 0.0,
-                    PickerKind::Date => 1.0,
-                    PickerKind::Time => 2.0,
-                    PickerKind::DateTimeLocal => 3.0,
-                    PickerKind::Month => 4.0,
-                    PickerKind::Week => 5.0,
-                };
-                (BeaconEventKind::Picker, Some(tab_id), Some(value), kind)
-            }
-            BeaconEvent::Log(message) => (BeaconEventKind::Log, None, Some(message), 0.0),
+                } => {
+                    b.picker = Some(PickerDetails {
+                        anchor: BeaconRect { x, y, width, height },
+                        min,
+                        max,
+                        step,
+                    });
+                    let kind = match kind {
+                        PickerKind::Color => 0.0,
+                        PickerKind::Date => 1.0,
+                        PickerKind::Time => 2.0,
+                        PickerKind::DateTimeLocal => 3.0,
+                        PickerKind::Month => 4.0,
+                        PickerKind::Week => 5.0,
+                    };
+                    (BeaconEventKind::Picker, Some(tab_id), Some(value), kind)
+                }
+                BeaconEvent::Log(message) => (BeaconEventKind::Log, None, Some(message), 0.0),
+            },
         };
 
         let tab = tab_id.map(|t| b.handle_for(t)).unwrap_or(0);

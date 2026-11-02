@@ -286,6 +286,20 @@ public partial class MainWindow : Window
                     _page.OnHitTestAnswered((ulong)ev.Number, _browser.ReadHit());
                     break;
 
+                // A text field copied, cut or asked to paste (Ctrl+C / Ctrl+X / Ctrl+V). The
+                // paste goes back as typed text, as a commit from an input method would.
+                case BeaconNative.EventKind.ClipboardWrite:
+                    ClipboardSafe.SetText(ev.Text);
+                    break;
+
+                case BeaconNative.EventKind.PasteRequested when ev.Tab == _page.Tab:
+                    if (ClipboardSafe.GetText()?.Replace("\r\n", "\n") is { Length: > 0 } text)
+                    {
+                        _browser.TextInput(ev.Tab, text);
+                    }
+
+                    break;
+
                 case BeaconNative.EventKind.CursorChanged:
                     _page.Cursor = ev.Number switch
                     {
