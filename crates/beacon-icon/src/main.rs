@@ -34,7 +34,7 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let written = if out.ends_with(".ico") {
+    let written = if out.to_ascii_lowercase().ends_with(".ico") {
         ico(size, fill).and_then(|bytes| std::fs::write(out, bytes).map_err(|e| e.to_string()))
     } else {
         render(size, fill).and_then(|pixmap| pixmap.save_png(out).map_err(|e| e.to_string()))
