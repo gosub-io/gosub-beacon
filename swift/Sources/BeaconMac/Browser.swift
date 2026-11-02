@@ -2,6 +2,12 @@ import AppKit
 import CBeacon
 import Foundation
 
+/// A window showing some of a browser's tabs.
+protocol BrowserListener: AnyObject {
+    func owns(_ tab: BeaconTabId) -> Bool
+    func handle(_ events: [Browser.Event])
+}
+
 /// Swift's view of the browser. A thin wrapper over the C ABI that turns pointers into
 /// values and nothing else.
 ///
@@ -29,6 +35,7 @@ final class Browser {
     }
 
     deinit {
+        pump?.invalidate()
         beacon_free(handle)
     }
 
@@ -653,10 +660,62 @@ final class Browser {
 
     // ── events ────────────────────────────────────────────────────────────
 
+    /// Weak, so a closed window drops out without saying so.
+    private struct WeakListener {
+        weak var listener: BrowserListener?
+    }
+
+    private var listeners: [WeakListener] = []
+    private var pump: Timer?
+
+    /// Every window of this browser shares one queue, so one pump drains it and hands each
+    /// window the events for its own tabs. A pump per window lost whatever the other took.
+    func addListener(_ listener: BrowserListener) {
+        listeners.append(WeakListener(listener: listener))
+        guard pump == nil else { return }
+        // On the main run loop, which keeps every ABI call on the thread AppKit requires.
+        let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
+            self?.dispatchEvents()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        pump = timer
+    }
+
+    func removeListener(_ listener: BrowserListener) {
+        listeners.removeAll { $0.listener == nil || $0.listener === listener }
+    }
+
+    private func dispatchEvents() {
+        listeners.removeAll { $0.listener == nil }
+        let live = listeners.compactMap(\.listener)
+        guard !live.isEmpty else { return }
+        var batches = [[Event]](repeating: [], count: live.count)
+        for event in pollEvents() {
+            if event.kind == BEACON_LOG {
+                NSLog("beacon: \(event.text ?? "")")
+                continue
+            }
+            // Not about one tab: every window's business.
+            if event.tab == 0 {
+                for i in batches.indices { batches[i].append(event) }
+                continue
+            }
+            if let owner = live.firstIndex(where: { $0.owns(event.tab) }) {
+                batches[owner].append(event)
+            } else if event.kind == BEACON_DOWNLOAD_OFFERED {
+                // Nobody to ask, and an offer nobody answers is never let go.
+                beacon_download_reject(handle, UInt64(event.number))
+            }
+        }
+        for (listener, batch) in zip(live, batches) where !batch.isEmpty {
+            listener.handle(batch)
+        }
+    }
+
     /// Drain everything the browser has said since the last call. Must run on the main
     /// thread — the ABI is pulled, never pushed, precisely so this is the only thread it
     /// ever touches.
-    func pollEvents() -> [Event] {
+    private func pollEvents() -> [Event] {
         var out: [Event] = []
         var buffer = [BeaconEvent](repeating: BeaconEvent(), count: 64)
         while true {

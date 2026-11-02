@@ -1,7 +1,7 @@
 import AppKit
 import CBeacon
 
-/// A browser window: toolbar, tab strip, page, and the loop that pumps Beacon's events.
+/// A browser window: toolbar, tab strip, page, and what it does with Beacon's events.
 ///
 /// Everything shown here is read back from the browser when it is drawn. The tab strip is
 /// rebuilt from the browser's own answers rather than from a list kept alongside them, and
@@ -11,7 +11,7 @@ import CBeacon
 /// The one thing the window does own is *which* tabs it shows. The browser has no concept
 /// of windows, so tab-to-window membership can only live here.
 final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToolbarDelegate,
-    NSTextFieldDelegate, NSMenuItemValidation, NSMenuDelegate
+    NSTextFieldDelegate, NSMenuItemValidation, NSMenuDelegate, BrowserListener
 {
     let browser: Browser
     private let pageView: PageView
@@ -47,7 +47,6 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
     /// popup that reappears on every keystroke.
     private var isDeleting = false
 
-    private var pump: Timer?
     /// True while the user is editing the address, so engine updates do not fight the caret.
     private var editingAddress = false
     private var bookmarksBarVisible = false
@@ -113,14 +112,12 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
 
         window.center()
         window.makeKeyAndOrderFront(nil)
-        startPump()
+        browser.addListener(self)
         refreshChrome()
 
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
-
-    deinit { pump?.invalidate() }
 
     // ── toolbar ───────────────────────────────────────────────────────────
 
@@ -452,26 +449,15 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
         }
     }
 
-    // ── the pump ──────────────────────────────────────────────────────────
+    // ── events ────────────────────────────────────────────────────────────
 
-    /// Beacon's events are pulled, not pushed, so this is where they arrive. A timer on the
-    /// main run loop keeps every ABI call on the thread AppKit requires.
-    private func startPump() {
-        let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
-            self?.tick()
-        }
-        RunLoop.main.add(timer, forMode: .common)
-        pump = timer
-    }
+    func owns(_ tab: BeaconTabId) -> Bool { ownedTabs.contains(tab) }
 
-    private func tick() {
+    /// The browser's pump hands over the events for this window's tabs, and those about no
+    /// tab in particular.
+    func handle(_ events: [Browser.Event]) {
         var needsChromeRefresh = false
-        for event in browser.pollEvents() {
-            // Events for tabs another window owns are that window's business. Both windows
-            // poll the same queue, so each takes what is its own and ignores the rest.
-            if event.tab != 0, !ownedTabs.contains(event.tab), event.kind != BEACON_REDRAW {
-                continue
-            }
+        for event in events {
             switch event.kind {
             case BEACON_REDRAW:
                 pageView.redraw()
@@ -520,8 +506,6 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
                 if event.number > 0, event.number < Double(UInt64.max) {
                     answerHitTest(token: UInt64(event.number))
                 }
-            case BEACON_LOG:
-                NSLog("beacon: \(event.text ?? "")")
             default:
                 break
             }
@@ -1251,8 +1235,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
     }
 
     func windowWillClose(_ notification: Notification) {
-        pump?.invalidate()
-        pump = nil
+        browser.removeListener(self)
         for tab in ownedTabs {
             browser.closeTab(tab)
         }
