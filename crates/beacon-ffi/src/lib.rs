@@ -816,9 +816,11 @@ unsafe fn new_browser(config: *const BeaconConfig) -> anyhow::Result<Box<BeaconB
         (context, Arc::new(backend))
     };
 
-    let mut engine = BrowserEngine::<FfiConfig>::new(runtime(), private, backend)?;
-    // The engine has the profile locked now, so its folder is known and ours.
+    // Locked here rather than by the engine, so the log has the engine's start too, a
+    // failed one included.
+    beacon_core::paths::lock_profile()?;
     open_log_file();
+    let mut engine = BrowserEngine::<FfiConfig>::new(runtime(), private, backend)?;
     let events = engine
         .take_event_rx()
         .ok_or_else(|| anyhow::anyhow!("engine event stream already taken"))?;
