@@ -61,9 +61,9 @@ internal static class KeyMap
         _ => null,
     };
 
-    /// <summary>The character a key types with only Shift applied, for a chord: Ctrl+A types
-    /// nothing, so its `key` comes from here. The layout decides: Ctrl+Shift+1 is "!" on a US
-    /// board.</summary>
+    /// <summary>The character a key types with only Shift and Caps Lock applied, for a chord:
+    /// Ctrl+A types nothing, so its `key` comes from here. The layout decides: Ctrl+Shift+1 is
+    /// "!" on a US board.</summary>
     public static string? Character(Key key, bool shift)
     {
         var vk = (uint)KeyInterop.VirtualKeyFromKey(key);
@@ -76,6 +76,11 @@ internal static class KeyMap
         if (shift)
         {
             state[VkShift] = 0x80;
+        }
+
+        if (Keyboard.IsKeyToggled(Key.CapsLock))
+        {
+            state[VkCapital] = 0x01;
         }
 
         var layout = GetKeyboardLayout(0);
@@ -92,6 +97,7 @@ internal static class KeyMap
     }
 
     private const int VkShift = 0x10;
+    private const int VkCapital = 0x14;
     private const uint MapVkToVsc = 0;
 
     /// <summary>Leave the keyboard's dead-key state alone: this is a question, not a press.</summary>
