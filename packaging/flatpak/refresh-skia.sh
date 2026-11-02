@@ -16,7 +16,7 @@ cd "$repo_root"
 # older one names an archive this Cargo.lock no longer builds against. Dated by its `out`
 # directory, which cargo makes when the build runs; key.txt itself comes out of the
 # archive with the archive's own date.
-key_file="$(find target -path '*/skia-bindings-*/out/skia/key.txt' 2>/dev/null |
+key_file="$({ find target -path '*/skia-bindings-*/out/skia/key.txt' 2>/dev/null || true; } |
     while read -r f; do echo "$(stat -c %Y "$(dirname "$(dirname "$f")")") $f"; done |
     sort -n | tail -1 | cut -d' ' -f2-)"
 if [[ -z "$key_file" ]]; then
