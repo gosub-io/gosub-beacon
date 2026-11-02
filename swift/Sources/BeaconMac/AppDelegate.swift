@@ -190,7 +190,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         switch item.action {
         case #selector(showSettings(_:)), #selector(newWindowAction(_:)), #selector(newPrivateWindowAction(_:)),
             #selector(newTab(_:)), #selector(showAbout), #selector(showHelpPage(_:)), #selector(showVersionPage(_:)),
-            #selector(showLicensesPage(_:)):
+            #selector(showLicensesPage(_:)), #selector(clearData(_:)):
             return browser != nil
         default:
             break
@@ -210,6 +210,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         default:
             return true
         }
+    }
+
+    /// Clears the profile's data, whichever window is in front: a private session keeps its
+    /// own in memory and forgets it when its last window closes.
+    @objc private func clearData(_ sender: Any?) {
+        guard let browser else { return }
+        let history = NSButton(checkboxWithTitle: "History", target: nil, action: nil)
+        let cookies = NSButton(checkboxWithTitle: "Cookies", target: nil, action: nil)
+        history.state = .on
+        cookies.state = .on
+        let boxes = NSStackView(views: [history, cookies])
+        boxes.orientation = .vertical
+        boxes.alignment = .leading
+        boxes.frame = NSRect(x: 0, y: 0, width: 240, height: 44)
+
+        let alert = NSAlert()
+        alert.messageText = "Clear history and website data?"
+        alert.informativeText = "Clearing cookies signs you out of websites. Bookmarks are kept. This cannot be undone."
+        alert.accessoryView = boxes
+        alert.addButton(withTitle: "Clear")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        if history.state == .on { browser.clearHistory() }
+        if cookies.state == .on { browser.clearCookies() }
     }
 
     @objc private func showHelpPage(_ sender: Any?) {
@@ -365,6 +389,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             item("Forward", #selector(goForward(_:)), "]"),
             .separator(),
             item("Home", #selector(home(_:)), "H", [.command, .shift]),
+            .separator(),
+            item("Clear History and Website Data…", #selector(clearData(_:))),
         ])
     }
 

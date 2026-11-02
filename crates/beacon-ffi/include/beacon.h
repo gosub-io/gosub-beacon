@@ -274,6 +274,11 @@ char *beacon_history_url(BeaconBrowser *browser, size_t index);
 char *beacon_history_title(BeaconBrowser *browser, size_t index);
 uint64_t beacon_history_visit_count(BeaconBrowser *browser, size_t index);
 
+/* Forget every visited page; bookmarks stay. */
+void beacon_clear_history(BeaconBrowser *browser);
+/* Forget every cookie, on disk too. Open pages keep what they already read. */
+void beacon_clear_cookies(BeaconBrowser *browser);
+
 /* ── developer panel ───────────────────────────────────────────────────────────
  *
  * Both of these follow the history pattern: take a snapshot, then read it by index. A panel

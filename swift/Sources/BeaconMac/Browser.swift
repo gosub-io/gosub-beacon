@@ -226,6 +226,11 @@ final class Browser {
 
     /// Visited pages matching `query`, best first. An empty query matches nothing — a
     /// suggestion list for "" would be a history browser, not an autocomplete.
+    /// Forget every visited page; bookmarks stay.
+    func clearHistory() { beacon_clear_history(handle) }
+    /// Forget every cookie, on disk too.
+    func clearCookies() { beacon_clear_cookies(handle) }
+
     func searchHistory(_ query: String, limit: Int = 8) -> [VisitedPage] {
         let count = query.withCString { beacon_history_search(handle, $0, limit) }
         return (0..<count).map { index in

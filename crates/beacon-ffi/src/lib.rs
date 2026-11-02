@@ -1606,6 +1606,27 @@ pub unsafe extern "C" fn beacon_history_visit_count(browser: *mut BeaconBrowser,
     b.history.get(index).map(|page| page.visit_count).unwrap_or(0)
 }
 
+/// Forget every visited page. Bookmarks stay.
+///
+/// # Safety
+/// `browser` must be a live handle from [`beacon_new`].
+#[no_mangle]
+pub unsafe extern "C" fn beacon_clear_history(browser: *mut BeaconBrowser) {
+    let b = browser!(browser);
+    b.engine.clear_history();
+    b.history.clear();
+}
+
+/// Forget every cookie, on disk too.
+///
+/// # Safety
+/// `browser` must be a live handle from [`beacon_new`].
+#[no_mangle]
+pub unsafe extern "C" fn beacon_clear_cookies(browser: *mut BeaconBrowser) {
+    let b = browser!(browser);
+    b.engine.clear_cookies();
+}
+
 // ── developer panel: logs and timings ────────────────────────────────────────
 //
 // Both follow the same shape as the history search: take a snapshot, then read it by index.
