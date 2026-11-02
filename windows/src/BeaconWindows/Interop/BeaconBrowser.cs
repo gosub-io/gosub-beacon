@@ -216,10 +216,10 @@ internal sealed class BeaconBrowser : IDisposable
     public void Scroll(ulong tab, float dx, float dy, bool precise) =>
         BeaconNative.Scroll(Handle, tab, dx, dy, precise);
 
-    public void KeyDown(ulong tab, string key, string code, BeaconNative.Modifiers mods) =>
+    public void KeyDown(ulong tab, string key, string? code, BeaconNative.Modifiers mods) =>
         BeaconNative.KeyDown(Handle, tab, key, code, mods);
 
-    public void KeyUp(ulong tab, string key, string code, BeaconNative.Modifiers mods) =>
+    public void KeyUp(ulong tab, string key, string? code, BeaconNative.Modifiers mods) =>
         BeaconNative.KeyUp(Handle, tab, key, code, mods);
 
     public void TextInput(ulong tab, string text) => BeaconNative.TextInput(Handle, tab, text);

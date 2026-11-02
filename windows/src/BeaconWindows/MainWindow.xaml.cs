@@ -715,14 +715,18 @@ public partial class MainWindow : Window
         var ctrl = (Keyboard.Modifiers & ModifierKeys.Control) != 0;
         var shift = (Keyboard.Modifiers & ModifierKeys.Shift) != 0;
         var alt = (Keyboard.Modifiers & ModifierKeys.Alt) != 0;
+        // With Alt held WPF reports Key.System and puts the key in SystemKey.
+        var key = e.Key == Key.System ? e.SystemKey : e.Key;
 
-        switch (e.Key)
+        switch (key)
         {
             case Key.T when ctrl && shift:
                 Activate(_browser.ReopenClosedTab());
                 break;
             case Key.T when ctrl:
                 OpenTab(Homepage());
+                AddressBar.Focus();
+                AddressBar.SelectAll();
                 break;
             case Key.W when ctrl:
                 if (_page.Tab != 0)
@@ -760,9 +764,11 @@ public partial class MainWindow : Window
             case Key.F5:
                 _browser.Reload();
                 break;
-            case Key.Escape:
+            // The page gets the key too: it drops focus from a field. In the address bar,
+            // Escape is the text box's.
+            case Key.Escape when _page.IsKeyboardFocused:
                 _browser.Stop();
-                break;
+                return;
             case Key.OemPlus when ctrl:
             case Key.Add when ctrl:
                 SetZoom(_browser.Zoom(_page.Tab) + 0.1f);
