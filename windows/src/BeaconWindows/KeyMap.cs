@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Windows.Input;
 using Gosub.Beacon.Windows.Interop;
 
@@ -8,7 +9,7 @@ namespace Gosub.Beacon.Windows;
 ///
 /// WPF's Key is a virtual key, which follows the layout, so `code` is an approximation of
 /// the physical key, as on GTK; the engine reads only `key` today. What a press types is
-/// not worked out here: that is the TextInput WPF raises after it.
+/// the TextInput WPF raises after it; only a chord, which types nothing, is looked up here.
 /// </summary>
 internal static class KeyMap
 {
@@ -60,14 +61,51 @@ internal static class KeyMap
         _ => null,
     };
 
-    /// <summary>The character of a letter or digit key, for a chord: Ctrl+A types nothing,
-    /// so its `key` comes from here.</summary>
-    public static string? Character(Key key, bool shift) => key switch
+    /// <summary>The character a key types with only Shift applied, for a chord: Ctrl+A types
+    /// nothing, so its `key` comes from here. The layout decides: Ctrl+Shift+1 is "!" on a US
+    /// board.</summary>
+    public static string? Character(Key key, bool shift)
     {
-        >= Key.A and <= Key.Z => ((char)((shift ? 'A' : 'a') + (key - Key.A))).ToString(),
-        >= Key.D0 and <= Key.D9 => ((char)('0' + (key - Key.D0))).ToString(),
-        _ => null,
-    };
+        var vk = (uint)KeyInterop.VirtualKeyFromKey(key);
+        if (vk == 0)
+        {
+            return null;
+        }
+
+        var state = new byte[256];
+        if (shift)
+        {
+            state[VkShift] = 0x80;
+        }
+
+        var layout = GetKeyboardLayout(0);
+        var buffer = new char[4];
+        var count = ToUnicodeEx(vk, MapVirtualKeyEx(vk, MapVkToVsc, layout), state, buffer, buffer.Length,
+            DontChangeKeyboardState, layout);
+        // 0 is no character, below 0 a dead key; several is a ligature, not one key.
+        if (count != 1 || buffer[0] < ' ' || buffer[0] == '\x7f')
+        {
+            return null;
+        }
+
+        return buffer[0].ToString();
+    }
+
+    private const int VkShift = 0x10;
+    private const uint MapVkToVsc = 0;
+
+    /// <summary>Leave the keyboard's dead-key state alone: this is a question, not a press.</summary>
+    private const uint DontChangeKeyboardState = 4;
+
+    [DllImport("user32.dll")]
+    private static extern int ToUnicodeEx(uint virtKey, uint scanCode, byte[] keyState,
+        [Out] char[] buffer, int bufferSize, uint flags, IntPtr layout);
+
+    [DllImport("user32.dll")]
+    private static extern uint MapVirtualKeyEx(uint code, uint mapType, IntPtr layout);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetKeyboardLayout(uint threadId);
 
     /// <summary>KeyboardEvent.code for the main block, or null.</summary>
     public static string? Code(Key key) => key switch
