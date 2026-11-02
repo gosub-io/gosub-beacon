@@ -165,7 +165,7 @@ public final class Helper {
         if (clip == null || clip.getItemCount() == 0) {
             return null;
         }
-        CharSequence text = clip.getItemAt(0).coerceToText(context);
+        CharSequence text = clip.getItemAt(0).getText();
         return text == null ? null : text.toString();
     }
 
