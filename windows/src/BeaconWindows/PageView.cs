@@ -7,7 +7,7 @@ using Gosub.Beacon.Windows.Interop;
 namespace Gosub.Beacon.Windows;
 
 /// <summary>
-/// The page: frames blitted into a WriteableBitmap, plus mouse and scroll input.
+/// The page: frames blitted into a WriteableBitmap, plus mouse, scroll and keyboard input.
 ///
 /// Uses the CPU path: beacon_acquire_frame returns BGRA pixels which are copied in. The GPU
 /// path (beacon_attach_view with an HWND) is faster on real hardware but needs a graphics
@@ -244,6 +244,104 @@ internal sealed class PageView : FrameworkElement
         bool precise = e.Delta % 120 != 0;
         _browser.Scroll(Tab, 0, -(e.Delta / 120f) * 60f, precise);
         e.Handled = true;
+    }
+
+    // ── keyboard ───────────────────────────────────────────────────────────────
+    //
+    // The engine's contract, as on GTK and the Mac: a press that types a character is one
+    // KeyDown carrying that character, a press that types nothing is a KeyDown with the key's
+    // DOM name, and TextInput is for text that is not one press, such as an IME commit. WPF
+    // reports a press (KeyDown) and what it typed (TextInput, from WM_CHAR) separately, so a
+    // press that may type is held back until its character arrives.
+
+    /// <summary>The last press that may type, for its TextInput to answer as.</summary>
+    private Key _pressInFlight = Key.None;
+
+    /// <summary>What each held key was sent as, so its release names the same key.</summary>
+    private readonly Dictionary<Key, string> _held = new();
+
+    protected override void OnKeyDown(KeyEventArgs e)
+    {
+        base.OnKeyDown(e);
+        if (_browser is null || Tab == 0)
+        {
+            return;
+        }
+
+        // With Alt held WPF reports Key.System and puts the key in SystemKey.
+        var key = e.Key == Key.System ? e.SystemKey : e.Key;
+        var keys = Keyboard.Modifiers;
+        var name = KeyMap.Named(key);
+        // Control without Alt types nothing (Ctrl+A is U+0001), so the key is the press.
+        // Ctrl+Alt is AltGr on many layouts, which does type; its TextInput sends it.
+        if (name is null && (keys & (ModifierKeys.Control | ModifierKeys.Alt)) == ModifierKeys.Control)
+        {
+            name = KeyMap.Character(key, (keys & ModifierKeys.Shift) != 0);
+        }
+
+        if (name is null)
+        {
+            _pressInFlight = key;
+            return;
+        }
+
+        _browser.KeyDown(Tab, name, KeyMap.Code(key), KeyMap.Modifiers(keys));
+        _held[key] = name;
+        // Handled keeps WPF's focus navigation off Tab and the arrows, and drops the control
+        // character (\b, \t, \r) the press would type. Not with Alt: a handled system key
+        // never reaches DefWindowProc, and Alt+F4 and Alt+Space would stop working.
+        e.Handled = e.Key != Key.System;
+    }
+
+    protected override void OnTextInput(TextCompositionEventArgs e)
+    {
+        base.OnTextInput(e);
+        var press = _pressInFlight;
+        _pressInFlight = Key.None;
+        var text = e.Text;
+        // Control characters are not text; OnKeyDown reports those keys.
+        if (_browser is null || Tab == 0 || text.Length == 0 || text.Any(c => c < ' ' || c == '\x7f'))
+        {
+            return;
+        }
+
+        if (press != Key.None && (text.Length == 1 || (text.Length == 2 && char.IsSurrogatePair(text, 0))))
+        {
+            // One character is the press itself, as the layout resolved it: "a", "!", "é".
+            _browser.KeyDown(Tab, text, KeyMap.Code(press), KeyMap.Modifiers(Keyboard.Modifiers));
+            _held[press] = text;
+        }
+        else
+        {
+            _browser.TextInput(Tab, text);
+        }
+
+        e.Handled = true;
+    }
+
+    protected override void OnKeyUp(KeyEventArgs e)
+    {
+        base.OnKeyUp(e);
+        var key = e.Key == Key.System ? e.SystemKey : e.Key;
+        // A press that typed nothing (a bare Shift) is over; a later commit is not its text.
+        if (key == _pressInFlight)
+        {
+            _pressInFlight = Key.None;
+        }
+
+        if (_browser is not null && Tab != 0 && _held.Remove(key, out var name))
+        {
+            _browser.KeyUp(Tab, name, KeyMap.Code(key), KeyMap.Modifiers(Keyboard.Modifiers));
+            e.Handled = true;
+        }
+    }
+
+    protected override void OnLostKeyboardFocus(KeyboardFocusChangedEventArgs e)
+    {
+        base.OnLostKeyboardFocus(e);
+        // Releases now go to whatever has focus.
+        _held.Clear();
+        _pressInFlight = Key.None;
     }
 
     /// <summary>The engine knows three buttons. The side buttons (XButton1/2) are not page

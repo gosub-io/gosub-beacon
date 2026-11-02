@@ -577,6 +577,18 @@ impl BeaconBrowser {
         self.send_and_draw(tab_id, TabCommand::SetViewport { x: 0, y: 0, width, height });
     }
 
+    /// Make `tab_id` the active tab and wake it. The tab shown before is the caller's to
+    /// suspend.
+    fn show(&mut self, tab_id: TabId) {
+        self.tabs.lock().unwrap().mark_active(tab_id);
+        self.beacon.mru_mut().touch(tab_id);
+
+        // Re-assert this tab's viewport: the raster DPR is process-wide, so whatever the last
+        // active tab wanted is still in force until something says otherwise.
+        self.apply_viewport(tab_id);
+        self.send(tab_id, TabCommand::ResumeDrawing { fps: DRAW_FPS });
+    }
+
     fn zoom_of(&self, tab_id: TabId) -> f32 {
         self.viewports.get(&tab_id).map(|v| v.zoom).unwrap_or(1.0)
     }
@@ -952,6 +964,7 @@ pub unsafe extern "C" fn beacon_close_tab(browser: *mut BeaconBrowser, tab: u64)
             let _ = handle.send(TabCommand::CloseTab).await;
         });
     }
+    let shown = b.tabs.lock().unwrap().active();
     // Remember it before it goes, so Cmd+Shift+T has something to bring back.
     let closed = {
         let manager = b.tabs.lock().unwrap();
@@ -973,6 +986,22 @@ pub unsafe extern "C" fn beacon_close_tab(browser: *mut BeaconBrowser, tab: u64)
     #[cfg(target_os = "macos")]
     b.views.remove(&tab_id);
     b.handles.remove(&tab);
+
+    // `remove_tab` hands `active` to a neighbour whichever tab went. Closing one in the
+    // background keeps the shown one; closing the shown one shows the neighbour, which was
+    // suspended in the background and has to be woken, and the shell has to be told.
+    let mut events = vec![BeaconEvent::TabsChanged];
+    match shown {
+        Some(shown) if shown != tab_id => b.tabs.lock().unwrap().mark_active(shown),
+        _ => {
+            let next = b.tabs.lock().unwrap().active();
+            if let Some(next) = next {
+                b.show(next);
+                events.push(BeaconEvent::ActiveTabChanged(next));
+            }
+        }
+    }
+    b.queue(events);
 }
 
 /// # Safety
@@ -992,13 +1021,7 @@ pub unsafe extern "C" fn beacon_activate_tab(browser: *mut BeaconBrowser, tab: u
         b.send(previous, TabCommand::SuspendDrawing);
     }
 
-    b.tabs.lock().unwrap().mark_active(tab_id);
-    b.beacon.mru_mut().touch(tab_id);
-
-    // Re-assert this tab's viewport: the raster DPR is process-wide, so whatever the last
-    // active tab wanted is still in force until something says otherwise.
-    b.apply_viewport(tab_id);
-    b.send(tab_id, TabCommand::ResumeDrawing { fps: DRAW_FPS });
+    b.show(tab_id);
 }
 
 /// Whether this browser is a private session: cookies and storage in memory only, and no

@@ -227,12 +227,12 @@ internal static partial class BeaconNative
     [DllImport(Lib, EntryPoint = "beacon_key_down")]
     public static extern void KeyDown(IntPtr browser, ulong tab,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string key,
-        [MarshalAs(UnmanagedType.LPUTF8Str)] string code, Modifiers modifiers);
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? code, Modifiers modifiers);
 
     [DllImport(Lib, EntryPoint = "beacon_key_up")]
     public static extern void KeyUp(IntPtr browser, ulong tab,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string key,
-        [MarshalAs(UnmanagedType.LPUTF8Str)] string code, Modifiers modifiers);
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string? code, Modifiers modifiers);
 
     [DllImport(Lib, EntryPoint = "beacon_text_input")]
     public static extern void TextInput(IntPtr browser, ulong tab, [MarshalAs(UnmanagedType.LPUTF8Str)] string text);
