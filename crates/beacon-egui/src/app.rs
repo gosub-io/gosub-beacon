@@ -607,11 +607,12 @@ impl BeaconApp {
                     self.request_paste(ctx);
                 }
             }
-            EngineEvent::HitTestResult { token, hit, .. } => {
+            EngineEvent::HitTestResult { tab_id, token, hit } => {
                 if let Some((wanted, pos, rel)) = self.menu_hit {
                     if token.0 == wanted {
                         self.menu_hit = None;
-                        if hit.is_editable {
+                        // An answer from a tab no longer in front has no menu to open.
+                        if hit.is_editable && tab_for(*tab_id) == self.active() {
                             self.open_field_menu = Some((pos, rel));
                             ctx.request_repaint();
                         }
