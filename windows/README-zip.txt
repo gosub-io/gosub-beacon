@@ -6,6 +6,7 @@ This preview is not signed. The first time you start it, Windows SmartScreen say
 "Windows protected your PC". Click "More info", then "Run anyway".
 
 Your profile is kept in %APPDATA%\gosub-beacon. Its log, beacon.log, is in the profile's
-folder under profiles\; attach it when you report a problem.
+folder under profiles\; attach it when you report a problem. Each start moves the previous
+run's log to beacon.log.1, so attach that one if you restarted since.
 
 https://gosub.io
