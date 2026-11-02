@@ -97,8 +97,33 @@ the bytes received.
 
 ## Building
 
+### The release zip, on Windows
+
+```powershell
+windows\package.ps1
+```
+
+This is what the `Windows` CI workflow runs, and the zip it uploads is the one to test and
+ship: `target\windows\GosubBeacon-<version>-win-x64.zip`. It builds `beacon.dll` in release,
+publishes the shell self-contained, copies the VC++ runtime DLLs `beacon.dll` imports next to
+it, and zips the lot. Nothing has to be installed to run it: no .NET runtime, no VC++
+redistributable. Not `+crt-static`: skia-binaries publishes no static-CRT build of the
+engine's Skia features, and building Skia from source needs LLVM and a long build.
+
+It needs the Rust toolchain in `scripts/release-toolchain`, the .NET SDK (10.0+), the
+Visual Studio C++ build tools (for the linker and the runtime DLLs), Perl and NASM (vendored
+OpenSSL). The icon is rendered from the lighthouse SVG by `beacon-icon` as
+part of the build, so cargo must be on the PATH for `dotnet build` too.
+
+The zip is not signed. SmartScreen stops the first start with "Windows protected your PC";
+"More info", then "Run anyway". `README-zip.txt` goes into the zip as `README.txt` and says
+so.
+
+### From Linux
+
 Both halves cross-compile **from Linux**, so the build loop does not need Windows at all -
-only running does.
+only running does. The cross-build is broken at the moment: vendored OpenSSL's Configure
+refuses a Linux perl for MSVC (GOS-231).
 
 ```bash
 ./windows/build.sh            # debug
@@ -133,16 +158,15 @@ the Windows feature set to `svg` + `gl`.
 
 ## Running
 
-Copy the output directory to a Windows machine and run `GosubBeacon.exe`. The build is
-framework-dependent, so that machine needs the .NET 10 Desktop Runtime:
+Unzip the release zip and run `GosubBeacon.exe`. A plain `dotnet build` is
+framework-dependent instead, so the machine running it needs the .NET 10 Desktop Runtime:
 
 ```
 windows/src/BeaconWindows/bin/Debug/net10.0-windows/win-x64/
 ```
 
-`beacon.dll` is copied next to the exe by the build and must stay there. The MSVC build
-imports `VCRUNTIME140.dll`, so the target needs the Visual C++ redistributable - or build
-with `-C target-feature=+crt-static` to avoid it.
+`beacon.dll` is copied next to the exe by the build and must stay there: the debug one for a
+Debug build, the release one for Release.
 
 URLs on the command line become the startup tabs.
 
@@ -169,6 +193,8 @@ a runtime backend choice in beacon-ffi first, then `PageView.cs`.
 windows/
   Directory.Build.props        EnableWindowsTargeting and shared settings
   build.sh                     builds beacon.dll and the exe, from Linux
+  package.ps1                  the release zip, on Windows (what CI runs)
+  README-zip.txt               the README.txt that goes into the zip
   src/BeaconWindows/
     Interop/BeaconNative.cs    raw P/Invoke, one-to-one with beacon.h
     Interop/BeaconBrowser.cs   safe wrapper: owns the handle, copies event strings
