@@ -49,7 +49,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
 
     /// True while the user is editing the address, so engine updates do not fight the caret.
     private var editingAddress = false
-    private var bookmarksBarVisible = false
+    private(set) var bookmarksBarVisible = false
 
     private var bookmarksBarHeight: NSLayoutConstraint?
 

@@ -207,6 +207,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             // exactly when the title should be decided.
             item.title = front.isDeveloperPanelOpen ? "Hide Engine Room" : "Show Engine Room"
             return true
+        case #selector(toggleBookmarksBar(_:)):
+            item.title = front.bookmarksBarVisible ? "Hide Favorites Bar" : "Show Favorites Bar"
+            return true
         default:
             return true
         }
@@ -397,7 +400,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private func bookmarksMenu() -> NSMenuItem {
         submenu("Bookmarks", [
             item("Add Bookmark", #selector(toggleBookmark(_:)), "d"),
-            item("Show Favorites Bar", #selector(toggleBookmarksBar(_:)), "B", [.command, .shift]),
         ])
     }
 
