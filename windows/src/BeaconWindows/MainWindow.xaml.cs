@@ -485,7 +485,7 @@ public partial class MainWindow : Window
         for (var i = 0; i < entries.Count; i++)
         {
             var index = i;
-            menu.Items.Add(MenuItemFor(entries[i], () => _browser.ForwardGo(index)));
+            menu.Items.Add(PageMenuItem(entries[i], () => _browser.ForwardGo(index)));
         }
 
         menu.PlacementTarget = ForwardButton;
@@ -498,6 +498,13 @@ public partial class MainWindow : Window
         item.Click += (_, _) => action();
         return item;
     }
+
+    /// <summary>
+    /// A menu item showing a page's title or URL. A string header is read for an access key,
+    /// so its first `_` would vanish (GOS-233); doubled, it shows as one.
+    /// </summary>
+    private static MenuItem PageMenuItem(string text, Action action) =>
+        MenuItemFor(text.Replace("_", "__"), action);
 
     // ── menu bar ───────────────────────────────────────────────────────────────
 
@@ -599,7 +606,7 @@ public partial class MainWindow : Window
             foreach (var bookmark in saved.Take(30))
             {
                 var label = string.IsNullOrWhiteSpace(bookmark.Title) ? bookmark.Url : bookmark.Title;
-                menu.Items.Add(MenuItemFor(label, () => Navigate(bookmark.Url)));
+                menu.Items.Add(PageMenuItem(label, () => Navigate(bookmark.Url)));
             }
         }
     }
