@@ -158,6 +158,13 @@ internal sealed class PageView : FrameworkElement
         SyncViewport();
     }
 
+    // Moved to a monitor at another scale: the engine rasterizes at the new DPR.
+    protected override void OnDpiChanged(DpiScale oldDpi, DpiScale newDpi)
+    {
+        base.OnDpiChanged(oldDpi, newDpi);
+        Refresh();
+    }
+
     // ── input ──────────────────────────────────────────────────────────────────
     //
     // Positions go to the engine in CSS pixels, and WPF's input coordinates already are
