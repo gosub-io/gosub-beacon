@@ -490,6 +490,17 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
                 }
             case BEACON_DOWNLOAD_CHANGED:
                 refreshDownloads()
+            // A text field copied, cut or asked to paste. The paste goes back as typed text, as
+            // a commit from an input method would.
+            case BEACON_CLIPBOARD_WRITE:
+                if let text = event.text {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(text, forType: .string)
+                }
+            case BEACON_PASTE_REQUESTED:
+                if event.tab == currentTab, let text = NSPasteboard.general.string(forType: .string), !text.isEmpty {
+                    browser.textInput(event.tab, text: text)
+                }
             case BEACON_TABS_CHANGED, BEACON_NAV_STATE_CHANGED, BEACON_LOADING_CHANGED,
                 BEACON_ACTIVE_TAB_CHANGED, BEACON_FAVICON_CHANGED:
                 needsChromeRefresh = true

@@ -95,7 +95,13 @@ typedef enum {
     /* As BEACON_IDENTITY_ASKED, but the server refused the identity it was given. Answer
      * with beacon_identity_make (a new one in its place), beacon_identity_forget, or
      * beacon_question_dismiss. */
-    BEACON_IDENTITY_REFUSED = 20
+    BEACON_IDENTITY_REFUSED = 20,
+    /* A text field in `tab` copied or cut `text` (Ctrl+C / Ctrl+X, Cmd on the Mac). Put it
+     * on the system clipboard. */
+    BEACON_CLIPBOARD_WRITE = 21,
+    /* A text field in `tab` asked for a paste. Read the clipboard's text and send it with
+     * beacon_text_input; send nothing when it holds no text. */
+    BEACON_PASTE_REQUESTED = 22
 } BeaconEventKind;
 
 typedef struct {

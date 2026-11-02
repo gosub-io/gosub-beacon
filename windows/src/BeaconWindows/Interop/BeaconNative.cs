@@ -45,6 +45,8 @@ internal static partial class BeaconNative
         NavigationFailed = 15,
         HitTest = 16,
         Picker = 17,
+        ClipboardWrite = 21,
+        PasteRequested = 22,
     }
 
     public enum Button

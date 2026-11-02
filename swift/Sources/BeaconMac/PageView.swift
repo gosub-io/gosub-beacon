@@ -409,4 +409,23 @@ final class PageView: NSView, NSTextInputClient {
     }
     func characterIndex(for point: NSPoint) -> Int { NSNotFound }
     override func doCommand(by selector: Selector) {}
+
+    // ── Edit menu ─────────────────────────────────────────────────────────
+    //
+    // Cmd+X/C/V/A are the menu's, so they never reach keyDown. While the page has focus the
+    // menu sends them here, and they go to the page as the chord the engine edits on. A field
+    // that copies answers with BEACON_CLIPBOARD_WRITE, one that pastes with
+    // BEACON_PASTE_REQUESTED; the window carries those out.
+
+    @objc func cut(_ sender: Any?) { chord("x", code: "KeyX") }
+    @objc func copy(_ sender: Any?) { chord("c", code: "KeyC") }
+    @objc func paste(_ sender: Any?) { chord("v", code: "KeyV") }
+    @objc override func selectAll(_ sender: Any?) { chord("a", code: "KeyA") }
+
+    private func chord(_ key: String, code: String) {
+        guard tab != 0 else { return }
+        let modifiers = UInt32(BEACON_MOD_META)
+        browser.keyDown(tab, key: key, code: code, modifiers: modifiers)
+        browser.keyUp(tab, key: key, code: code, modifiers: modifiers)
+    }
 }
