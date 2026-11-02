@@ -323,6 +323,12 @@ internal sealed class PageView : FrameworkElement
     {
         base.OnKeyUp(e);
         var key = e.Key == Key.System ? e.SystemKey : e.Key;
+        // A press that typed nothing (a bare Shift) is over; a later commit is not its text.
+        if (key == _pressInFlight)
+        {
+            _pressInFlight = Key.None;
+        }
+
         if (_browser is not null && Tab != 0 && _held.Remove(key, out var name))
         {
             _browser.KeyUp(Tab, name, KeyMap.Code(key), KeyMap.Modifiers(Keyboard.Modifiers));
