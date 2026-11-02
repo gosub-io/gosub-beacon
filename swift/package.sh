@@ -212,7 +212,14 @@ if command -v rustup >/dev/null; then
 fi
 # No paths from this machine in the release binaries: panics and debug info name /src,
 # /cargo and /rustup instead. Encoded rather than RUSTFLAGS, so a path with a space survives.
-remap=(
+# It wins over RUSTFLAGS, so flags already given either way are carried over.
+remap=()
+if [[ -n "${CARGO_ENCODED_RUSTFLAGS:-}" ]]; then
+    IFS=$'\x1f' read -ra remap <<<"$CARGO_ENCODED_RUSTFLAGS"
+elif [[ -n "${RUSTFLAGS:-}" ]]; then
+    read -ra remap <<<"$RUSTFLAGS"
+fi
+remap+=(
     "--remap-path-prefix=$(dirname "$root")=/src"
     "--remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo"
     "--remap-path-prefix=${RUSTUP_HOME:-$HOME/.rustup}=/rustup"
