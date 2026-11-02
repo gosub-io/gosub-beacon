@@ -664,6 +664,9 @@ typedef enum {
 char *beacon_download_offer_url(BeaconBrowser *browser, uint64_t offer);
 uint64_t beacon_download_accept(BeaconBrowser *browser, uint64_t offer, const char *path);
 void beacon_download_reject(BeaconBrowser *browser, uint64_t offer);
+/* Download `url` from `tab` into `path` without loading it first: a link's Save As.
+ * Returns a download id, or 0. */
+uint64_t beacon_download_url(BeaconBrowser *browser, uint64_t tab, const char *url, const char *path);
 
 /* Questions a failed load asks the user: BEACON_CERTIFICATE_CHANGED, BEACON_IDENTITY_ASKED
  * and BEACON_IDENTITY_REFUSED carry an id in `number`. A tab has at most one open; a newer

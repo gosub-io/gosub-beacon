@@ -988,8 +988,17 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
     /// command, so this navigates to it: anything it will not render arrives as a download
     /// offer, which is the panel the user was asking for.
     @objc private func saveLinkAs(_ sender: NSMenuItem) {
-        guard let url = sender.representedObject as? String, currentTab != 0 else { return }
-        browser.navigate(currentTab, to: url)
+        guard let link = sender.representedObject as? String, currentTab != 0, let window else { return }
+        let tab = currentTab
+        let panel = NSSavePanel()
+        let name = URL(string: link)?.lastPathComponent ?? ""
+        panel.nameFieldStringValue = name.isEmpty || name == "/" ? "download" : name
+        panel.canCreateDirectories = true
+        panel.beginSheetModal(for: window) { [weak self] response in
+            guard let self, response == .OK, let url = panel.url else { return }
+            self.browser.download(link, from: tab, to: url.path)
+            self.refreshDownloads()
+        }
     }
 
     @objc func viewSource(_ sender: Any?) {

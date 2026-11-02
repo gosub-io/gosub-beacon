@@ -647,6 +647,12 @@ final class Browser {
     }
 
     func rejectDownload(_ offer: UInt64) { beacon_download_reject(handle, offer) }
+
+    /// Fetch `url` straight to `path`, the page never loading it.
+    @discardableResult
+    func download(_ url: String, from tab: BeaconTabId, to path: String) -> UInt64 {
+        url.withCString { curl in path.withCString { beacon_download_url(handle, tab, curl, $0) } }
+    }
     func openDownload(_ id: UInt64) { beacon_download_open(handle, id) }
 
     // ── the page, drawn into a view we own ────────────────────────────────
