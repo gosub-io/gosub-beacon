@@ -41,7 +41,12 @@ ABI=${ANDROID_ABI:-arm64-v8a}
 TARGET_SDK=34
 VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' "$ROOT/Cargo.toml" | head -1)
 # Android installs over a build only with a higher versionCode. The commit count climbs on
-# main; a build from a branch behind it counts lower and needs an uninstall first.
+# main; a build from a branch behind it counts lower and needs an uninstall first. A shallow
+# clone counts only what it fetched.
+if [ "$(git -C "$ROOT" rev-parse --is-shallow-repository)" = true ]; then
+    echo "a shallow clone gives a wrong versionCode; fetch the full history (git fetch --unshallow)" >&2
+    exit 1
+fi
 VERSION_CODE=$(git -C "$ROOT" rev-list --count HEAD)
 
 OUT=$ROOT/target/android
