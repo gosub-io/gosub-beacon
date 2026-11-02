@@ -361,6 +361,10 @@ impl BeaconApp {
         };
         let urls = if urls.is_empty() { vec!["gosub://home".to_string()] } else { urls };
         let opened: Vec<Option<TabId>> = urls.iter().map(|url| app.open_tab(url)).collect();
+        // A session where nothing would open still leaves a tab to use.
+        if opened.iter().all(Option::is_none) {
+            app.open_tab("gosub://home");
+        }
         for (restored, tab_id) in session.iter().zip(opened) {
             let Some(tab_id) = tab_id else { continue };
             if restored.pinned {
@@ -1150,6 +1154,8 @@ impl eframe::App for BeaconApp {
     // Wait for the engine before the process exits, or its workers race SQLCipher's
     // exit-time cleanup (see `BrowserEngine::shutdown`).
     fn on_exit(&mut self) {
+        // The last frame saved what was open before it; this is what is open now.
+        self.save_session();
         if let Some(engine) = self.engine.take() {
             engine.shutdown(self.rt);
         }
@@ -2296,6 +2302,8 @@ impl BeaconApp {
                 tabs.update_tab(tab_id, &tab);
             }
         }
+        // A sender made since the crash still forwards to the dead worker.
+        self.senders.borrow_mut().remove(&tab_id);
         self.views.insert(tab_id, TabView::default());
         let draw = self.draw_command();
         self.rt.spawn(async move {
