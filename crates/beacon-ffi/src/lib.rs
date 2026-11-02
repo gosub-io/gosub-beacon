@@ -990,16 +990,18 @@ pub unsafe extern "C" fn beacon_close_tab(browser: *mut BeaconBrowser, tab: u64)
     // `remove_tab` hands `active` to a neighbour whichever tab went. Closing one in the
     // background keeps the shown one; closing the shown one shows the neighbour, which was
     // suspended in the background and has to be woken, and the shell has to be told.
+    let mut events = vec![BeaconEvent::TabsChanged];
     match shown {
         Some(shown) if shown != tab_id => b.tabs.lock().unwrap().mark_active(shown),
         _ => {
             let next = b.tabs.lock().unwrap().active();
             if let Some(next) = next {
                 b.show(next);
-                b.pending.push(Outgoing::Core(BeaconEvent::ActiveTabChanged(next)));
+                events.push(BeaconEvent::ActiveTabChanged(next));
             }
         }
     }
+    b.queue(events);
 }
 
 /// # Safety
