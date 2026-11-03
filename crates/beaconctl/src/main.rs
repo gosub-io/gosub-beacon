@@ -18,6 +18,9 @@ use zeroize::Zeroizing;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// beacon-core's session file.
+const SESSION: &str = "session.tabs";
+
 /// Control Gosub Beacon from the command line.
 #[derive(Parser)]
 #[command(name = "beaconctl", version)]
@@ -84,6 +87,15 @@ enum ProfileCommand {
         #[arg(long, default_value_t = 20)]
         limit: usize,
     },
+    /// Print a profile's bookmarks, newest first, one `title<TAB>url` per line. Reads while
+    /// Beacon has the profile open.
+    Bookmarks { profile: Option<String> },
+    /// Print the settings a profile changed from their defaults, one `key<TAB>value` per
+    /// line. Reads while Beacon has the profile open.
+    Settings { profile: Option<String> },
+    /// Print the tabs Beacon restores on its next start, one per line in strip order:
+    /// `*` marks the active tab, `!` a pinned one. Reads while Beacon has the profile open.
+    Session { profile: Option<String> },
     /// Open a profile copied from another machine: the passphrase unwraps its key, and this
     /// machine's keychain keeps it from then on.
     Unlock {
@@ -356,18 +368,45 @@ fn profile(command: ProfileCommand) -> Result<()> {
         }
         ProfileCommand::History { profile, limit } => {
             let p = existing(&roots, profile)?;
-            let path = p.dir.join(Store::Places.file_name());
-            // Opening it would create it; there is no history yet either way.
-            if !path.exists() {
+            let Some((path, key)) = store(&p, Store::Places)? else {
                 return Ok(());
-            }
-            let key = p.key_from(Some(&keychain(&p)?))?;
-            for (title, url) in recent_visits(&path, &key.store_key(Store::Places), limit)
-                .with_context(|| format!("reading the history of {}", printable(p.name())))?
+            };
+            for (title, url) in
+                recent_visits(&path, &key, limit).with_context(|| format!("reading the history of {}", printable(p.name())))?
             {
                 // Titles come from pages: one record per line, and nothing that a terminal
                 // would act on.
                 println!("{}\t{}", printable(&title), printable(&url));
+            }
+        }
+        ProfileCommand::Bookmarks { profile } => {
+            let p = existing(&roots, profile)?;
+            let Some((path, key)) = store(&p, Store::Places)? else {
+                return Ok(());
+            };
+            for (title, url) in bookmarks(&path, &key).with_context(|| format!("reading the bookmarks of {}", printable(p.name())))? {
+                println!("{}\t{}", printable(&title), printable(&url));
+            }
+        }
+        ProfileCommand::Settings { profile } => {
+            let p = existing(&roots, profile)?;
+            let Some((path, key)) = store(&p, Store::Settings)? else {
+                return Ok(());
+            };
+            for (name, value) in settings(&path, &key).with_context(|| format!("reading the settings of {}", printable(p.name())))? {
+                println!("{}\t{}", printable(&name), printable(&value));
+            }
+        }
+        ProfileCommand::Session { profile } => {
+            let p = existing(&roots, profile)?;
+            let key = p.key_from(Some(&keychain(&p)?))?;
+            let Some(data) = p.read_sealed(&key, SESSION)? else {
+                return Ok(());
+            };
+            for line in String::from_utf8_lossy(&data).lines() {
+                if !line.is_empty() && !line.starts_with('#') {
+                    println!("{}", printable(line));
+                }
             }
         }
         ProfileCommand::Unlock { profile, input } => {
@@ -565,6 +604,33 @@ fn encrypt_plaintext(p: &Profile, key: &ProfileKey) -> Result<()> {
 /// The `limit` most recently visited pages in the places store at `path`, as `(title,
 /// url)`. Asked of the database directly: the engine's `query_visited` ranks by visit
 /// count, and getting the most recent out of it meant reading every row.
+/// `store`'s file in `p` and the key it opens with; `None` while there is no file yet
+/// (opening it would create it).
+fn store(p: &Profile, store: Store) -> Result<Option<(PathBuf, Zeroizing<[u8; 32]>)>> {
+    let path = p.dir.join(store.file_name());
+    if !path.exists() {
+        return Ok(None);
+    }
+    let key = p.key_from(Some(&keychain(p)?))?;
+    Ok(Some((path, key.store_key(store))))
+}
+
+fn bookmarks(path: &Path, key: &Zeroizing<[u8; 32]>) -> Result<Vec<(String, String)>> {
+    let conn = Connection::open(path)?;
+    SqliteKey::from_bytes(**key).apply(&conn)?;
+    let mut stmt = conn.prepare("SELECT title, url FROM bookmarks ORDER BY created_at DESC, url")?;
+    let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
+fn settings(path: &Path, key: &Zeroizing<[u8; 32]>) -> Result<Vec<(String, String)>> {
+    let conn = Connection::open(path)?;
+    SqliteKey::from_bytes(**key).apply(&conn)?;
+    let mut stmt = conn.prepare("SELECT key, value FROM settings ORDER BY key")?;
+    let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
 fn recent_visits(path: &Path, key: &Zeroizing<[u8; 32]>, limit: usize) -> Result<Vec<(String, String)>> {
     let conn = Connection::open(path)?;
     SqliteKey::from_bytes(**key).apply(&conn)?;
@@ -738,5 +804,47 @@ mod tests {
         }
         let got = recent_visits(&path, &key(1), 2).unwrap();
         assert_eq!(got, [("B".to_string(), "b".to_string()), ("C".to_string(), "c".to_string())]);
+    }
+
+    #[test]
+    fn bookmarks_come_newest_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("places.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            SqliteKey::from_bytes(*key(1)).apply(&conn).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE bookmarks (url TEXT PRIMARY KEY, title TEXT NOT NULL, created_at INTEGER NOT NULL);
+                 INSERT INTO bookmarks VALUES ('a', 'A', 1), ('b', 'B', 3), ('c', 'C', 2);",
+            )
+            .unwrap();
+        }
+        let got = bookmarks(&path, &key(1)).unwrap();
+        let urls: Vec<_> = got.iter().map(|(_, url)| url.as_str()).collect();
+        assert_eq!(urls, ["b", "c", "a"]);
+        assert_eq!(got[0].0, "B");
+    }
+
+    #[test]
+    fn settings_come_sorted_by_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.db");
+        {
+            let conn = Connection::open(&path).unwrap();
+            SqliteKey::from_bytes(*key(1)).apply(&conn).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE settings (id INTEGER PRIMARY KEY, key TEXT NOT NULL UNIQUE, value TEXT NOT NULL);
+                 INSERT INTO settings (key, value) VALUES ('net.b', 'u:2'), ('dns.a', 'b:true');",
+            )
+            .unwrap();
+        }
+        let got = settings(&path, &key(1)).unwrap();
+        assert_eq!(
+            got,
+            [
+                ("dns.a".to_string(), "b:true".to_string()),
+                ("net.b".to_string(), "u:2".to_string())
+            ]
+        );
     }
 }
