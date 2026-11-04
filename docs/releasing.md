@@ -68,8 +68,8 @@ past Gatekeeper; the keychain prompt; a second window; quit and relaunch. On an 
 one is available.
 
 **Android (APKs):** on a non-Mali arm64 device: install, browse, download. Install over the
-previous release: the profile is kept. On a Mali device: the notice shows (KI-001). The
-armeabi-v7a APK on a 32-bit device.
+previous release: the profile is kept. On a Mali device: the notice shows (KI-001). Install
+the armeabi-v7a APK on a 32-bit device and browse.
 
 **Windows (zip),** on physical hardware, at 125% and at 150% display scaling:
 
