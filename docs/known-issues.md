@@ -104,7 +104,8 @@ Some devices run a 32-bit Android on 64-bit hardware; the SM-T510's Android 11 r
 
 ## KI-007: no Secret Service on Linux
 
-- **Symptom:** Beacon does not start and says the profile cannot be encrypted.
+- **Symptom:** Beacon does not start: "Beacon could not reach the keychain that holds the
+  profile's key."
 - **Cause:** every profile is encrypted, and on Linux its key lives in the Secret Service
   (GNOME Keyring, KWallet). A desktop or session without one has nowhere to keep it.
 - **Status:** won't fix; an unencrypted profile is not an option. Install and start a
