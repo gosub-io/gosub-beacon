@@ -90,8 +90,9 @@ Some devices run a 32-bit Android on 64-bit hardware; the SM-T510's Android 11 r
 
 - **Cause:** the manifest takes Skia as a prebuilt archive, and that archive is per
   architecture; there is only an x86_64 stanza (`only-arches`).
-- **Revisit when:** someone needs aarch64. A native aarch64 build prints the archive key to
-  add as a second stanza; see `packaging/flatpak/README.md`.
+- **Revisit when:** someone needs aarch64. After a native aarch64 build of the GTK frontend,
+  `packaging/flatpak/refresh-skia.sh` prints the stanza for its archive; change its
+  `only-arches` to `aarch64` and add it beside the x86_64 one.
 
 ## KI-006: SmartScreen warns on the Windows zip
 
