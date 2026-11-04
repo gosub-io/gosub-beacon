@@ -66,8 +66,11 @@ grep -q "<release version=\"$VERSION\"" "$ROOT/packaging/flatpak/io.gosub.beacon
     die "io.gosub.beacon.metainfo.xml has no <release> for $VERSION"
 [ -f "$ROOT/$NOTES" ] || die "no release notes at $NOTES"
 
-# The part every artifact name shares, by swift/package.sh's rules.
-ID=$VERSION-$(git -C "$ROOT" rev-list --count HEAD)-${COMMIT:0:10}-engine-${ENGINE:0:10}
+# The part every artifact name shares, by swift/package.sh's rules. --short=10 rather than a
+# cut: git lengthens an abbreviation that would be ambiguous, and the packagers ask git.
+SHORT=$(git -C "$ROOT" rev-parse --short=10 HEAD)
+ENGINE_SHORT=$(git -C "$ENGINE_DIR" rev-parse --short=10 HEAD)
+ID=$VERSION-$(git -C "$ROOT" rev-list --count HEAD)-$SHORT-engine-$ENGINE_SHORT
 OUT=$ROOT/target/release/$VERSION
 WORK=$ROOT/target/release/work
 rm -rf "$OUT" "$WORK"
@@ -81,7 +84,7 @@ say "flatpak bundle"
 sed -e "s|^\( *path: \)\.\./\.\.$|\1$ROOT|" \
     -e "s|^\( *\)- cargo-sources.json$|\1- $ROOT/packaging/flatpak/cargo-sources.json|" \
     -e "s|^\( *\)commit: $ENGINE$|&\n\1tag: $ENGINE_TAG|" \
-    -e "s|^\( *\)CARGO_NET_OFFLINE: 'true'$|&\n\1BEACON_COMMIT: '${COMMIT:0:10}'\n\1BEACON_ENGINE_COMMIT: '${ENGINE:0:10}'|" \
+    -e "s|^\( *\)CARGO_NET_OFFLINE: 'true'$|&\n\1BEACON_COMMIT: '$SHORT'\n\1BEACON_ENGINE_COMMIT: '$ENGINE_SHORT'|" \
     "$MANIFEST" >"$WORK/io.gosub.beacon.yml"
 for line in "path: $ROOT" "- $ROOT/packaging/flatpak/cargo-sources.json" "tag: $ENGINE_TAG" "BEACON_COMMIT: "; do
     grep -qF -- "$line" "$WORK/io.gosub.beacon.yml" || die "could not rewrite the manifest: no '$line'"
