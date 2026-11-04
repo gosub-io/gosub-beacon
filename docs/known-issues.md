@@ -14,6 +14,9 @@ or won't be fixed also says when to look again.
 | [KI-002](#ki-002-older-gpus-reject-the-default-wgpu-limits) | Android, older GPUs | Beacon exits right after launch | Fixed |
 | [KI-003](#ki-003-opengl-es-cannot-run-vello) | OpenGL ES only | Vello cannot run | Won't fix |
 | [KI-004](#ki-004-32-bit-only-android-devices) | Android, 32-bit only | APK does not install; settings lost | Fixed |
+| [KI-005](#ki-005-the-flatpak-is-x86_64-only) | Linux, aarch64 | No flatpak for the platform | Open |
+| [KI-006](#ki-006-smartscreen-warns-on-the-windows-zip) | Windows | SmartScreen warns on the first start | Open |
+| [KI-007](#ki-007-no-secret-service-on-linux) | Linux, no Secret Service | Beacon stops at startup with an error | Won't fix |
 
 ## KI-001: Mali GPUs lose the Vulkan device
 
@@ -82,6 +85,31 @@ Some devices run a 32-bit Android on 64-bit hardware; the SM-T510's Android 11 r
 - **All engine settings lost:** an engine default of `u:4294967296` overflowed a 32-bit
   `usize`, and the engine dropped its whole settings schema. Fixed in
   [gosub-engine#1465](https://github.com/gosub-io/gosub-engine/pull/1465).
+
+## KI-005: the flatpak is x86_64 only
+
+- **Cause:** the manifest takes Skia as a prebuilt archive, and that archive is per
+  architecture; there is only an x86_64 stanza (`only-arches`).
+- **Revisit when:** someone needs aarch64. A native aarch64 build prints the archive key to
+  add as a second stanza; see `packaging/flatpak/README.md`.
+
+## KI-006: SmartScreen warns on the Windows zip
+
+- **Symptom:** "Windows protected your PC" on the first start of `GosubBeacon.exe`. "More
+  info", then "Run anyway" starts it.
+- **Cause:** the executable is not code-signed, and a new unsigned binary has no
+  SmartScreen reputation.
+- **Revisit when:** there is a code-signing certificate for Windows.
+
+## KI-007: no Secret Service on Linux
+
+- **Symptom:** Beacon does not start and says the profile cannot be encrypted.
+- **Cause:** every profile is encrypted, and on Linux its key lives in the Secret Service
+  (GNOME Keyring, KWallet). A desktop or session without one has nowhere to keep it.
+- **Status:** won't fix; an unencrypted profile is not an option. Install and start a
+  Secret Service provider.
+- **Revisit when:** Beacon can keep the profile key without a keychain, for example behind
+  a passphrase prompt.
 
 ## Tested devices
 

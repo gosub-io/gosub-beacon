@@ -13,6 +13,8 @@ More in [docs/screenshots](./docs/screenshots/).
 
 ## Platforms
 
+Preview builds for all four are on the [Releases page](https://github.com/gosub-io/gosub-beacon/releases).
+
 - **Linux**: the GTK shell, the most complete one. It is also packaged as a Flatpak,
   which brings its own GTK and so runs on distributions whose GTK is too old; see
   [packaging/flatpak](./packaging/flatpak/README.md). A second, minimal frontend in egui
