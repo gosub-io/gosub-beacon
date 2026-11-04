@@ -29,12 +29,8 @@ GitHub at the pinned commit. `--install-deps-from=flathub` matters on a first ru
 SDK, the rust-stable extension and the GL extension (~1.5 GB) are not installed yet. After
 that it compiles the engine and Beacon from scratch, so budget for it.
 
-To ship the result:
-
-```bash
-VERSION=0.1.1-preview.1   # the workspace version in Cargo.toml
-flatpak build-bundle ~/.local/share/flatpak/repo "GosubBeacon-$VERSION.flatpak" io.gosub.beacon
-```
+A release bundle comes from `scripts/release.sh` (see `docs/releasing.md`), which builds a
+copy of this manifest with the engine tag and both commits filled in.
 
 ## Things that will bite
 
@@ -42,8 +38,8 @@ flatpak build-bundle ~/.local/share/flatpak/repo "GosubBeacon-$VERSION.flatpak" 
 `Cargo.lock` was resolved against, so a bundle says which engine it holds. Move it with
 every engine bump: `cargo-sources.json` is derived from that lock and the build runs
 `--locked --offline`, so a commit with different dependencies fails with "the lock file
-needs to be updated" and no network to fix it. A release pins the tag as well
-(`tag: beacon-v<version>` next to `commit`). To build against a local engine checkout
+needs to be updated" and no network to fix it. `scripts/release.sh` adds the tag
+(`tag: beacon-v<version>` next to `commit`), so a release fails if the two disagree. To build against a local engine checkout
 while iterating, swap in a `dir` source with `path: ../../../gosub-engine` and
 `skip: [target, .git]`.
 
