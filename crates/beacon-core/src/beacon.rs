@@ -555,6 +555,9 @@ impl Beacon {
                 if is_active {
                     out.push(BeaconEvent::LoadProgress(our_id, None));
                 }
+                // Said, not just set: an untitled page sends no title of its own, and the
+                // window title would keep the previous page's.
+                out.push(BeaconEvent::TitleChanged(our_id, url.to_string()));
                 out.push(BeaconEvent::UrlChanged(our_id, url));
                 out.push(BeaconEvent::LoadingChanged(our_id, false));
                 out.push(BeaconEvent::TabsChanged);
@@ -792,6 +795,21 @@ mod tests {
         ));
         assert_eq!(title(&beacon), "Hacker News");
         assert!(out.contains(&BeaconEvent::TitleChanged(tab_id, "Hacker News".into())));
+    }
+
+    #[test]
+    fn an_untitled_page_is_titled_with_its_url() {
+        let (mut beacon, tab_id, engine_id) = beacon_with_tab();
+        beacon.with_tab(tab_id, |tab| tab.set_title("Previous page"));
+        let url = url::Url::parse("file:///C:/untitled.html").unwrap();
+        let out = beacon.on_engine_event(nav(
+            engine_id,
+            NavigationEvent::Finished {
+                nav_id: NavigationId::new(),
+                url: url.clone(),
+            },
+        ));
+        assert!(out.contains(&BeaconEvent::TitleChanged(tab_id, url.to_string())));
     }
 
     #[test]
