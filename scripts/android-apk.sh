@@ -12,7 +12,7 @@
 # and BEACON_ANDROID_KEY_PASS (defaults to the keystore's) sign with the release key. Without
 # them it is the debug key, and a phone with a release build on it has to uninstall first,
 # which takes the profile with it.
-# Output: target/android/gosub-beacon-<version>-<abi>.apk.
+# Output: target/android/GosubBeacon-<version>-<build>-<commit>-engine-<engine>-<abi>.apk.
 set -euo pipefail
 
 INSTALL=0
@@ -49,8 +49,21 @@ if [ "$(git -C "$ROOT" rev-parse --is-shallow-repository)" = true ]; then
 fi
 VERSION_CODE=$(git -C "$ROOT" rev-list --count HEAD)
 
+# Same identity rules as swift/package.sh: the short SHA (10), -dirty when tracked files
+# changed, unknown outside a git checkout. The engine is the ../gosub-engine checkout.
+identity() {
+    local sha
+    sha=$(git -C "$1" rev-parse --short=10 HEAD 2>/dev/null) || { echo unknown; return; }
+    if [ -n "$(git -C "$1" status --porcelain --untracked-files=no)" ]; then
+        sha=$sha-dirty
+    fi
+    echo "$sha"
+}
+COMMIT=$(identity "$ROOT")
+ENGINE=$(identity "$ROOT/../gosub-engine")
+
 OUT=$ROOT/target/android
-APK=$OUT/gosub-beacon-$VERSION-$ABI.apk
+APK=$OUT/GosubBeacon-$VERSION-$VERSION_CODE-$COMMIT-engine-$ENGINE-$ABI.apk
 STAGE=$OUT/stage
 rm -rf "$STAGE"
 mkdir -p "$STAGE/apk/lib" "$STAGE/res"
