@@ -24,9 +24,9 @@ the Windows workflow, which builds against the engine tag and uploads the zip.
 
 ```bash
 git -C ../gosub-engine tag -a beacon-v<version> -m "Beacon <version>" <engine-commit>
-git -C ../gosub-engine push upstream beacon-v<version>    # upstream: gosub-io/gosub-engine
+git -C ../gosub-engine push https://github.com/gosub-io/gosub-engine.git beacon-v<version>
 git tag -a v<version> -m "Gosub Beacon <version>"
-git push origin v<version>
+git push https://github.com/gosub-io/gosub-beacon.git v<version>
 ```
 
 ## 3. The DMG
