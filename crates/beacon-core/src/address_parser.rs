@@ -103,28 +103,29 @@ impl GosubAddressParser {
             }
         }
 
+        // A filesystem path typed straight into the address bar becomes file://. Before the
+        // URL parse: that reads `C:\...` as a URL with the scheme `c`.
+        if let Some(url) = Self::file_url_for_path(address) {
+            return Ok((mode, url));
+        }
+
         match Url::parse(address) {
             Ok(url) => Ok((mode, url)),
-            Err(url::ParseError::RelativeUrlWithoutBase) => {
-                // A filesystem path typed straight into the address bar becomes file://.
-                if let Some(url) = Self::file_url_for_path(address) {
-                    return Ok((mode, url));
-                }
-                match Self::parse(&format!("{}{}", DEFAULT_SCHEME, address)) {
-                    Ok((_, url)) => Ok((mode, url)),
-                    Err(e) => Err(e),
-                }
-            }
+            Err(url::ParseError::RelativeUrlWithoutBase) => match Self::parse(&format!("{}{}", DEFAULT_SCHEME, address)) {
+                Ok((_, url)) => Ok((mode, url)),
+                Err(e) => Err(e),
+            },
             Err(e) => Err(anyhow::anyhow!("Cannot parse URL: {}", e)),
         }
     }
 
-    /// Turn an absolute (`/...`) or home-relative (`~/...`) filesystem path into a
-    /// `file://` URL. Anything else returns `None` and goes through the web fallback.
+    /// Turn an absolute filesystem path (`/...`; on Windows `C:\...` or `\\server\share\...`)
+    /// or a home-relative one (`~/...`) into a `file://` URL. Anything else returns `None`
+    /// and goes through the URL parse.
     fn file_url_for_path(address: &str) -> Option<Url> {
         let path = if let Some(rest) = address.strip_prefix("~/") {
             std::path::PathBuf::from(std::env::var_os("HOME")?).join(rest)
-        } else if address.starts_with('/') {
+        } else if std::path::Path::new(address).is_absolute() {
             std::path::PathBuf::from(address)
         } else {
             return None;
@@ -193,7 +194,20 @@ mod tests {
         test_41: ("source:about:blank", GosubRenderMode::Source, "about", "", "blank"),
 
         test_50: ("file:///etc/hostname", GosubRenderMode::Rendered, "file", "", "/etc/hostname"),
+    }
+
+    #[cfg(unix)]
+    address_valid! {
         test_51: ("/no/such/file.html", GosubRenderMode::Rendered, "file", "", "/no/such/file.html"),
         test_52: ("/tmp", GosubRenderMode::Rendered, "file", "", "/tmp/"),
+    }
+
+    #[cfg(windows)]
+    address_valid! {
+        test_60: ("C:\\no\\such\\file.html", GosubRenderMode::Rendered, "file", "", "/C:/no/such/file.html"),
+        test_61: ("c:/no/such/file.html", GosubRenderMode::Rendered, "file", "", "/C:/no/such/file.html"),
+        test_62: ("C:\\Windows", GosubRenderMode::Rendered, "file", "", "/C:/Windows/"),
+        test_63: ("\\\\server\\share\\file.html", GosubRenderMode::Rendered, "file", "server", "/share/file.html"),
+        test_64: ("source:C:\\no\\such\\file.html", GosubRenderMode::Source, "file", "", "/C:/no/such/file.html"),
     }
 }
