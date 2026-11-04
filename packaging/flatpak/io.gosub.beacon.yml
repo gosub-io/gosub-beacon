@@ -77,7 +77,7 @@ modules:
       # keep the commit at the engine `beacon` this Cargo.lock was resolved against.
       - type: git
         url: https://github.com/gosub-io/gosub-engine.git
-        commit: 68d0cfcaa69784dcc8c7c5cd0bb1dc41b31e53f9
+        commit: 6e6af65782aadc90445b3419169b5b3c61efd6ba
         dest: gosub-engine
 
       # Prebuilt Skia, matching skia-bindings 0.153.3 and the feature set the GTK build
