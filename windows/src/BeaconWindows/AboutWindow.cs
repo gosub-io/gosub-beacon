@@ -151,9 +151,7 @@ internal sealed class AboutWindow : Window
         _toggle.Content = "Credits";
         _toggle.Width = 80;
         _toggle.Height = 24;
-        _toggle.HorizontalAlignment = HorizontalAlignment.Left;
         _toggle.VerticalAlignment = VerticalAlignment.Center;
-        _toggle.Margin = new Thickness(12, 0, 0, 0);
         _toggle.Click += (_, _) => TogglePage();
 
         var licenses = new Button
@@ -161,9 +159,8 @@ internal sealed class AboutWindow : Window
             Content = "Licences",
             Width = 80,
             Height = 24,
-            HorizontalAlignment = HorizontalAlignment.Left,
             VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(100, 0, 0, 0),
+            Margin = new Thickness(8, 0, 0, 0),
         };
         licenses.Click += (_, _) =>
         {
@@ -176,7 +173,6 @@ internal sealed class AboutWindow : Window
             Content = "Close",
             Width = 80,
             Height = 24,
-            HorizontalAlignment = HorizontalAlignment.Right,
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(0, 0, 12, 0),
             IsCancel = true,
@@ -233,9 +229,18 @@ internal sealed class AboutWindow : Window
         centre.Children.Add(info);
         centre.Children.Add(second);
 
+        var left = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(12, 0, 0, 0) };
+        left.Children.Add(_toggle);
+        left.Children.Add(licenses);
+
+        // A column each, so the text centres in the space the buttons leave.
         var bar = new Grid { Height = BarHeight, Background = SystemColors.ControlBrush };
-        bar.Children.Add(_toggle);
-        bar.Children.Add(licenses);
+        bar.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        bar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        bar.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        Grid.SetColumn(centre, 1);
+        Grid.SetColumn(close, 2);
+        bar.Children.Add(left);
         bar.Children.Add(centre);
         bar.Children.Add(close);
         return bar;
