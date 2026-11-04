@@ -106,7 +106,7 @@ windows\package.ps1
 ```
 
 This is what the `Windows` CI workflow runs, and the zip it uploads is the one to test and
-ship: `target\windows\GosubBeacon-<version>-win-x64.zip`. It builds `beacon.dll` in release,
+ship: `target\windows\GosubBeacon-<version>-<build>-<commit>-engine-<engine>-win-x64.zip`. It builds `beacon.dll` in release,
 publishes the shell self-contained, copies the VC++ runtime DLLs `beacon.dll` imports next to
 it, and zips the lot. Nothing has to be installed to run it: no .NET runtime, no VC++
 redistributable. Not `+crt-static`: skia-binaries publishes no static-CRT build of the

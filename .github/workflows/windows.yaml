@@ -38,9 +38,10 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  # As in ci.yaml: the engine is a sibling checkout, at its `beacon` branch.
+  # As in ci.yaml: the engine is a sibling checkout, at its `beacon` branch. A release tag
+  # v<version> builds against the engine tag beacon-v<version> instead.
   ENGINE_REPO: gosub-io/gosub-engine
-  ENGINE_REF: beacon
+  ENGINE_REF: ${{ startsWith(github.ref, 'refs/tags/v') && format('beacon-{0}', github.ref_name) || 'beacon' }}
 
 jobs:
   package:
@@ -49,6 +50,8 @@ jobs:
       - uses: actions/checkout@v7
         with:
           path: gosub-beacon
+          # The zip name carries the commit count, which a shallow clone gets wrong.
+          fetch-depth: 0
       - uses: actions/checkout@v7
         with:
           repository: ${{ env.ENGINE_REPO }}

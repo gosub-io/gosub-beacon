@@ -13,6 +13,8 @@ More in [docs/screenshots](./docs/screenshots/).
 
 ## Platforms
 
+Preview builds for all four are on the [Releases page](https://github.com/gosub-io/gosub-beacon/releases).
+
 - **Linux**: the GTK shell, the most complete one. It is also packaged as a Flatpak,
   which brings its own GTK and so runs on distributions whose GTK is too old; see
   [packaging/flatpak](./packaging/flatpak/README.md). A second, minimal frontend in egui
@@ -190,7 +192,7 @@ rustup toolchain install "$(cat scripts/release-toolchain)" --target aarch64-lin
 it. Then:
 
 ```bash
-scripts/android-apk.sh              # release build, debug-signed: target/android/gosub-beacon-<version>-<abi>.apk
+scripts/android-apk.sh              # release build, debug-signed: target/android/GosubBeacon-<version>-<build>-<commit>-engine-<engine>-<abi>.apk
 scripts/android-apk.sh --install    # also installs it over adb and starts it
 scripts/android-apk.sh --debug      # debug profile instead of release
 adb logcat -s beacon RustStdoutStderr   # the log; RUST_LOG cannot be set for an app
