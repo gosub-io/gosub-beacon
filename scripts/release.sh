@@ -90,7 +90,12 @@ for line in "path: $ROOT" "- $ROOT/packaging/flatpak/cargo-sources.json" "tag: $
     grep -qF -- "$line" "$WORK/io.gosub.beacon.yml" || die "could not rewrite the manifest: no '$line'"
 done
 # The state dir outlives a run: it caches the vendored crates and the Skia archive.
-(cd "$WORK" && flatpak run org.flatpak.Builder --force-clean --user --install-deps-from=flathub \
+# An empty global git config: the builder runs `git lfs install` in its checkouts, which
+# fails on a core.hooksPath that already has a pre-push hook. No rofiles-fuse: it cannot
+# mount from inside the Flathub builder on a fusermount3-only host. Neither changes the build.
+: >"$WORK/gitconfig"
+(cd "$WORK" && flatpak run --env=GIT_CONFIG_GLOBAL="$WORK/gitconfig" org.flatpak.Builder \
+    --disable-rofiles-fuse --force-clean --user --install-deps-from=flathub \
     --state-dir="$ROOT/target/release/flatpak-state" --repo=flatpak-repo flatpak-build io.gosub.beacon.yml)
 # --runtime-repo: installing the bundle then fetches the GNOME runtime from Flathub itself.
 flatpak build-bundle --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo \
