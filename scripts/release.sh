@@ -52,10 +52,13 @@ ENGINE=$(git -C "$ENGINE_DIR" rev-parse HEAD)
     die "$ROOT is not at tag $TAG"
 [ "$(git -C "$ENGINE_DIR" rev-parse -q --verify "refs/tags/$ENGINE_TAG^{commit}")" = "$ENGINE" ] ||
     die "$ENGINE_DIR is not at tag $ENGINE_TAG"
-git ls-remote --exit-code --tags "https://github.com/$REPO.git" "refs/tags/$TAG" >/dev/null ||
-    die "$TAG is not pushed to $REPO"
-git ls-remote --exit-code --tags "https://github.com/$ENGINE_REPO.git" "refs/tags/$ENGINE_TAG" >/dev/null ||
-    die "$ENGINE_TAG is not pushed to $ENGINE_REPO"
+# The commit a tag names on GitHub; an annotated tag lists it as <tag>^{}.
+remote_tag() {
+    git ls-remote --tags "https://github.com/$1.git" "refs/tags/$2" "refs/tags/$2^{}" | sort -k2 | tail -1 | cut -f1
+}
+[ "$(remote_tag "$REPO" "$TAG")" = "$COMMIT" ] || die "$TAG on $REPO is not $COMMIT: not pushed, or moved"
+[ "$(remote_tag "$ENGINE_REPO" "$ENGINE_TAG")" = "$ENGINE" ] ||
+    die "$ENGINE_TAG on $ENGINE_REPO is not $ENGINE: not pushed, or moved"
 
 PINNED=$(sed -n 's/^ *commit: \([0-9a-f]\{40\}\)$/\1/p' "$MANIFEST")
 [ "$PINNED" = "$ENGINE" ] || die "the flatpak manifest pins engine $PINNED, not $ENGINE_TAG ($ENGINE)"
