@@ -3,7 +3,7 @@
 # app-local deployment), so neither .NET nor the VC++ redistributable has to be installed.
 # CI uploads what this makes; test that zip, not a local build.
 #
-#   windows\package.ps1            -> target\windows\GosubBeacon-<version>-win-x64.zip
+#   windows\package.ps1            -> target\windows\GosubBeacon-<version>-<build>-<commit>-engine-<engine>-win-x64.zip
 $ErrorActionPreference = "Stop"
 
 $root = Resolve-Path "$PSScriptRoot\.."
@@ -18,7 +18,28 @@ $target = "x86_64-pc-windows-msvc"
 $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"' | Select-Object -First 1).Matches.Groups[1].Value
 $out = Join-Path $root "target\windows"
 $stage = Join-Path $out "GosubBeacon"
-$zip = Join-Path $out "GosubBeacon-$version-win-x64.zip"
+
+# Same identity rules as swift/package.sh: the short SHA (10), "-dirty" when tracked files
+# changed, "unknown" outside a git checkout. The engine is the ..\gosub-engine checkout.
+# try: under "Stop", Windows PowerShell turns a native command's stderr into an exception.
+function GitOutput {
+    try { $out = git @args 2>$null } catch { return $null }
+    if ($LASTEXITCODE) { return $null }
+    return $out
+}
+
+function Identity($dir) {
+    $sha = GitOutput -C $dir rev-parse --short=10 HEAD
+    if (-not $sha) { return "unknown" }
+    if (GitOutput -C $dir status --porcelain --untracked-files=no) { return "$sha-dirty" }
+    return $sha
+}
+
+$build = GitOutput rev-list --count HEAD
+if (-not $build) { $build = "0" }
+$commit = Identity $root
+$engine = Identity (Join-Path $root "..\gosub-engine")
+$zip = Join-Path $out "GosubBeacon-$version-$build-$commit-engine-$engine-win-x64.zip"
 
 Write-Host "==> beacon.dll (release, $target)"
 cargo build -p beacon-ffi --release --target $target

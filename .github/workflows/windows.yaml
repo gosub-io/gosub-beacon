@@ -50,6 +50,8 @@ jobs:
         with:
           path: gosub-beacon
       - uses: actions/checkout@v7
+          # The zip name carries the commit count, which a shallow clone gets wrong.
+          fetch-depth: 0
         with:
           repository: ${{ env.ENGINE_REPO }}
           ref: ${{ env.ENGINE_REF }}
