@@ -475,6 +475,14 @@ impl<C: BeaconConfig> BrowserEngine<C> {
         let tab = rt.block_on(builder.create()).map_err(|e| anyhow::anyhow!("create_tab: {e:?}"))?;
         Ok(tab)
     }
+
+    /// Close an engine tab without waiting for its worker. The zone gives its slot back
+    /// at once; a tab only told `CloseTab` stays counted against `max_tabs`.
+    pub fn close_tab(&mut self, rt: &Runtime, tab_id: gosub_engine::tab::TabId) {
+        if let Some(closing) = self.zone.detach_tab(tab_id) {
+            rt.spawn(closing);
+        }
+    }
 }
 
 /// The jar the engine gave the zone: the one passed in for a private zone, the vault's when

@@ -541,9 +541,9 @@ impl BeaconApp {
         }
         if let Some(handle) = self.tabs.lock().unwrap().get_tab(tab_id).and_then(|t| t.tab_handle()) {
             self.beacon.unbind_engine_tab(handle.tab_id);
-            self.rt.spawn(async move {
-                let _ = handle.send(TabCommand::CloseTab).await;
-            });
+            if let Some(engine) = self.engine.as_mut() {
+                engine.close_tab(self.rt, handle.tab_id);
+            }
         }
         if let Some(tab) = self.tabs.lock().unwrap().get_tab(tab_id) {
             self.beacon.closed_mut().push(tab.url().to_string(), None);
