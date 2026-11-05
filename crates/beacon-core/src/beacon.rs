@@ -483,11 +483,21 @@ impl Beacon {
                 out
             }
 
-            // Load ended without a page change (stop button, download offer).
+            // Load ended without a page change (a download offer, a 204). The shell named the
+            // tab after the address when the load began; the page that stays is the current
+            // entry's, so the tab goes back to its address and title.
             NavigationEvent::Cancelled { nav_id, .. } => {
                 crate::timeline::ended(our_id, nav_id.0, Some("cancelled"), crate::devtools::now_ms());
-                self.with_tab(our_id, |tab| tab.set_loading(false));
+                let mut restored = None;
+                self.with_tab(our_id, |tab| {
+                    tab.set_loading(false);
+                    restored = tab.return_to_current_entry();
+                });
                 let mut out = vec![BeaconEvent::LoadingChanged(our_id, false), BeaconEvent::TabsChanged];
+                if let Some((url, title)) = restored {
+                    out.push(BeaconEvent::UrlChanged(our_id, url));
+                    out.push(BeaconEvent::TitleChanged(our_id, title));
+                }
                 if is_active {
                     out.push(BeaconEvent::LoadProgress(our_id, None));
                 }

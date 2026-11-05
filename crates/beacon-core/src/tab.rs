@@ -23,6 +23,12 @@ impl History {
         self.snapshot = Some(snapshot);
     }
 
+    /// The entry the tab is on: the page it shows, once one has committed.
+    fn current_entry(&self) -> Option<&gosub_engine::tab::HistoryEntrySummary> {
+        let snapshot = self.snapshot.as_ref()?;
+        snapshot.entries.get(snapshot.current?.0)
+    }
+
     pub fn can_go_back(&self) -> bool {
         self.snapshot.as_ref().is_some_and(|s| s.can_go_back)
     }
@@ -329,6 +335,21 @@ impl GosubTab {
 
     pub fn history_mut(&mut self) -> &mut History {
         &mut self.history
+    }
+
+    /// Back to the page the tab shows, after a load that ended without a new one (a 204, a
+    /// download offer) left the address and title the shell gave the tab when it began.
+    /// The address and title when they changed.
+    pub fn return_to_current_entry(&mut self) -> Option<(Url, String)> {
+        let entry = self.history.current_entry()?.clone();
+        if entry.url == self.url {
+            return None;
+        }
+        let title = entry.title.filter(|t| !t.trim().is_empty());
+        let title = title.unwrap_or_else(|| entry.url.to_string());
+        self.set_url(entry.url.clone());
+        self.set_title(&title);
+        Some((entry.url, title))
     }
 
     pub fn set_title(&mut self, title: &str) {
@@ -682,6 +703,23 @@ mod test {
     /// `(title, depth)` per line, which is the shape of the drawing.
     fn shape(history: &History) -> Vec<(String, usize)> {
         history.tree().into_iter().map(|row| (row.title.unwrap(), row.depth)).collect()
+    }
+
+    #[test]
+    fn a_load_that_ends_in_place_takes_the_tab_back_to_its_page() {
+        let mut tab = GosubTab::new(Url::parse("https://b.test/").unwrap(), "b");
+        tab.history = history(&[("a", None), ("b", Some(0))], 1, &[]);
+        // What the shell does when the user asks for another address.
+        let gone = Url::parse("https://b.test/status/204").unwrap();
+        tab.set_url(gone.clone());
+        tab.set_title(gone.as_str());
+
+        let back = tab.return_to_current_entry();
+        assert_eq!(back, Some((Url::parse("https://b.test/").unwrap(), "b".to_string())));
+        assert_eq!(tab.url().as_str(), "https://b.test/");
+        assert_eq!(tab.title(), "b");
+        // Already there: nothing to tell the shell.
+        assert_eq!(tab.return_to_current_entry(), None);
     }
 
     #[test]
