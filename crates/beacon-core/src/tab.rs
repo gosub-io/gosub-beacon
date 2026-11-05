@@ -298,7 +298,7 @@ impl GosubTab {
     }
 
     /// Whether `nav_id` is the navigation the engine started last (or no start was seen).
-    /// One a newer navigation replaced can still report its end; that end is not the tab's.
+    /// A newer navigation replaced can still report its end; that end is not the tab's.
     pub fn is_latest_navigation(&self, nav_id: NavigationId) -> bool {
         self.navigation.is_none_or(|latest| latest == nav_id)
     }
