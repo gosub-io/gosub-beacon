@@ -1,5 +1,6 @@
 use gosub_engine::tab::TabHandle;
 use gosub_engine::tab::TabId as EngineTabId;
+use gosub_engine::NavigationId;
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::fmt::Debug;
@@ -201,6 +202,8 @@ pub struct GosubTab {
     content: String,
     /// Handle to the engine-side tab that drives navigation and rendering.
     tab_handle: Option<TabHandle>,
+    /// The navigation the engine started last (see `is_latest_navigation`).
+    navigation: Option<NavigationId>,
 }
 
 impl Debug for GosubTab {
@@ -228,6 +231,7 @@ impl GosubTab {
             favicon: None,
             content: String::new(),
             tab_handle: None,
+            navigation: None,
         }
     }
 
@@ -287,6 +291,16 @@ impl GosubTab {
 
     pub fn set_loading(&mut self, loading: bool) {
         self.loading = loading;
+    }
+
+    pub fn set_navigation(&mut self, nav_id: NavigationId) {
+        self.navigation = Some(nav_id);
+    }
+
+    /// Whether `nav_id` is the navigation the engine started last (or no start was seen).
+    /// One a newer navigation replaced can still report its end; that end is not the tab's.
+    pub fn is_latest_navigation(&self, nav_id: NavigationId) -> bool {
+        self.navigation.is_none_or(|latest| latest == nav_id)
     }
 
     pub fn id(&self) -> TabId {
@@ -676,6 +690,7 @@ impl GosubTabManager {
 mod test {
     use super::{GosubTab, GosubTabManager, History, HistoryEntryId, HistorySnapshot, TabCommand, TabId};
     use gosub_engine::tab::HistoryEntrySummary;
+    use gosub_engine::NavigationId;
     use url::Url;
 
     /// A history whose entries are `(name, parent)` in creation order, with `current` showing
@@ -720,6 +735,17 @@ mod test {
         assert_eq!(tab.title(), "b");
         // Already there: nothing to tell the shell.
         assert_eq!(tab.return_to_current_entry(), None);
+    }
+
+    #[test]
+    fn only_the_latest_navigation_is_the_tabs() {
+        let mut tab = GosubTab::new(Url::parse("https://b.test/").unwrap(), "b");
+        let (old, new) = (NavigationId::new(), NavigationId::new());
+        assert!(tab.is_latest_navigation(old), "no start seen yet");
+        tab.set_navigation(old);
+        tab.set_navigation(new);
+        assert!(!tab.is_latest_navigation(old));
+        assert!(tab.is_latest_navigation(new));
     }
 
     #[test]

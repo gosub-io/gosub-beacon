@@ -420,6 +420,7 @@ impl Beacon {
                 // too; those stay flagged until a different page is on its way.
                 self.with_tab(our_id, |tab| {
                     tab.set_loading(true);
+                    tab.set_navigation(nav_id);
                     if tab.url().as_str() != url.as_str() {
                         tab.set_showing_error(false);
                     }
@@ -488,11 +489,19 @@ impl Beacon {
             // entry's, so the tab goes back to its address and title.
             NavigationEvent::Cancelled { nav_id, .. } => {
                 crate::timeline::ended(our_id, nav_id.0, Some("cancelled"), crate::devtools::now_ms());
+                let mut latest = false;
                 let mut restored = None;
                 self.with_tab(our_id, |tab| {
-                    tab.set_loading(false);
-                    restored = tab.return_to_current_entry();
+                    latest = tab.is_latest_navigation(nav_id);
+                    if latest {
+                        tab.set_loading(false);
+                        restored = tab.return_to_current_entry();
+                    }
                 });
+                // A replaced navigation's end: the newer one is still loading.
+                if !latest {
+                    return Vec::new();
+                }
                 let mut out = vec![BeaconEvent::LoadingChanged(our_id, false), BeaconEvent::TabsChanged];
                 if let Some((url, title)) = restored {
                     out.push(BeaconEvent::UrlChanged(our_id, url));
