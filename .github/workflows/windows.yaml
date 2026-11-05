@@ -67,7 +67,7 @@ jobs:
           targets: x86_64-pc-windows-msvc
       # Vendored OpenSSL needs NASM; Strawberry Perl is already on the image.
       - uses: ilammy/setup-nasm@v1
-      - uses: actions/setup-dotnet@v5
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '10.0.x'
       - uses: Swatinem/rust-cache@v2
