@@ -490,7 +490,7 @@ impl Beacon {
             NavigationEvent::Cancelled { nav_id, .. } => {
                 crate::timeline::ended(our_id, nav_id.0, Some("cancelled"), crate::devtools::now_ms());
                 let mut latest = false;
-                let mut restored = None;
+                let mut restored = (None, None);
                 self.with_tab(our_id, |tab| {
                     latest = tab.is_latest_navigation(nav_id);
                     if latest {
@@ -503,8 +503,11 @@ impl Beacon {
                     return Vec::new();
                 }
                 let mut out = vec![BeaconEvent::LoadingChanged(our_id, false), BeaconEvent::TabsChanged];
-                if let Some((url, title)) = restored {
+                let (url, title) = restored;
+                if let Some(url) = url {
                     out.push(BeaconEvent::UrlChanged(our_id, url));
+                }
+                if let Some(title) = title {
                     out.push(BeaconEvent::TitleChanged(our_id, title));
                 }
                 if is_active {

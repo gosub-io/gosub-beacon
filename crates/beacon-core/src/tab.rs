@@ -353,17 +353,23 @@ impl GosubTab {
 
     /// Back to the page the tab shows, after a load that ended without a new one (a 204, a
     /// download offer) left the address and title the shell gave the tab when it began.
-    /// The address and title when they changed.
-    pub fn return_to_current_entry(&mut self) -> Option<(Url, String)> {
-        let entry = self.history.current_entry()?.clone();
-        if entry.url == self.url {
-            return None;
-        }
+    /// The address and the title, each when it changed: a load of the same address (a form
+    /// posting to its own page) still retitled the tab.
+    pub fn return_to_current_entry(&mut self) -> (Option<Url>, Option<String>) {
+        let Some(entry) = self.history.current_entry().cloned() else {
+            return (None, None);
+        };
         let title = entry.title.filter(|t| !t.trim().is_empty());
         let title = title.unwrap_or_else(|| entry.url.to_string());
-        self.set_url(entry.url.clone());
-        self.set_title(&title);
-        Some((entry.url, title))
+        let url = (entry.url != self.url).then(|| {
+            self.set_url(entry.url.clone());
+            entry.url
+        });
+        let title = (title != self.title).then(|| {
+            self.set_title(&title);
+            title
+        });
+        (url, title)
     }
 
     pub fn set_title(&mut self, title: &str) {
@@ -730,11 +736,16 @@ mod test {
         tab.set_title(gone.as_str());
 
         let back = tab.return_to_current_entry();
-        assert_eq!(back, Some((Url::parse("https://b.test/").unwrap(), "b".to_string())));
+        assert_eq!(back, (Some(Url::parse("https://b.test/").unwrap()), Some("b".to_string())));
         assert_eq!(tab.url().as_str(), "https://b.test/");
         assert_eq!(tab.title(), "b");
         // Already there: nothing to tell the shell.
-        assert_eq!(tab.return_to_current_entry(), None);
+        assert_eq!(tab.return_to_current_entry(), (None, None));
+
+        // A form posting to its own page: same address, but the shell retitled the tab.
+        tab.set_title("https://b.test/");
+        assert_eq!(tab.return_to_current_entry(), (None, Some("b".to_string())));
+        assert_eq!(tab.title(), "b");
     }
 
     #[test]
