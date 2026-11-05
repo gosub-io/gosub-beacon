@@ -12,7 +12,7 @@ use gtk4::gio::{Menu, SimpleAction, SimpleActionGroup};
 use gtk4::graphene::Point;
 use gtk4::prelude::*;
 use gtk4::subclass::prelude::*;
-use gtk4::{gdk, PopoverMenu, PopoverMenuFlags};
+use gtk4::{gdk, glib, PopoverMenu, PopoverMenuFlags};
 
 /// Build and pop up the page context menu at `point` (window coordinates) for `tab_id`.
 pub(crate) fn show(window: &super::BrowserWindow, tab_id: TabId, point: Point, hit: HitTestResponse) {
@@ -124,7 +124,12 @@ pub(crate) fn show(window: &super::BrowserWindow, tab_id: TabId, point: Point, h
         .build();
     popover.insert_action_group("page", Some(&actions));
     popover.set_parent(window);
-    popover.connect_closed(|p| p.unparent());
+    // `closed` fires before the chosen item's action is activated; unparenting now would
+    // take the `page` action group away first, and the item would do nothing.
+    popover.connect_closed(|p| {
+        let p = p.clone();
+        glib::idle_add_local_once(move || p.unparent());
+    });
     popover.set_pointing_to(Some(&gdk::Rectangle::new(point.x() as i32, point.y() as i32, 0, 0)));
     popover.popup();
 }
