@@ -420,6 +420,7 @@ impl Beacon {
                 // too; those stay flagged until a different page is on its way.
                 self.with_tab(our_id, |tab| {
                     tab.set_loading(true);
+                    tab.set_navigation(nav_id);
                     if tab.url().as_str() != url.as_str() {
                         tab.set_showing_error(false);
                     }
@@ -483,11 +484,32 @@ impl Beacon {
                 out
             }
 
-            // Load ended without a page change (stop button, download offer).
+            // Load ended without a page change (a download offer, a 204). The shell named the
+            // tab after the address when the load began; the page that stays is the current
+            // entry's, so the tab goes back to its address and title.
             NavigationEvent::Cancelled { nav_id, .. } => {
                 crate::timeline::ended(our_id, nav_id.0, Some("cancelled"), crate::devtools::now_ms());
-                self.with_tab(our_id, |tab| tab.set_loading(false));
+                let mut latest = false;
+                let mut restored = (None, None);
+                self.with_tab(our_id, |tab| {
+                    latest = tab.is_latest_navigation(nav_id);
+                    if latest {
+                        tab.set_loading(false);
+                        restored = tab.return_to_current_entry();
+                    }
+                });
+                // A replaced navigation's end: the newer one is still loading.
+                if !latest {
+                    return Vec::new();
+                }
                 let mut out = vec![BeaconEvent::LoadingChanged(our_id, false), BeaconEvent::TabsChanged];
+                let (url, title) = restored;
+                if let Some(url) = url {
+                    out.push(BeaconEvent::UrlChanged(our_id, url));
+                }
+                if let Some(title) = title {
+                    out.push(BeaconEvent::TitleChanged(our_id, title));
+                }
                 if is_active {
                     out.push(BeaconEvent::LoadProgress(our_id, None));
                 }

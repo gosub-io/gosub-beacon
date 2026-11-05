@@ -1,5 +1,6 @@
 use gosub_engine::tab::TabHandle;
 use gosub_engine::tab::TabId as EngineTabId;
+use gosub_engine::NavigationId;
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::fmt::Debug;
@@ -21,6 +22,12 @@ pub struct History {
 impl History {
     pub fn update(&mut self, snapshot: HistorySnapshot) {
         self.snapshot = Some(snapshot);
+    }
+
+    /// The entry the tab is on: the page it shows, once one has committed.
+    fn current_entry(&self) -> Option<&gosub_engine::tab::HistoryEntrySummary> {
+        let snapshot = self.snapshot.as_ref()?;
+        snapshot.entries.get(snapshot.current?.0)
     }
 
     pub fn can_go_back(&self) -> bool {
@@ -195,6 +202,8 @@ pub struct GosubTab {
     content: String,
     /// Handle to the engine-side tab that drives navigation and rendering.
     tab_handle: Option<TabHandle>,
+    /// The navigation the engine started last (see `is_latest_navigation`).
+    navigation: Option<NavigationId>,
 }
 
 impl Debug for GosubTab {
@@ -222,6 +231,7 @@ impl GosubTab {
             favicon: None,
             content: String::new(),
             tab_handle: None,
+            navigation: None,
         }
     }
 
@@ -283,6 +293,16 @@ impl GosubTab {
         self.loading = loading;
     }
 
+    pub fn set_navigation(&mut self, nav_id: NavigationId) {
+        self.navigation = Some(nav_id);
+    }
+
+    /// Whether `nav_id` is the navigation the engine started last (or no start was seen).
+    /// A newer navigation replaced can still report its end; that end is not the tab's.
+    pub fn is_latest_navigation(&self, nav_id: NavigationId) -> bool {
+        self.navigation.is_none_or(|latest| latest == nav_id)
+    }
+
     pub fn id(&self) -> TabId {
         self.id
     }
@@ -329,6 +349,27 @@ impl GosubTab {
 
     pub fn history_mut(&mut self) -> &mut History {
         &mut self.history
+    }
+
+    /// Back to the page the tab shows, after a load that ended without a new one (a 204, a
+    /// download offer) left the address and title the shell gave the tab when it began.
+    /// The address and the title, each when it changed: a load of the same address (a form
+    /// posting to its own page) still retitled the tab.
+    pub fn return_to_current_entry(&mut self) -> (Option<Url>, Option<String>) {
+        let Some(entry) = self.history.current_entry().cloned() else {
+            return (None, None);
+        };
+        let title = entry.title.filter(|t| !t.trim().is_empty());
+        let title = title.unwrap_or_else(|| entry.url.to_string());
+        let url = (entry.url != self.url).then(|| {
+            self.set_url(entry.url.clone());
+            entry.url
+        });
+        let title = (title != self.title).then(|| {
+            self.set_title(&title);
+            title
+        });
+        (url, title)
     }
 
     pub fn set_title(&mut self, title: &str) {
@@ -655,6 +696,7 @@ impl GosubTabManager {
 mod test {
     use super::{GosubTab, GosubTabManager, History, HistoryEntryId, HistorySnapshot, TabCommand, TabId};
     use gosub_engine::tab::HistoryEntrySummary;
+    use gosub_engine::NavigationId;
     use url::Url;
 
     /// A history whose entries are `(name, parent)` in creation order, with `current` showing
@@ -682,6 +724,39 @@ mod test {
     /// `(title, depth)` per line, which is the shape of the drawing.
     fn shape(history: &History) -> Vec<(String, usize)> {
         history.tree().into_iter().map(|row| (row.title.unwrap(), row.depth)).collect()
+    }
+
+    #[test]
+    fn a_load_that_ends_in_place_takes_the_tab_back_to_its_page() {
+        let mut tab = GosubTab::new(Url::parse("https://b.test/").unwrap(), "b");
+        tab.history = history(&[("a", None), ("b", Some(0))], 1, &[]);
+        // What the shell does when the user asks for another address.
+        let gone = Url::parse("https://b.test/status/204").unwrap();
+        tab.set_url(gone.clone());
+        tab.set_title(gone.as_str());
+
+        let back = tab.return_to_current_entry();
+        assert_eq!(back, (Some(Url::parse("https://b.test/").unwrap()), Some("b".to_string())));
+        assert_eq!(tab.url().as_str(), "https://b.test/");
+        assert_eq!(tab.title(), "b");
+        // Already there: nothing to tell the shell.
+        assert_eq!(tab.return_to_current_entry(), (None, None));
+
+        // A form posting to its own page: same address, but the shell retitled the tab.
+        tab.set_title("https://b.test/");
+        assert_eq!(tab.return_to_current_entry(), (None, Some("b".to_string())));
+        assert_eq!(tab.title(), "b");
+    }
+
+    #[test]
+    fn only_the_latest_navigation_is_the_tabs() {
+        let mut tab = GosubTab::new(Url::parse("https://b.test/").unwrap(), "b");
+        let (old, new) = (NavigationId::new(), NavigationId::new());
+        assert!(tab.is_latest_navigation(old), "no start seen yet");
+        tab.set_navigation(old);
+        tab.set_navigation(new);
+        assert!(!tab.is_latest_navigation(old));
+        assert!(tab.is_latest_navigation(new));
     }
 
     #[test]
