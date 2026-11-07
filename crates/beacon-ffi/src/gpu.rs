@@ -293,11 +293,12 @@ impl ViewSurface {
         // glyph edges.
         let format = caps.formats.iter().copied().find(|f| !f.is_srgb()).unwrap_or(caps.formats[0]);
 
+        let (width, height) = surface_extent(context, width, height);
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
-            width: width.max(1),
-            height: height.max(1),
+            width,
+            height,
             present_mode: caps.present_modes[0],
             alpha_mode: caps.alpha_modes[0],
             view_formats: vec![],
@@ -322,7 +323,11 @@ impl ViewSurface {
     }
 
     pub fn resize(&mut self, context: &FfiWgpuContext, width: u32, height: u32) {
-        if width == 0 || height == 0 || (width == self.config.width && height == self.config.height) {
+        if width == 0 || height == 0 {
+            return;
+        }
+        let (width, height) = surface_extent(context, width, height);
+        if width == self.config.width && height == self.config.height {
             return;
         }
         self.config.width = width;
@@ -398,6 +403,14 @@ impl ViewSurface {
         frame.present();
         true
     }
+}
+
+/// The surface size for a view of `width` x `height` device pixels. `configure` past the
+/// device's texture limit panics where it cannot unwind and aborts the app; clamped, an
+/// oversized view shows a stretched frame instead (GOS-287).
+fn surface_extent(context: &FfiWgpuContext, width: u32, height: u32) -> (u32, u32) {
+    let max = context.device().limits().max_texture_dimension_2d;
+    (width.clamp(1, max), height.clamp(1, max))
 }
 
 /// A full-screen triangle that samples the page texture. Three vertices generated in the

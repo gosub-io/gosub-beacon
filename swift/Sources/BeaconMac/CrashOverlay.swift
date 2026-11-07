@@ -20,7 +20,7 @@ final class CrashOverlay: NSView {
     }
 
     private let title = NSTextField(labelWithString: "This tab has stopped")
-    private let detail = NSTextField(labelWithString: "")
+    private let detail = NSTextField(wrappingLabelWithString: "")
 
     init() {
         super.init(frame: .zero)
@@ -46,6 +46,10 @@ final class CrashOverlay: NSView {
         detail.alignment = .center
         detail.lineBreakMode = .byWordWrapping
         detail.maximumNumberOfLines = 4
+        // The reason is the engine's error text, of any length. A label that will not give
+        // way sideways makes Auto Layout widen the window to fit it - past what the GPU
+        // surface allows, which aborts the app (GOS-287).
+        detail.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         let hint = NSTextField(
             labelWithString: "Reloading gives it a new engine worker and loads the page again."
