@@ -130,7 +130,7 @@ jobs:
           if-no-files-found: ignore
 
   macos:
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v7
         with:
@@ -161,7 +161,7 @@ jobs:
   # beacon-ffi uses Vello here, the egui frontend has its own graph, and a shared cache key
   # would thrash both.
   macos-ffi:
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v7
         with:
@@ -196,11 +196,7 @@ jobs:
   # Its own cache for the same reason as macos-ffi: this is a release build, the others
   # are debug, and sharing a key would thrash them.
   macos-swift:
-    runs-on: macos-14
-    env:
-      # The image defaults to Xcode 15.4 (Swift 5.10); the app is developed with Swift 6.x,
-      # so use the newest Xcode the image carries rather than a compiler nobody builds with.
-      DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v7
         with:
