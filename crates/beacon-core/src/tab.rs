@@ -360,9 +360,7 @@ impl GosubTab {
     /// The address and the title, each when it changed: a load of the same address (a form
     /// posting to its own page) still retitled the tab.
     pub fn return_to_current_entry(&mut self) -> (Option<Url>, Option<String>) {
-        if let Some(favicon) = self.favicon_before_load.take() {
-            self.favicon.get_or_insert(favicon);
-        }
+        self.restore_favicon_before_load();
         let Some(entry) = self.history.current_entry().cloned() else {
             return (None, None);
         };
@@ -396,6 +394,13 @@ impl GosubTab {
     pub fn clear_favicon_for_load(&mut self) {
         if let Some(favicon) = self.favicon.take() {
             self.favicon_before_load = Some(favicon);
+        }
+    }
+
+    /// The load ended and the page stays (a 204, Stop): it gets its favicon back.
+    pub fn restore_favicon_before_load(&mut self) {
+        if let Some(favicon) = self.favicon_before_load.take() {
+            self.favicon.get_or_insert(favicon);
         }
     }
 

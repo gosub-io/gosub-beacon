@@ -560,6 +560,7 @@ impl BrowserWindow {
             let mut manager = self.tab_manager.lock().unwrap();
             if let Some(mut tab) = manager.get_tab(tab_id) {
                 tab.set_loading(false);
+                tab.restore_favicon_before_load();
                 manager.update_tab(tab_id, &tab);
             }
             drop(manager);
