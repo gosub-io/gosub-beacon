@@ -224,7 +224,7 @@ pub unsafe extern "C" fn beacon_tab_crash_reason(browser: *mut BeaconBrowser, ta
 }
 
 /// Give a crashed tab a new engine worker and reload what it was showing. False when the
-/// tab is unknown or the engine would not make one.
+/// tab is unknown, has not crashed, or the engine would not make one.
 ///
 /// # Safety
 /// `browser` must be a live handle from [`crate::beacon_new`].
@@ -346,8 +346,9 @@ impl BeaconBrowser {
         let (url, crashed) = {
             let tabs = self.tabs.lock().unwrap();
             match tabs.get_tab(tab_id) {
-                Some(tab) => (tab.url().to_string(), tab.tab_handle()),
-                None => return false,
+                // A healthy tab's worker is live: replacing it would lose its page.
+                Some(tab) if tab.crashed().is_some() => (tab.url().to_string(), tab.tab_handle()),
+                _ => return false,
             }
         };
         // The crashed engine tab still holds a zone slot.
