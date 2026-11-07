@@ -772,6 +772,7 @@ int main(void) {
     /* ── crashes and forward history ───────────────────────────────────── */
     CHECK(beacon_tab_crash_reason(browser, tab) == NULL, "a healthy tab has no crash reason");
     CHECK(!beacon_revive_tab(browser, 999999), "reviving a tab that does not exist fails rather than crashing");
+    CHECK(!beacon_revive_tab(browser, tab), "and so does reviving one that did not crash");
 
     /* `tab` was walked back and forward earlier, so it has somewhere forward to go or it
      * does not -- either way count and rows must agree. */
