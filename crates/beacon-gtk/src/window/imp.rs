@@ -560,6 +560,7 @@ impl BrowserWindow {
             let mut manager = self.tab_manager.lock().unwrap();
             if let Some(mut tab) = manager.get_tab(tab_id) {
                 tab.set_loading(false);
+                tab.restore_favicon_before_load();
                 manager.update_tab(tab_id, &tab);
             }
             drop(manager);
@@ -2907,6 +2908,7 @@ impl BrowserWindow {
             return;
         };
         tab.set_favicon(None);
+        tab.forget_favicon_before_load();
         tab.set_title(display.as_str());
         tab.set_url(display.clone());
         tab.set_loading(false);
@@ -3140,6 +3142,7 @@ impl BrowserWindow {
             return;
         };
         tab.set_favicon(None);
+        tab.forget_favicon_before_load();
         tab.set_url(blank.clone());
         tab.set_typed_address(Some(address.to_string()));
         tab.set_loading(false);
@@ -4888,7 +4891,11 @@ impl BrowserWindow {
                     return;
                 };
 
-                tab.set_favicon(None);
+                tab.clear_favicon_for_load();
+                // A shell page is shown at once, with no engine load to end.
+                if shell {
+                    tab.forget_favicon_before_load();
+                }
                 tab.set_title(if shell { Self::shell_page_title(&url) } else { url.as_str() });
                 tab.set_url(url.clone());
                 // Typing about:blank is no move to set_url, but it is a new address.

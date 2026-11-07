@@ -198,6 +198,8 @@ pub struct GosubTab {
     /// PNG or ICO. Decoding needs a toolkit, so it is left to whichever frontend is
     /// drawing the tab strip.
     favicon: Option<Vec<u8>>,
+    /// The favicon of the page the tab shows, while a load runs that may end without a page.
+    favicon_before_load: Option<Vec<u8>>,
     /// Actual content (HTML) of the tab
     content: String,
     /// Handle to the engine-side tab that drives navigation and rendering.
@@ -229,6 +231,7 @@ impl GosubTab {
             typed_address: None,
             title: title.to_string(),
             favicon: None,
+            favicon_before_load: None,
             content: String::new(),
             tab_handle: None,
             navigation: None,
@@ -352,10 +355,12 @@ impl GosubTab {
     }
 
     /// Back to the page the tab shows, after a load that ended without a new one (a 204, a
-    /// download offer) left the address and title the shell gave the tab when it began.
+    /// download offer) left the address and title the shell gave the tab when it began, and no
+    /// favicon: the shell cleared it, and the page's comes back.
     /// The address and the title, each when it changed: a load of the same address (a form
     /// posting to its own page) still retitled the tab.
     pub fn return_to_current_entry(&mut self) -> (Option<Url>, Option<String>) {
+        self.restore_favicon_before_load();
         let Some(entry) = self.history.current_entry().cloned() else {
             return (None, None);
         };
@@ -382,6 +387,26 @@ impl GosubTab {
 
     pub fn set_favicon(&mut self, favicon: Option<Vec<u8>>) {
         self.favicon = favicon;
+    }
+
+    /// A load begins: no favicon until the new page sends its own. The page's is kept for a
+    /// load that ends without a page (see `return_to_current_entry`).
+    pub fn clear_favicon_for_load(&mut self) {
+        if let Some(favicon) = self.favicon.take() {
+            self.favicon_before_load = Some(favicon);
+        }
+    }
+
+    /// The load ended and the page stays (a 204, Stop): it gets its favicon back.
+    pub fn restore_favicon_before_load(&mut self) {
+        if let Some(favicon) = self.favicon_before_load.take() {
+            self.favicon.get_or_insert(favicon);
+        }
+    }
+
+    /// The load ended with a page of its own, or an error page: the old favicon is done with.
+    pub fn forget_favicon_before_load(&mut self) {
+        self.favicon_before_load = None;
     }
 }
 
@@ -746,6 +771,25 @@ mod test {
         tab.set_title("https://b.test/");
         assert_eq!(tab.return_to_current_entry(), (None, Some("b".to_string())));
         assert_eq!(tab.title(), "b");
+    }
+
+    #[test]
+    fn a_load_that_ends_in_place_gives_the_page_its_favicon_back() {
+        let mut tab = GosubTab::new(Url::parse("https://b.test/").unwrap(), "b");
+        tab.history = history(&[("a", None), ("b", Some(0))], 1, &[]);
+        tab.set_favicon(Some(vec![1, 2, 3]));
+        tab.clear_favicon_for_load();
+        assert_eq!(tab.favicon(), None);
+        // A second load before the first ended keeps the page's, not the empty one.
+        tab.clear_favicon_for_load();
+        tab.return_to_current_entry();
+        assert_eq!(tab.favicon(), Some(&[1u8, 2, 3][..]));
+
+        // A load that got a page: its favicon, or none, stays.
+        tab.clear_favicon_for_load();
+        tab.forget_favicon_before_load();
+        tab.return_to_current_entry();
+        assert_eq!(tab.favicon(), None);
     }
 
     #[test]
