@@ -522,7 +522,10 @@ impl Beacon {
                     let outcome = if cancelled { "cancelled" } else { "failed" };
                     crate::timeline::ended(our_id, nav_id.0, Some(outcome), crate::devtools::now_ms());
                 }
-                self.with_tab(our_id, |tab| tab.set_loading(false));
+                self.with_tab(our_id, |tab| {
+                    tab.set_loading(false);
+                    tab.forget_favicon_before_load();
+                });
                 if !cancelled {
                     self.with_tab(our_id, |tab| tab.set_showing_error(true));
                 }
@@ -572,6 +575,7 @@ impl Beacon {
                     // HistoryChanged event that refreshes the back/forward state, and the
                     // favicon arrives as its own event.
                     tab.set_title(url.as_str());
+                    tab.forget_favicon_before_load();
                 });
                 let mut out = Vec::new();
                 if is_active {
