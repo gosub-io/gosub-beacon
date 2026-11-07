@@ -34,18 +34,18 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
     private var ownedTabs: [BeaconTabId] = []
     private var currentTab: BeaconTabId = 0
 
-    /// Lent to the address field so completion replaces the whole address rather than the
-    /// last word. One instance, reused: AppKit expects a window to hand back the same
-    /// editor each time it asks.
-    private lazy var addressEditor: AddressFieldEditor = {
-        let editor = AddressFieldEditor()
-        editor.isFieldEditor = true
-        return editor
+    /// History matches under the address bar while it is being typed in.
+    private lazy var suggestions: AddressSuggestions = {
+        let list = AddressSuggestions()
+        list.onPick = { [weak self] url in
+            self?.addressField.stringValue = url
+            self?.addressEntered()
+        }
+        return list
     }()
 
-    /// True while the last edit was a deletion, so backspacing does not fight a suggestion
-    /// popup that reappears on every keystroke.
-    private var isDeleting = false
+    /// What was typed, to put back when the highlight moves up out of the suggestions.
+    private var typedAddress = ""
 
     /// True while the user is editing the address, so engine updates do not fight the caret.
     private var editingAddress = false
@@ -647,6 +647,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
     @objc private func addressEntered() {
         let text = addressField.stringValue.trimmingCharacters(in: .whitespaces)
         guard !text.isEmpty, currentTab != 0 else { return }
+        suggestions.hide()
         browser.navigate(currentTab, to: text)
         window?.makeFirstResponder(pageView)
     }
@@ -1191,43 +1192,46 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
     // ── window delegate ───────────────────────────────────────────────────
 
     func controlTextDidBeginEditing(_ obj: Notification) { editingAddress = true }
-    func controlTextDidEndEditing(_ obj: Notification) { editingAddress = false }
-
-    /// Re-offer suggestions on every keystroke. AppKit only completes on demand, so this is
-    /// what turns "press F5 for a list" into an address bar that behaves like a browser's.
-    func controlTextDidChange(_ obj: Notification) {
-        guard (obj.object as AnyObject?) === addressField else { return }
-        // Completing while deleting fights the user: they remove a character, a suggestion
-        // reappears, and the field looks stuck.
-        guard !isDeleting else { return }
-        guard addressField.stringValue.count >= 2 else { return }
-        addressField.currentEditor()?.complete(nil)
+    func controlTextDidEndEditing(_ obj: Notification) {
+        editingAddress = false
+        suggestions.hide()
     }
 
-    func control(
-        _ control: NSControl,
-        textView: NSTextView,
-        completions words: [String],
-        forPartialWordRange charRange: NSRange,
-        indexOfSelectedItem index: UnsafeMutablePointer<Int>
-    ) -> [String] {
-        // -1 leaves nothing preselected, so the list is offered rather than typed into the
-        // field. Preselecting would overwrite what the user is still typing.
-        index.pointee = -1
-        let typed = textView.string.trimmingCharacters(in: .whitespaces)
-        guard typed.count >= 2 else { return [] }
-        return browser.searchHistory(typed, limit: 8).map(\.url)
+    /// Re-offer suggestions on every keystroke. The list only shows them; the field keeps
+    /// what was typed until the reader picks one.
+    func controlTextDidChange(_ obj: Notification) {
+        guard (obj.object as AnyObject?) === addressField else { return }
+        typedAddress = addressField.stringValue
+        let typed = typedAddress.trimmingCharacters(in: .whitespaces)
+        guard typed.count >= 2 else {
+            suggestions.hide()
+            return
+        }
+        suggestions.show(browser.searchHistory(typed, limit: 8), under: addressField)
     }
 
     func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
         guard control === addressField else { return false }
 
         switch commandSelector {
-        case #selector(NSResponder.deleteBackward(_:)), #selector(NSResponder.deleteForward(_:)):
-            isDeleting = true
+        case #selector(NSResponder.moveDown(_:)), #selector(NSResponder.moveUp(_:)):
+            guard suggestions.isVisible else { return false }
+            let step = commandSelector == #selector(NSResponder.moveDown(_:)) ? 1 : -1
+            let address = suggestions.move(by: step) ?? typedAddress
+            textView.string = address
+            textView.setSelectedRange(NSRange(location: (address as NSString).length, length: 0))
+            return true
+
+        case #selector(NSResponder.insertNewline(_:)):
+            // The field already holds the highlighted address; its action goes there.
+            suggestions.hide()
             return false
 
         case #selector(NSResponder.cancelOperation(_:)):
+            if suggestions.isVisible {
+                suggestions.hide()
+                return true
+            }
             // Escape puts the address back to the page's own and hands focus to the page —
             // Safari's behaviour, and the only way out of a half-typed address that does not
             // involve selecting and retyping it.
@@ -1236,16 +1240,12 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
             return true
 
         default:
-            isDeleting = false
             return false
         }
     }
 
-    /// AppKit asks the window for a field editor. Handing the address bar its own is what
-    /// makes completion replace the whole address.
-    func windowWillReturnFieldEditor(_ sender: NSWindow, to client: Any?) -> Any? {
-        client is AddressField ? addressEditor : nil
-    }
+    func windowDidResignKey(_ notification: Notification) { suggestions.hide() }
+    func windowDidResize(_ notification: Notification) { suggestions.hide() }
 
     /// Two windows share one browser, and the ABI has a single notion of the active tab.
     /// Re-asserting it on focus is what keeps "back" meaning the front window's back.
@@ -1256,6 +1256,7 @@ final class BrowserWindowController: NSWindowController, NSWindowDelegate, NSToo
     }
 
     func windowWillClose(_ notification: Notification) {
+        suggestions.hide()
         browser.removeListener(self)
         for tab in ownedTabs {
             browser.closeTab(tab)

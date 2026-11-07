@@ -1,18 +1,5 @@
 import AppKit
 
-/// The field editor the address bar borrows.
-///
-/// It exists for one override. AppKit's completion machinery asks the field editor which
-/// range a completion should replace, and the default answer is the current *word* — so
-/// completing "exa" inside "https://exa" would replace three characters and leave the rest,
-/// producing nonsense like `https://https://example.com`. An address is one token as far as
-/// completion is concerned, so the whole string is the answer.
-final class AddressFieldEditor: NSTextView {
-    override var rangeForUserCompletion: NSRange {
-        NSRange(location: 0, length: (string as NSString).length)
-    }
-}
-
 /// The address bar.
 ///
 /// Two departures from a plain `NSTextField`, both because this is a browser:
