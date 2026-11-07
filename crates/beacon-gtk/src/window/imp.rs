@@ -2907,6 +2907,7 @@ impl BrowserWindow {
             return;
         };
         tab.set_favicon(None);
+        tab.forget_favicon_before_load();
         tab.set_title(display.as_str());
         tab.set_url(display.clone());
         tab.set_loading(false);
@@ -3140,6 +3141,7 @@ impl BrowserWindow {
             return;
         };
         tab.set_favicon(None);
+        tab.forget_favicon_before_load();
         tab.set_url(blank.clone());
         tab.set_typed_address(Some(address.to_string()));
         tab.set_loading(false);
