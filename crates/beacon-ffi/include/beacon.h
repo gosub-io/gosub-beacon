@@ -576,7 +576,7 @@ BeaconTabId beacon_view_source(BeaconBrowser *browser, BeaconTabId tab, bool raw
  * beacon_string_free. */
 char *beacon_tab_crash_reason(BeaconBrowser *browser, BeaconTabId tab);
 /* Give it a new engine worker and reload what it was showing, keeping its handle and its
- * place in the strip. False when it did not crash or the engine would not make one. */
+ * place in the strip. False when the tab is unknown, did not crash or the engine would not make one. */
 bool beacon_revive_tab(BeaconBrowser *browser, BeaconTabId tab);
 
 /* ── where forward leads ───────────────────────────────────────────────────── */
