@@ -524,7 +524,15 @@ impl Beacon {
                 }
                 self.with_tab(our_id, |tab| {
                     tab.set_loading(false);
-                    tab.forget_favicon_before_load();
+                    // A replaced navigation's failure leaves the favicon to the newer one.
+                    if nav_id.is_none_or(|id| tab.is_latest_navigation(id)) {
+                        // Stopped, the page stays; failed, the error page has no favicon.
+                        if cancelled {
+                            tab.restore_favicon_before_load();
+                        } else {
+                            tab.forget_favicon_before_load();
+                        }
+                    }
                 });
                 if !cancelled {
                     self.with_tab(our_id, |tab| tab.set_showing_error(true));
@@ -922,6 +930,62 @@ mod tests {
         assert!(out.contains(&BeaconEvent::UrlChanged(tab_id, url)));
         assert!(out.contains(&BeaconEvent::LoadingChanged(tab_id, false)));
         assert!(!beacon.tabs().lock().unwrap().get_tab(tab_id).unwrap().is_loading());
+    }
+
+    #[test]
+    fn a_cancelled_load_gives_the_favicon_back_and_a_failed_one_does_not() {
+        use gosub_engine::events::LoadError;
+        let (mut beacon, tab_id, engine_id) = beacon_with_tab();
+        let favicon = |beacon: &Beacon| {
+            let tabs = beacon.tabs().lock().unwrap();
+            tabs.get_tab(tab_id).unwrap().favicon().map(<[u8]>::to_vec)
+        };
+        // What the shell does when the user asks for another address.
+        let begin_load = |beacon: &mut Beacon| {
+            {
+                let mut tabs = beacon.tabs().lock().unwrap();
+                let mut tab = tabs.get_tab(tab_id).unwrap();
+                tab.clear_favicon_for_load();
+                tabs.update_tab(tab_id, &tab);
+            }
+            let nav_id = NavigationId::new();
+            let url = Url::parse("https://example.com/next").unwrap();
+            beacon.on_engine_event(nav(engine_id, NavigationEvent::Started { nav_id, url }));
+            nav_id
+        };
+        let failed = |nav_id: NavigationId, error: LoadError| {
+            nav(
+                engine_id,
+                NavigationEvent::Failed {
+                    nav_id: Some(nav_id),
+                    url: Url::parse("https://example.com/next").unwrap(),
+                    error,
+                },
+            )
+        };
+        let cancelled = || LoadError::Cancelled {
+            message: "navigation cancelled".into(),
+        };
+        beacon.on_engine_event(EngineEvent::FavIconChanged {
+            tab_id: engine_id,
+            favicon: vec![1, 2, 3],
+        });
+
+        // Replaced by a second load: the first one's cancellation is not the tab's.
+        let first = begin_load(&mut beacon);
+        let second = begin_load(&mut beacon);
+        beacon.on_engine_event(failed(first, cancelled()));
+        assert_eq!(favicon(&beacon), None);
+        // Stopped: the page stays, with its favicon.
+        beacon.on_engine_event(failed(second, cancelled()));
+        assert_eq!(favicon(&beacon), Some(vec![1, 2, 3]));
+
+        // Failed: the error page shows, and a later Stop has nothing to give back.
+        let third = begin_load(&mut beacon);
+        beacon.on_engine_event(failed(third, LoadError::InvalidUrl { message: "refused".into() }));
+        let fourth = begin_load(&mut beacon);
+        beacon.on_engine_event(failed(fourth, cancelled()));
+        assert_eq!(favicon(&beacon), None);
     }
 
     #[test]
