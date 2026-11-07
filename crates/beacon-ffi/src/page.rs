@@ -343,13 +343,18 @@ impl BeaconBrowser {
     /// handle, its place in the strip and its address all survive, which is what makes
     /// this a restart rather than "close it and open another one".
     pub(crate) fn revive(&mut self, tab_id: TabId) -> bool {
-        let url = {
+        let (url, crashed) = {
             let tabs = self.tabs.lock().unwrap();
             match tabs.get_tab(tab_id) {
-                Some(tab) => tab.url().to_string(),
+                Some(tab) => (tab.url().to_string(), tab.tab_handle()),
                 None => return false,
             }
         };
+        // The crashed engine tab still holds a zone slot.
+        if let Some(crashed) = crashed {
+            self.beacon.unbind_engine_tab(crashed.tab_id);
+            self.engine.close_tab(crate::runtime(), crashed.tab_id);
+        }
         let viewport = self
             .viewports
             .get(&tab_id)

@@ -2281,10 +2281,21 @@ impl BeaconApp {
     /// Give a crashed tab a new engine worker and load its page again. The tab keeps its
     /// place, its address and its history, as in GTK.
     fn revive(&mut self, tab_id: TabId) {
-        let Some(url) = self.tabs.lock().unwrap().get_tab(tab_id).map(|t| t.url().to_string()) else {
+        let Some((url, crashed)) = self
+            .tabs
+            .lock()
+            .unwrap()
+            .get_tab(tab_id)
+            .map(|t| (t.url().to_string(), t.tab_handle()))
+        else {
             return;
         };
         let Some(engine) = self.engine.as_mut() else { return };
+        // The crashed engine tab still holds a zone slot.
+        if let Some(crashed) = crashed {
+            self.beacon.unbind_engine_tab(crashed.tab_id);
+            engine.close_tab(self.rt, crashed.tab_id);
+        }
         let handle = match engine.create_tab(self.rt, &url, Some((1024, 768))) {
             Ok(handle) => handle,
             Err(e) => {

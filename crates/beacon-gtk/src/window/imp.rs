@@ -4077,10 +4077,10 @@ impl BrowserWindow {
 
     /// Recreate the engine tab behind a crashed shell tab and reload its URL.
     fn revive_tab(&self, tab_id: TabId) {
-        let url = {
+        let (url, crashed) = {
             let manager = self.tab_manager.lock().unwrap();
             match manager.get_tab(tab_id) {
-                Some(tab) => tab.url().to_string(),
+                Some(tab) => (tab.url().to_string(), tab.tab_handle()),
                 None => return,
             }
         };
@@ -4091,6 +4091,11 @@ impl BrowserWindow {
                 self.log("Engine not ready");
                 return;
             };
+            // The crashed engine tab still holds a zone slot.
+            if let Some(crashed) = crashed {
+                self.beacon.borrow_mut().unbind_engine_tab(crashed.tab_id);
+                eng.close_tab(runtime(), crashed.tab_id);
+            }
             let viewport = self.viewport_for_new_tab();
             match eng.create_tab(runtime(), "New Tab", viewport) {
                 Ok(h) => h,
