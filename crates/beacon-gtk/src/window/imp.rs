@@ -4010,9 +4010,17 @@ impl BrowserWindow {
                     // We need to use the window as a parent, not the parent widget. Since X/Y coordinates
                     // are relative from the widget, we need to convert them X/Y positions based on the window.
                     popover.set_parent(&window_clone);
+                    // Deferred: `closed` fires before the chosen item's action, which needs the
+                    // `tab` group still in place.
+                    popover.connect_closed(|popover| {
+                        let popover = popover.clone();
+                        glib::idle_add_local_once(move || popover.unparent());
+                    });
                     if let Some(p) = widget.compute_point(&window_clone, &Point::new(x as f32, y as f32)) {
                         popover.set_pointing_to(Some(&gdk::Rectangle::new(p.x() as i32, p.y() as i32, 0, 0)));
                         popover.popup();
+                    } else {
+                        popover.unparent();
                     }
                 }
             }
