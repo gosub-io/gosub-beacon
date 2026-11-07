@@ -355,7 +355,8 @@ impl GosubTab {
     }
 
     /// Back to the page the tab shows, after a load that ended without a new one (a 204, a
-    /// download offer) left the address, title and favicon the shell gave the tab when it began.
+    /// download offer) left the address and title the shell gave the tab when it began, and no
+    /// favicon: the shell cleared it, and the page's comes back.
     /// The address and the title, each when it changed: a load of the same address (a form
     /// posting to its own page) still retitled the tab.
     pub fn return_to_current_entry(&mut self) -> (Option<Url>, Option<String>) {
