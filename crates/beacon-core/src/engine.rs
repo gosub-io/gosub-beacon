@@ -65,6 +65,8 @@ pub struct BrowserEngine<C: BeaconConfig> {
     event_rx: Option<broadcast::Receiver<EngineEvent>>,
     /// Per-resource fetch events, on their own stream so they cannot crowd the control bus.
     resource_rx: Option<broadcast::Receiver<gosub_engine::events::ResourceUpdate>>,
+    /// Workers of closed tabs still stopping, for [`BrowserEngine::shutdown`] to wait on.
+    closing: Vec<tokio::task::JoinHandle<()>>,
 }
 
 impl<C: BeaconConfig> BrowserEngine<C> {
@@ -323,6 +325,7 @@ impl<C: BeaconConfig> BrowserEngine<C> {
             redraw_rx: Some(rx_redraw),
             event_rx: Some(event_rx),
             resource_rx: Some(resource_rx),
+            closing: Vec::new(),
         })
     }
 
@@ -333,8 +336,14 @@ impl<C: BeaconConfig> BrowserEngine<C> {
     /// threads after the caller has moved on. A host that exits right after races them:
     /// SQLCipher's exit-time cleanup frees what a worker closing its database still uses.
     pub fn shutdown(self, rt: &Runtime) {
-        let Self { mut engine, zone, .. } = self;
+        let Self {
+            mut engine, zone, closing, ..
+        } = self;
         rt.block_on(async {
+            // Closed tabs have left the zone; `close_zone` does not wait for them.
+            for stopping in closing {
+                let _ = stopping.await;
+            }
             engine.close_zone(zone).await;
             if let Err(e) = engine.shutdown().await {
                 log::warn!("engine shutdown: {e:?}");
@@ -474,6 +483,16 @@ impl<C: BeaconConfig> BrowserEngine<C> {
 
         let tab = rt.block_on(builder.create()).map_err(|e| anyhow::anyhow!("create_tab: {e:?}"))?;
         Ok(tab)
+    }
+
+    /// Close an engine tab without waiting for its worker. The zone gives its slot back
+    /// at once; a tab only told `CloseTab` stays counted against `max_tabs`. `shutdown`
+    /// waits for the worker.
+    pub fn close_tab(&mut self, rt: &Runtime, tab_id: gosub_engine::tab::TabId) {
+        if let Some(stopping) = self.zone.detach_tab(tab_id) {
+            self.closing.retain(|h| !h.is_finished());
+            self.closing.push(rt.spawn(stopping));
+        }
     }
 }
 

@@ -1003,9 +1003,7 @@ pub unsafe extern "C" fn beacon_close_tab(browser: *mut BeaconBrowser, tab: u64)
     }
     if let Some(handle) = b.tabs.lock().unwrap().get_tab(tab_id).and_then(|t| t.tab_handle()) {
         b.beacon.unbind_engine_tab(handle.tab_id);
-        runtime().spawn(async move {
-            let _ = handle.send(TabCommand::CloseTab).await;
-        });
+        b.engine.close_tab(runtime(), handle.tab_id);
     }
     let shown = b.tabs.lock().unwrap().active();
     // Remember it before it goes, so Cmd+Shift+T has something to bring back.
