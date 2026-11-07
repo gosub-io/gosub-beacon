@@ -2864,9 +2864,9 @@ impl BrowserWindow {
         // Shut down the engine worker behind the tab and drop our references.
         if let Some(handle) = handle {
             self.beacon.borrow_mut().unbind_engine_tab(handle.tab_id);
-            runtime().spawn(async move {
-                let _ = handle.send(EngineTabCommand::CloseTab).await;
-            });
+            if let Some(eng) = self.engine.borrow_mut().as_mut() {
+                eng.close_tab(runtime(), handle.tab_id);
+            }
         }
         self.tab_zoom.borrow_mut().remove(&tab_id);
         self.bookmark_opened.borrow_mut().remove(&tab_id);
