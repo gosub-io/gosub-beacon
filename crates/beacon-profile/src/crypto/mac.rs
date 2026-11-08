@@ -8,6 +8,11 @@
 //! (`Contents/MacOS/BeaconMac` and `Contents/MacOS/beaconctl`). A development build has no
 //! such sibling and gets the one dialog per binary that any app gets; "Always Allow" ends it.
 //!
+//! The siblings share the key only when signed with a Developer ID. The login keychain also
+//! checks the item's partition list, which names the creator's team ID, or ad hoc, its own
+//! cdhash. An ad-hoc sibling is asked for the keychain password instead, and with dialogs
+//! forbidden gets errSecAuthFailed ("The user name or passphrase you entered is not correct").
+//!
 //! The access list is only ever set at creation. Changing it on an item that exists asks
 //! for the keychain password, which would be a worse dialog than the one this avoids.
 
