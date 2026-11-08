@@ -23,6 +23,10 @@
 # gets the "wants to use your confidential information" dialog for the other's key. A
 # beaconctl built elsewhere gets that dialog once; "Always Allow" ends it.
 #
+# Only with a Developer ID, though. The login keychain also files an item under its creator's
+# signature: the team ID, or ad hoc, the creator's own cdhash. In an ad-hoc build each binary
+# asks for the keychain password to read the other's key, and fails where it may not ask.
+#
 # What comes out depends on how much of packaging/signing.env is filled in, which
 # packaging/setup-signing.sh writes:
 #
