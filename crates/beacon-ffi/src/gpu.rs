@@ -410,6 +410,9 @@ impl ViewSurface {
 /// oversized view shows a stretched frame instead (GOS-287).
 fn surface_extent(context: &FfiWgpuContext, width: u32, height: u32) -> (u32, u32) {
     let max = context.device().limits().max_texture_dimension_2d;
+    if width > max || height > max {
+        log::warn!("view {width}x{height} exceeds the {max}px texture limit; clamping the surface");
+    }
     (width.clamp(1, max), height.clamp(1, max))
 }
 
