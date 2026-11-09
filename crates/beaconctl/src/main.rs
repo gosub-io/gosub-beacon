@@ -605,9 +605,6 @@ fn encrypt_plaintext(p: &Profile, key: &ProfileKey) -> Result<()> {
     p.seal_plaintext_files(key)
 }
 
-/// The `limit` most recently visited pages in the places store at `path`, as `(title,
-/// url)`. Asked of the database directly: the engine's `query_visited` ranks by visit
-/// count, and getting the most recent out of it meant reading every row.
 /// `store`'s file in `p` and the key it opens with; `None` while there is no file yet
 /// (opening it would create it).
 fn store(p: &Profile, store: Store) -> Result<Option<(PathBuf, Zeroizing<[u8; 32]>)>> {
@@ -635,6 +632,9 @@ fn settings(path: &Path, key: &Zeroizing<[u8; 32]>) -> Result<Vec<(String, Strin
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
+/// The `limit` most recently visited pages in the places store at `path`, as `(title,
+/// url)`. Asked of the database directly: the engine's `query_visited` ranks by visit
+/// count, and getting the most recent out of it meant reading every row.
 fn recent_visits(path: &Path, key: &Zeroizing<[u8; 32]>, limit: usize) -> Result<Vec<(String, String)>> {
     let conn = Connection::open(path)?;
     SqliteKey::from_bytes(**key).apply(&conn)?;
