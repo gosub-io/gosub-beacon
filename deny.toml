@@ -36,6 +36,10 @@ allow = [
     "Unlicense",
     "CDLA-Permissive-2.0",
 ]
+# SQLite's blessing and libtomcrypt's WTFPL, in the SQLCipher source rusqlite builds.
+exceptions = [
+    { crate = "sqlcipher-src", allow = ["blessing", "WTFPL"] },
+]
 
 [bans]
 multiple-versions = "warn"
