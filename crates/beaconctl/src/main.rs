@@ -399,6 +399,10 @@ fn profile(command: ProfileCommand) -> Result<()> {
         }
         ProfileCommand::Session { profile } => {
             let p = existing(&roots, profile)?;
+            // Like `store`: a profile Beacon never opened has no session and no key yet.
+            if !p.dir.join(SESSION).exists() {
+                return Ok(());
+            }
             let key = p.key_from(Some(&keychain(&p)?))?;
             let Some(data) = p.read_sealed(&key, SESSION)? else {
                 return Ok(());
