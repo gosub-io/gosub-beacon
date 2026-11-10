@@ -22,7 +22,8 @@ pub struct Cli {
     pub private: bool,
 
     /// Open the URLs (or the home page) in a new window of the running Beacon instead of as
-    /// tabs in its current window. Without a running Beacon this is a normal start.
+    /// tabs in its current window. Without a running Beacon this is a normal start. GTK
+    /// only; egui ignores it.
     #[arg(long)]
     pub new_window: bool,
 

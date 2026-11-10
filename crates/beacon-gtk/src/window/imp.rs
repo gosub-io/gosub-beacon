@@ -252,9 +252,10 @@ pub struct BrowserWindow {
     /// area may not have its size yet; they open after the startup tabs. `None` once those
     /// are open.
     pub startup_urls: RefCell<Option<Vec<String>>>,
-    /// Whether this window was opened for another launch, so it starts on what that launch
-    /// handed over and not on the session.
-    pub handed_off: Cell<bool>,
+    /// Whether this is the window the app opens at startup, the only one that starts on the
+    /// command line's URLs or the session. Any later one starts on what it is handed, or the
+    /// home page.
+    pub first_window: Cell<bool>,
     /// Whether the user wants the bookmarks bar. Per window, as on the Mac: fullscreen hides
     /// the whole chrome, and this says whether the bar comes back with it.
     pub bookmarks_bar_wanted: Cell<bool>,
@@ -380,7 +381,7 @@ impl Default for BrowserWindow {
             tab_zoom: RefCell::new(HashMap::new()),
             private: Cell::new(false),
             startup_urls: RefCell::new(Some(Vec::new())),
-            handed_off: Cell::new(false),
+            first_window: Cell::new(false),
             bookmarks_bar_wanted: Cell::new(true),
             bookmark_opened: RefCell::new(HashMap::new()),
             picker: RefCell::new(None),
@@ -2953,9 +2954,10 @@ impl BrowserWindow {
     }
 
     /// Persist which tabs are open, so the next start can restore them. Called after
-    /// every tab mutation; private windows leave no trace.
+    /// every tab mutation; private windows leave no trace. Only the first window saves:
+    /// there is one session, and a later window would overwrite it with its own tabs.
     pub(crate) fn save_session(&self) {
-        if self.private.get() {
+        if self.private.get() || !self.first_window.get() {
             return;
         }
         let active = self.active_tab_id();

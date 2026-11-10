@@ -49,6 +49,7 @@ mod imp {
 
             let private = beacon_core::cli::Cli::global().private;
             let window = BrowserWindow::new(&obj, private);
+            window.imp().first_window.set(true);
             window.present();
         }
 
@@ -102,11 +103,9 @@ impl Application {
             .map_or_else(|| BrowserWindow::new(self, false), |w| w.downcast().unwrap())
     }
 
-    /// A new window for another launch: it starts on `urls` alone, or the home page, never
-    /// on the session or this instance's own command line.
+    /// A new window for another launch: it starts on `urls` alone, or the home page.
     fn handed_off_window(&self, private: bool, urls: Vec<String>) {
         let window = BrowserWindow::new(self, private);
-        window.imp().handed_off.set(true);
         window.open_urls(urls);
         window.present();
     }
