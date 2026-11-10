@@ -133,8 +133,8 @@ are encrypted with, so a profile with that id already on the machine is replaced
 `--replace`.
 
 On a Mac, `beaconctl` is inside the app: `Gosub Beacon.app/Contents/MacOS/beaconctl`. Use
-that one; the keychain item holding the key trusts it and the app for each other, where a
-`beaconctl` built elsewhere is asked about once per build.
+that one; the keychain item holding the key trusts it and the app for each other. A cargo
+build cannot read the key of another build: see [the macOS section](#building-and-running-on-macos).
 
 Changing or removing the passphrase re-encrypts the databases under a new key, so an older
 copy of `profile.toml` no longer opens them with the passphrase it carried. If that is
@@ -171,6 +171,19 @@ Run it from a session on the Mac's own screen: started over ssh, the window has 
 draw and stays blank. `swift/package.sh` turns the build into a universal (arm64 and
 x86_64) `.app` and DMG; that, and everything else about the Mac shell, is in
 [swift/README.md](./swift/README.md).
+
+A cargo-built `gosub-beacon-egui` and `beaconctl` cannot share a profile key as built. macOS
+files the keychain item under the signature of the binary that made it, and cargo's ad-hoc
+signature is that binary's own hash, so `beaconctl` is asked for the keychain password, or
+over ssh refused with "macOS keeps the key to the build of Beacon that made it". Signed with
+one Developer ID and side by side, they share it. Sign after every build; a key made while
+Beacon was unsigned keeps that, so start on a new profile once:
+
+```bash
+cargo build --release --no-default-features --features egui
+cargo build --release -p beaconctl
+codesign -f -s "Developer ID Application: ..." target/release/gosub-beacon-egui target/release/beaconctl
+```
 
 ## Building on Windows
 

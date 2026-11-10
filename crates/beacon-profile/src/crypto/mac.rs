@@ -5,13 +5,15 @@
 //! stored in ... in your keychain"), and with no screen to put it on, as over ssh, the call
 //! waits forever. Beacon.app and beaconctl both need the profile key, so the item is created
 //! trusting both: the running binary and whichever of the two is beside it in the bundle
-//! (`Contents/MacOS/BeaconMac` and `Contents/MacOS/beaconctl`). A development build has no
-//! such sibling and gets the one dialog per binary that any app gets; "Always Allow" ends it.
+//! (`Contents/MacOS/BeaconMac` and `Contents/MacOS/beaconctl`), or beside it in cargo's
+//! target dir (`gosub-beacon-egui`). A binary with no such sibling gets the one dialog per
+//! binary that any app gets; "Always Allow" ends it.
 //!
 //! The siblings share the key only when signed with a Developer ID. The login keychain also
-//! checks the item's partition list, which names the creator's team ID, or ad hoc, its own
-//! cdhash. An ad-hoc sibling is asked for the keychain password instead, and with dialogs
-//! forbidden gets errSecAuthFailed ("The user name or passphrase you entered is not correct").
+//! checks the item's partition list, which names the creator's team ID, or ad hoc (which is
+//! what cargo builds are), its own cdhash. Another binary is asked for the keychain password
+//! instead, and with dialogs forbidden gets errSecAuthFailed ("The user name or passphrase
+//! you entered is not correct"). A shared ad-hoc identifier does not change that.
 //!
 //! The access list is only ever set at creation. Changing it on an item that exists asks
 //! for the keychain password, which would be a worse dialog than the one this avoids.
@@ -48,11 +50,15 @@ type OSStatus = i32;
 /// `errSecInteractionNotAllowed`: the keychain would have to ask on screen, and may not.
 const INTERACTION_NOT_ALLOWED: OSStatus = -25308;
 
+/// `errSecAuthFailed`: here, the item's partition list leaves this binary out.
+const AUTH_FAILED: OSStatus = -25293;
+
 /// What the keychain's dialog calls the item, and its label in Keychain Access.
 const LABEL: &str = "Gosub Beacon profile key";
 
-/// The binaries that share a profile key, as they lie side by side in the app bundle.
-const SIBLINGS: [&str; 2] = ["BeaconMac", "beaconctl"];
+/// The binaries that share a profile key, as they lie side by side in the app bundle or in
+/// cargo's target dir.
+const SIBLINGS: [&str; 3] = ["BeaconMac", "gosub-beacon-egui", "beaconctl"];
 
 #[repr(C)]
 struct OpaqueSecTrustedApplicationRef {
@@ -237,6 +243,13 @@ fn describe(e: SecError, what: &str) -> anyhow::Error {
             "{what}: the keychain has to ask on screen, and this session has none; run this once in a terminal on the Mac itself"
         )));
     }
+    if e.code() == AUTH_FAILED {
+        return anyhow!(super::KeychainError(format!(
+            "{what}: macOS keeps the key to the build of Beacon that made it, and this binary is not that build; \
+             unsigned builds cannot share a key, so sign Beacon and beaconctl with the same Developer ID \
+             (see \"Building and running on macOS\" in the README)"
+        )));
+    }
     anyhow::Error::new(e).context(super::KeychainError(what.to_string()))
 }
 
@@ -288,9 +301,16 @@ mod tests {
     /// The startup dialog finds a keychain failure by this marker, whatever the code.
     #[test]
     fn keychain_failures_carry_the_marker() {
-        for code in [INTERACTION_NOT_ALLOWED, -25300] {
+        for code in [INTERACTION_NOT_ALLOWED, AUTH_FAILED, -25300] {
             let e = describe(SecError::from_code(code), "reading");
             assert!(e.downcast_ref::<super::super::KeychainError>().is_some(), "{code}: {e:#}");
         }
+    }
+
+    /// The bare framework text blames a password nobody typed.
+    #[test]
+    fn a_key_from_another_build_says_so() {
+        let e = format!("{:#}", describe(SecError::from_code(AUTH_FAILED), "reading"));
+        assert!(e.contains("Developer ID"), "{e}");
     }
 }
