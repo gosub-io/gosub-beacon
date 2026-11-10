@@ -189,9 +189,9 @@ codesign -f -s "Developer ID Application: ..." target/release/gosub-beacon-egui 
 
 ## Building on Windows
 
-On Windows, `windows\package.ps1` builds the release zip. The cross-build from Linux
-(`./windows/build.sh`) is broken at the moment. Prerequisites, how to run it and why it
-renders on the CPU are in [windows/README.md](./windows/README.md).
+On Windows, `windows\package.ps1` builds the release zip. There is no cross-build from
+Linux. Prerequisites, how to run it and why it renders on the CPU are in
+[windows/README.md](./windows/README.md).
 
 ## Building and running on Android
 
