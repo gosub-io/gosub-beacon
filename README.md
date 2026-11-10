@@ -134,7 +134,8 @@ are encrypted with, so a profile with that id already on the machine is replaced
 
 On a Mac, `beaconctl` is inside the app: `Gosub Beacon.app/Contents/MacOS/beaconctl`. Use
 that one; the keychain item holding the key trusts it and the app for each other. A cargo
-build cannot read the key of another build: see [the macOS section](#building-and-running-on-macos).
+build cannot read the key of another build without the keychain password: see
+[the macOS section](#building-and-running-on-macos).
 
 Changing or removing the passphrase re-encrypts the databases under a new key, so an older
 copy of `profile.toml` no longer opens them with the passphrase it carried. If that is
