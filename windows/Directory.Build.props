@@ -1,7 +1,7 @@
 <Project>
   <PropertyGroup>
     <!-- WPF is Windows-only, but the SDK builds it on Linux when told to target Windows
-         explicitly, which keeps the C# half cross-building like the Rust half. -->
+         explicitly, so the C# half can still be compile-checked there. -->
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
 
     <Nullable>enable</Nullable>

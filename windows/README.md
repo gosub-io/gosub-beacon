@@ -121,29 +121,6 @@ The zip is not signed. SmartScreen stops the first start with "Windows protected
 "More info", then "Run anyway". `README-zip.txt` goes into the zip as `README.txt` and says
 so.
 
-### From Linux
-
-**Broken at the moment**: vendored OpenSSL's Configure refuses a Linux perl for MSVC, so
-build on Windows with `package.ps1` (above). Once that is fixed, both halves cross-compile
-from Linux and only running needs Windows:
-
-```bash
-./windows/build.sh            # debug
-./windows/build.sh release
-```
-
-Prerequisites, none of which need root or Visual Studio:
-
-```bash
-cargo install cargo-xwin                    # fetches the MS CRT + Windows SDK itself
-rustup toolchain install "$(cat scripts/release-toolchain)" --target x86_64-pc-windows-msvc
-ln -s "$(command -v clang)" ~/bin/clang-cl  # clang picks its MSVC mode from argv[0]
-# lld-link ships with lld, usually already at /usr/lib/llvm-*/bin/lld-link
-```
-
-plus the .NET SDK (10.0+). `EnableWindowsTargeting` in `Directory.Build.props` is what lets
-the SDK build a WPF project on a non-Windows host.
-
 ### Why the MSVC target, not mingw
 
 Two reasons, both hard requirements:
@@ -194,7 +171,6 @@ a runtime backend choice in beacon-ffi first, then `PageView.cs`.
 ```
 windows/
   Directory.Build.props        EnableWindowsTargeting and shared settings
-  build.sh                     builds beacon.dll and the exe, from Linux
   package.ps1                  the release zip, on Windows (what CI runs)
   README-zip.txt               the README.txt that goes into the zip
   src/BeaconWindows/
