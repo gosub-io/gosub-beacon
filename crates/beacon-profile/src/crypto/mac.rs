@@ -244,10 +244,11 @@ fn describe(e: SecError, what: &str) -> anyhow::Error {
         )));
     }
     if e.code() == AUTH_FAILED {
-        return anyhow!(super::KeychainError(format!(
-            "{what}: macOS keeps the key to the build of Beacon that made it, and this binary is not that build; \
-             unsigned builds cannot share a key, so sign Beacon and beaconctl with the same Developer ID \
-             (see \"Building and running on macOS\" in the README)"
+        // Also what a failed unlock gives, so the framework's own text stays underneath.
+        return anyhow::Error::new(e).context(super::KeychainError(format!(
+            "{what}: the keychain refused this binary. Most often another build of Beacon made the key: \
+             macOS keeps it to the build that made it, and unsigned builds do not share one. Sign Beacon and \
+             beaconctl with the same Developer ID (see \"Building and running on macOS\" in the README)"
         )));
     }
     anyhow::Error::new(e).context(super::KeychainError(what.to_string()))
@@ -307,10 +308,11 @@ mod tests {
         }
     }
 
-    /// The bare framework text blames a password nobody typed.
+    /// The bare framework text blames a password nobody typed, but stays: it may be right.
     #[test]
     fn a_key_from_another_build_says_so() {
         let e = format!("{:#}", describe(SecError::from_code(AUTH_FAILED), "reading"));
         assert!(e.contains("Developer ID"), "{e}");
+        assert!(e.contains(&SecError::from_code(AUTH_FAILED).to_string()), "{e}");
     }
 }

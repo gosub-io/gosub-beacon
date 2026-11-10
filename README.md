@@ -175,7 +175,7 @@ x86_64) `.app` and DMG; that, and everything else about the Mac shell, is in
 A cargo-built `gosub-beacon-egui` and `beaconctl` cannot share a profile key as built. macOS
 files the keychain item under the signature of the binary that made it, and cargo's ad-hoc
 signature is that binary's own hash, so `beaconctl` is asked for the keychain password, or
-over ssh refused with "macOS keeps the key to the build of Beacon that made it". Signed with
+over ssh refused with "the keychain refused this binary". Signed with
 one Developer ID and side by side, they share it. Sign after every build; a key made while
 Beacon was unsigned keeps that, so start on a new profile once:
 
