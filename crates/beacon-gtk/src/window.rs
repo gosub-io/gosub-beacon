@@ -105,10 +105,11 @@ impl BrowserWindow {
                 spawn_future_local(async move {
                     // URLs on the command line become the startup tabs; without any, the
                     // previous session is restored (falling back to the home page). A
-                    // private window starts on the home page only.
+                    // private window, or one opened for another launch, starts on the home
+                    // page only.
                     let mut initial_urls: Vec<String> = beacon_core::cli::Cli::global().urls.clone();
                     let mut session = Vec::new();
-                    if private {
+                    if private || window_clone.imp().handed_off.get() {
                         // One opened for another launch's URLs starts on those alone.
                         let handed = window_clone.imp().startup_urls.borrow().as_ref().is_some_and(|u| !u.is_empty());
                         initial_urls = if handed { Vec::new() } else { vec!["gosub://home".to_string()] };

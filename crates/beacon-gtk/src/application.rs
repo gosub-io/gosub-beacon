@@ -10,6 +10,10 @@ use log::info;
 /// was started `--private`, and a string array, each opened as a tab.
 pub(crate) const OPEN_URLS: &str = "open-urls";
 
+/// The app action a second launch started `--new-window` asks for a new regular window with:
+/// a string array, each opened as a tab; the home page when it is empty.
+pub(crate) const OPEN_WINDOW: &str = "open-window";
+
 mod imp {
     use super::*;
     use crate::window::BrowserWindow;
@@ -98,6 +102,15 @@ impl Application {
             .map_or_else(|| BrowserWindow::new(self, false), |w| w.downcast().unwrap())
     }
 
+    /// A new window for another launch: it starts on `urls` alone, or the home page, never
+    /// on the session or this instance's own command line.
+    fn handed_off_window(&self, private: bool, urls: Vec<String>) {
+        let window = BrowserWindow::new(self, private);
+        window.imp().handed_off.set(true);
+        window.open_urls(urls);
+        window.present();
+    }
+
     pub(crate) fn setup_actions(&self) {
         let open_urls = gio::SimpleAction::new(OPEN_URLS, Some(&glib::VariantType::new("(bas)").unwrap()));
         open_urls.connect_activate(clone!(
@@ -115,15 +128,31 @@ impl Application {
                 if private {
                     // Never in a regular window: that would load them with its cookies and
                     // keep them in its session.
-                    let window = BrowserWindow::new(&app, true);
-                    window.open_urls(urls);
-                    window.present();
+                    app.handed_off_window(true, urls);
                 } else {
                     app.window().open_urls(urls);
                 }
             }
         ));
         self.add_action(&open_urls);
+
+        let open_window = gio::SimpleAction::new(OPEN_WINDOW, Some(&glib::VariantType::new("as").unwrap()));
+        open_window.connect_activate(clone!(
+            #[weak(rename_to=app)]
+            self,
+            move |_, param| {
+                let Some(urls) = param.and_then(|p| p.get::<Vec<String>>()) else {
+                    return;
+                };
+                if !crate::dialog::startup::profile_open() {
+                    info!(target: "gtk", "Dropping a new window from another launch: the profile is still opening");
+                    return;
+                }
+                info!(target: "gtk", "Opening a new window with {} URL(s) from another launch", urls.len());
+                app.handed_off_window(false, urls);
+            }
+        ));
+        self.add_action(&open_window);
 
         let quit = gio::ActionEntry::builder("quit").activate(|app: &Self, _, _| app.quit()).build();
         let toggle_dark_mode = gio::ActionEntry::builder("toggle-dark-mode")
