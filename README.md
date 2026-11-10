@@ -177,8 +177,9 @@ A cargo-built `gosub-beacon-egui` and `beaconctl` cannot share a profile key as 
 files the keychain item under the signature of the binary that made it, and cargo's ad-hoc
 signature is that binary's own hash, so `beaconctl` is asked for the keychain password, or
 over ssh refused with "the keychain refused this binary". Signed with
-one Developer ID and side by side, they share it. Sign after every build; a key made while
-Beacon was unsigned keeps that, so start on a new profile once:
+one Developer ID and side by side, they share it. Sign after every build. A key made while
+Beacon was unsigned stays filed under that build, so the signed one is asked for the keychain
+password for it too, on the Mac's own screen; a profile Beacon makes once it is signed is not:
 
 ```bash
 cargo build --release --no-default-features --features egui
