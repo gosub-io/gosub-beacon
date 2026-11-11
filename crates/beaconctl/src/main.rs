@@ -408,19 +408,8 @@ fn profile(command: ProfileCommand) -> Result<()> {
             let Some(data) = p.read_sealed(&key, SESSION)? else {
                 return Ok(());
             };
-            // One tab per line, a blank line between windows.
-            let mut gap = false;
-            let mut any = false;
-            for line in String::from_utf8_lossy(&data).lines() {
-                if line.is_empty() {
-                    gap = any;
-                } else if !line.starts_with('#') {
-                    if std::mem::take(&mut gap) {
-                        println!();
-                    }
-                    println!("{}", printable(line));
-                    any = true;
-                }
+            for line in session_lines(&String::from_utf8_lossy(&data)) {
+                println!("{line}");
             }
         }
         ProfileCommand::Unlock { profile, input } => {
@@ -536,6 +525,25 @@ fn profile(command: ProfileCommand) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// The session's tabs, one per line, with a blank line between windows. Only a v2 file has
+/// windows; a blank line in any other means nothing.
+fn session_lines(data: &str) -> Vec<String> {
+    let v2 = data.lines().next() == Some("# gosub-beacon session v2");
+    let mut out = Vec::new();
+    let mut gap = false;
+    for line in data.lines() {
+        if line.is_empty() {
+            gap = v2 && !out.is_empty();
+        } else if !line.starts_with('#') {
+            if std::mem::take(&mut gap) {
+                out.push(String::new());
+            }
+            out.push(printable(line));
+        }
+    }
+    out
 }
 
 /// `text` with every control character (newlines, tabs, escape sequences) replaced by a
@@ -744,6 +752,14 @@ mod tests {
 
     fn opens_with(path: &Path, key: &Zeroizing<[u8; 32]>) -> bool {
         SqliteKey::from_bytes(**key).apply(&Connection::open(path).unwrap()).is_ok()
+    }
+
+    #[test]
+    fn session_windows_are_apart_only_in_a_v2_file() {
+        let v2 = "# gosub-beacon session v2\n*https://a.test/\n\n\n*https://b.test/\n\n";
+        assert_eq!(session_lines(v2), ["*https://a.test/", "", "*https://b.test/"]);
+        let v1 = "# gosub-beacon session v1\n*https://a.test/\n\nhttps://b.test/\n";
+        assert_eq!(session_lines(v1), ["*https://a.test/", "https://b.test/"]);
     }
 
     #[test]
