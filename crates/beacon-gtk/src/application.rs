@@ -5,6 +5,7 @@ use gtk4::glib::clone;
 use gtk4::subclass::prelude::GtkApplicationImpl;
 use gtk4::{gio, glib, prelude::*, subclass::prelude::*, Settings};
 use log::info;
+use std::cell::RefCell;
 
 /// The app action a second launch hands its URLs to the running instance with: whether it
 /// was started `--private`, and a string array, each opened as a tab.
@@ -14,12 +15,32 @@ pub(crate) const OPEN_URLS: &str = "open-urls";
 /// a string array, each opened as a tab; the home page when it is empty.
 pub(crate) const OPEN_WINDOW: &str = "open-window";
 
+/// What a second launch handed over.
+pub(crate) enum Handoff {
+    /// [`OPEN_URLS`]: tabs in the current window, or a new private one.
+    Tabs { private: bool, urls: Vec<String> },
+    /// [`OPEN_WINDOW`]: a new regular window.
+    Window(Vec<String>),
+}
+
+impl Handoff {
+    fn urls(&self) -> &[String] {
+        match self {
+            Handoff::Tabs { urls, .. } | Handoff::Window(urls) => urls,
+        }
+    }
+}
+
 mod imp {
     use super::*;
     use crate::window::BrowserWindow;
 
     #[derive(Default)]
-    pub struct Application {}
+    pub struct Application {
+        /// What other launches handed over while the profile was still opening; opened
+        /// after the first window.
+        pub(crate) pending: RefCell<Vec<Handoff>>,
+    }
 
     #[glib::object_subclass]
     impl ObjectSubclass for Application {
@@ -51,6 +72,10 @@ mod imp {
             let window = BrowserWindow::new(&obj, private);
             window.imp().first_window.set(true);
             window.present();
+
+            for handoff in self.pending.take() {
+                obj.open_handoff(handoff);
+            }
         }
 
         fn startup(&self) {
@@ -110,26 +135,36 @@ impl Application {
         window.present();
     }
 
+    /// Open what another launch handed over, or keep it for after the first window while the
+    /// profile is still opening: a window now would take the profile a second time.
+    fn handoff(&self, handoff: Handoff) {
+        if !crate::dialog::startup::profile_open() {
+            info!(target: "gtk", "Keeping {} URL(s) from another launch until the profile is open", handoff.urls().len());
+            self.imp().pending.borrow_mut().push(handoff);
+            return;
+        }
+        self.open_handoff(handoff);
+    }
+
+    fn open_handoff(&self, handoff: Handoff) {
+        info!(target: "gtk", "Opening {} URL(s) from another launch", handoff.urls().len());
+        match handoff {
+            // Never in a regular window: that would load them with its cookies and keep them
+            // in its session.
+            Handoff::Tabs { private: true, urls } => self.handed_off_window(true, urls),
+            Handoff::Tabs { private: false, urls } => self.window().open_urls(urls),
+            Handoff::Window(urls) => self.handed_off_window(false, urls),
+        }
+    }
+
     pub(crate) fn setup_actions(&self) {
         let open_urls = gio::SimpleAction::new(OPEN_URLS, Some(&glib::VariantType::new("(bas)").unwrap()));
         open_urls.connect_activate(clone!(
             #[weak(rename_to=app)]
             self,
             move |_, param| {
-                let Some((private, urls)) = param.and_then(|p| p.get::<(bool, Vec<String>)>()) else {
-                    return;
-                };
-                if !crate::dialog::startup::profile_open() {
-                    info!(target: "gtk", "Dropping {} URL(s) from another launch: the profile is still opening", urls.len());
-                    return;
-                }
-                info!(target: "gtk", "Opening {} URL(s) from another launch", urls.len());
-                if private {
-                    // Never in a regular window: that would load them with its cookies and
-                    // keep them in its session.
-                    app.handed_off_window(true, urls);
-                } else {
-                    app.window().open_urls(urls);
+                if let Some((private, urls)) = param.and_then(|p| p.get::<(bool, Vec<String>)>()) {
+                    app.handoff(Handoff::Tabs { private, urls });
                 }
             }
         ));
@@ -140,15 +175,9 @@ impl Application {
             #[weak(rename_to=app)]
             self,
             move |_, param| {
-                let Some(urls) = param.and_then(|p| p.get::<Vec<String>>()) else {
-                    return;
-                };
-                if !crate::dialog::startup::profile_open() {
-                    info!(target: "gtk", "Dropping a new window from another launch: the profile is still opening");
-                    return;
+                if let Some(urls) = param.and_then(|p| p.get::<Vec<String>>()) {
+                    app.handoff(Handoff::Window(urls));
                 }
-                info!(target: "gtk", "Opening a new window with {} URL(s) from another launch", urls.len());
-                app.handed_off_window(false, urls);
             }
         ));
         self.add_action(&open_window);

@@ -221,4 +221,24 @@ mod tests {
         // A private window is a new window already.
         assert_eq!(sent(&["--new-window", "--private"]), Some(("open-urls", "(true, @as [])".into())));
     }
+
+    /// While the profile is still opening, what another launch hands over waits for the first
+    /// window instead of being dropped. The profile never opens in a test.
+    #[test]
+    fn a_handoff_before_the_profile_opens_is_kept() {
+        use crate::application::{Handoff, OPEN_URLS, OPEN_WINDOW};
+        use gtk4::glib::subclass::types::ObjectSubclassIsExt;
+        use gtk4::prelude::{ActionExt, ToVariant};
+
+        let app = crate::application::Application::new("io.gosub.beacon.test");
+        app.setup_actions();
+        // Straight to the actions: the app is not registered, so its action group would not
+        // pass them on.
+        let activate = |name: &str, param: gtk4::glib::Variant| app.lookup_action(name).unwrap().activate(Some(&param));
+        activate(OPEN_WINDOW, vec!["https://a.test/".to_string()].to_variant());
+        activate(OPEN_URLS, (true, Vec::<String>::new()).to_variant());
+
+        let pending = app.imp().pending.borrow();
+        assert!(matches!(&pending[..], [Handoff::Window(urls), Handoff::Tabs { private: true, .. }] if urls == &["https://a.test/"]));
+    }
 }
