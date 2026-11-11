@@ -17,6 +17,9 @@ pub struct SessionTab {
 
 const FILE: &str = "session.tabs";
 
+/// The first line of a file with windows; in any other a blank line means nothing.
+const V2: &str = "# gosub-beacon session v2";
+
 /// The previous session's tabs, every window's in one list with the first window's active
 /// tab, for a shell with one window. Empty when there is none (or it cannot be read).
 pub fn load() -> Vec<SessionTab> {
@@ -61,7 +64,7 @@ fn write(content: &str) {
 }
 
 fn serialize<W: AsRef<[SessionTab]>>(windows: &[W]) -> String {
-    let mut out = String::from("# gosub-beacon session v2\n");
+    let mut out = format!("{V2}\n");
     for (i, window) in windows.iter().map(AsRef::as_ref).filter(|w| !w.is_empty()).enumerate() {
         if i > 0 {
             out.push('\n');
@@ -81,10 +84,11 @@ fn serialize<W: AsRef<[SessionTab]>>(windows: &[W]) -> String {
 }
 
 fn parse(content: &str) -> Vec<Vec<SessionTab>> {
+    let v2 = content.lines().next() == Some(V2);
     let mut windows = vec![Vec::new()];
     for mut line in content.lines() {
         if line.is_empty() {
-            if windows.last().is_some_and(|w| !w.is_empty()) {
+            if v2 && windows.last().is_some_and(|w| !w.is_empty()) {
                 windows.push(Vec::new());
             }
             continue;
@@ -149,8 +153,21 @@ mod tests {
     }
 
     #[test]
+    fn a_blank_line_in_a_v1_file_is_no_window_break() {
+        let v1 = "# gosub-beacon session v1\n*https://a.example/\n\nhttps://b.example/\n";
+        assert_eq!(
+            parse(v1),
+            vec![vec![
+                tab("https://a.example/", false, true),
+                tab("https://b.example/", false, false)
+            ]]
+        );
+        assert_eq!(parse("https://a.example/\n\nhttps://b.example/\n").len(), 1);
+    }
+
+    #[test]
     fn parse_skips_comments_and_extra_blank_lines() {
-        let windows = parse("# header\n\n*!https://a.example/\n\n\n# between\nhttps://b.example/\n\n");
+        let windows = parse("# gosub-beacon session v2\n\n*!https://a.example/\n\n\n# between\nhttps://b.example/\n\n");
         assert_eq!(
             windows,
             vec![
