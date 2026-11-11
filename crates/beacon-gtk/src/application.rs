@@ -5,17 +5,42 @@ use gtk4::glib::clone;
 use gtk4::subclass::prelude::GtkApplicationImpl;
 use gtk4::{gio, glib, prelude::*, subclass::prelude::*, Settings};
 use log::info;
+use std::cell::RefCell;
 
 /// The app action a second launch hands its URLs to the running instance with: whether it
 /// was started `--private`, and a string array, each opened as a tab.
 pub(crate) const OPEN_URLS: &str = "open-urls";
+
+/// The app action a second launch started `--new-window` asks for a new regular window with:
+/// a string array, each opened as a tab; the home page when it is empty.
+pub(crate) const OPEN_WINDOW: &str = "open-window";
+
+/// What a second launch handed over.
+pub(crate) enum Handoff {
+    /// [`OPEN_URLS`]: tabs in the current window, or a new private one.
+    Tabs { private: bool, urls: Vec<String> },
+    /// [`OPEN_WINDOW`]: a new regular window.
+    Window(Vec<String>),
+}
+
+impl Handoff {
+    fn urls(&self) -> &[String] {
+        match self {
+            Handoff::Tabs { urls, .. } | Handoff::Window(urls) => urls,
+        }
+    }
+}
 
 mod imp {
     use super::*;
     use crate::window::BrowserWindow;
 
     #[derive(Default)]
-    pub struct Application {}
+    pub struct Application {
+        /// What other launches handed over while the profile was still opening; opened
+        /// after the first window.
+        pub(crate) pending: RefCell<Vec<Handoff>>,
+    }
 
     #[glib::object_subclass]
     impl ObjectSubclass for Application {
@@ -45,7 +70,12 @@ mod imp {
 
             let private = beacon_core::cli::Cli::global().private;
             let window = BrowserWindow::new(&obj, private);
+            window.imp().first_window.set(true);
             window.present();
+
+            for handoff in self.pending.take() {
+                obj.open_handoff(handoff);
+            }
         }
 
         fn startup(&self) {
@@ -98,32 +128,74 @@ impl Application {
             .map_or_else(|| BrowserWindow::new(self, false), |w| w.downcast().unwrap())
     }
 
+    /// A new window for another launch: it starts on `urls` alone, or the home page.
+    fn handed_off_window(&self, private: bool, urls: Vec<String>) {
+        let window = BrowserWindow::new(self, private);
+        window.open_urls(urls);
+        window.present();
+    }
+
+    /// Open what another launch handed over, or keep it for after the first window while the
+    /// profile is still opening: a window now would take the profile a second time.
+    fn handoff(&self, handoff: Handoff) {
+        if !crate::dialog::startup::profile_open() {
+            info!(target: "gtk", "Keeping {} URL(s) from another launch until the profile is open", handoff.urls().len());
+            self.imp().pending.borrow_mut().push(handoff);
+            return;
+        }
+        self.open_handoff(handoff);
+    }
+
+    fn open_handoff(&self, handoff: Handoff) {
+        info!(target: "gtk", "Opening {} URL(s) from another launch", handoff.urls().len());
+        match handoff {
+            // Never in a regular window: that would load them with its cookies and keep them
+            // in its session.
+            Handoff::Tabs { private: true, urls } => self.handed_off_window(true, urls),
+            // Nor the other way round: the last focused window may be a private one.
+            Handoff::Tabs { private: false, urls } => match self.regular_window() {
+                Some(window) => {
+                    window.open_urls(urls);
+                    window.present();
+                }
+                None => self.handed_off_window(false, urls),
+            },
+            Handoff::Window(urls) => self.handed_off_window(false, urls),
+        }
+    }
+
+    /// The most recently focused window that is not private.
+    fn regular_window(&self) -> Option<BrowserWindow> {
+        self.windows()
+            .into_iter()
+            .filter_map(|w| w.downcast::<BrowserWindow>().ok())
+            .find(|w| !w.imp().private.get())
+    }
+
     pub(crate) fn setup_actions(&self) {
         let open_urls = gio::SimpleAction::new(OPEN_URLS, Some(&glib::VariantType::new("(bas)").unwrap()));
         open_urls.connect_activate(clone!(
             #[weak(rename_to=app)]
             self,
             move |_, param| {
-                let Some((private, urls)) = param.and_then(|p| p.get::<(bool, Vec<String>)>()) else {
-                    return;
-                };
-                if !crate::dialog::startup::profile_open() {
-                    info!(target: "gtk", "Dropping {} URL(s) from another launch: the profile is still opening", urls.len());
-                    return;
-                }
-                info!(target: "gtk", "Opening {} URL(s) from another launch", urls.len());
-                if private {
-                    // Never in a regular window: that would load them with its cookies and
-                    // keep them in its session.
-                    let window = BrowserWindow::new(&app, true);
-                    window.open_urls(urls);
-                    window.present();
-                } else {
-                    app.window().open_urls(urls);
+                if let Some((private, urls)) = param.and_then(|p| p.get::<(bool, Vec<String>)>()) {
+                    app.handoff(Handoff::Tabs { private, urls });
                 }
             }
         ));
         self.add_action(&open_urls);
+
+        let open_window = gio::SimpleAction::new(OPEN_WINDOW, Some(&glib::VariantType::new("as").unwrap()));
+        open_window.connect_activate(clone!(
+            #[weak(rename_to=app)]
+            self,
+            move |_, param| {
+                if let Some(urls) = param.and_then(|p| p.get::<Vec<String>>()) {
+                    app.handoff(Handoff::Window(urls));
+                }
+            }
+        ));
+        self.add_action(&open_window);
 
         let quit = gio::ActionEntry::builder("quit").activate(|app: &Self, _, _| app.quit()).build();
         let toggle_dark_mode = gio::ActionEntry::builder("toggle-dark-mode")

@@ -16,7 +16,7 @@ mod window;
 use crate::application::Application;
 use gtk4::gdk::Display;
 use gtk4::prelude::{ActionGroupExt, ApplicationExt, ApplicationExtManual, ToVariant};
-use gtk4::{gio, CssProvider};
+use gtk4::{gio, glib, CssProvider};
 use std::sync::OnceLock;
 use tokio::runtime::Runtime;
 
@@ -104,14 +104,24 @@ pub fn run() {
     // reject the URLs and flags as unknown options.
     let argv0: Vec<String> = std::env::args().take(1).collect();
     // A second launch only presents the running instance, which never sees this argv: its
-    // URLs, and whether it wants a private window, go over as an action first. Registering
-    // is what tells the two apart, and `run` registers anyway; both D-Bus calls are flushed
-    // before it returns.
-    let handover = !cli.urls.is_empty() || cli.private;
-    if handover && app.register(gio::Cancellable::NONE).is_ok() && app.is_remote() {
-        app.activate_action(application::OPEN_URLS, Some(&(cli.private, cli.urls.clone()).to_variant()));
+    // URLs, and whether it wants a private or a new window, go over as an action first.
+    // Registering is what tells the two apart, and `run` registers anyway; both D-Bus calls
+    // are flushed before it returns. A private window is a new window already.
+    if let Some((action, param)) = handover(cli) {
+        if app.register(gio::Cancellable::NONE).is_ok() && app.is_remote() {
+            app.activate_action(action, Some(&param));
+        }
     }
     app.run_with_args(&argv0);
+}
+
+/// The app action and its parameter a second launch hands over with, if it has anything to
+/// hand over.
+fn handover(cli: &beacon_core::cli::Cli) -> Option<(&'static str, glib::Variant)> {
+    if cli.new_window && !cli.private {
+        return Some((application::OPEN_WINDOW, cli.urls.to_variant()));
+    }
+    (cli.private || !cli.urls.is_empty()).then(|| (application::OPEN_URLS, (cli.private, cli.urls.clone()).to_variant()))
 }
 
 /// One GTK instance per profile. A second launch hands its URLs to the instance with the
@@ -178,5 +188,57 @@ mod tests {
         for action in actions {
             assert!(app.lookup_action(action).is_some(), "menu action app.{action} is not registered");
         }
+    }
+
+    /// What a second launch sends, and that the running instance takes it: a parameter of
+    /// the wrong type is dropped by GIO with only a warning on the running side.
+    #[test]
+    fn a_second_launch_hands_over_the_right_action() {
+        use clap::Parser;
+        use gtk4::prelude::ActionExt;
+
+        let app = crate::application::Application::new("io.gosub.beacon.test");
+        app.setup_actions();
+        let sent = |args: &[&str]| {
+            let cli = beacon_core::cli::Cli::parse_from(std::iter::once("gosub-beacon").chain(args.iter().copied()));
+            let (action, param) = super::handover(&cli)?;
+            let registered = app.lookup_action(action).expect("registered");
+            assert_eq!(registered.parameter_type().as_deref(), Some(param.type_()), "{action}");
+            Some((action, param.to_string()))
+        };
+
+        assert_eq!(sent(&[]), None);
+        assert_eq!(
+            sent(&["https://a.test/"]),
+            Some(("open-urls", "(false, ['https://a.test/'])".into()))
+        );
+        assert_eq!(sent(&["--private"]), Some(("open-urls", "(true, @as [])".into())));
+        assert_eq!(sent(&["--new-window"]), Some(("open-window", "@as []".into())));
+        assert_eq!(
+            sent(&["--new-window", "https://a.test/", "https://b.test/"]),
+            Some(("open-window", "['https://a.test/', 'https://b.test/']".into()))
+        );
+        // A private window is a new window already.
+        assert_eq!(sent(&["--new-window", "--private"]), Some(("open-urls", "(true, @as [])".into())));
+    }
+
+    /// While the profile is still opening, what another launch hands over waits for the first
+    /// window instead of being dropped. The profile never opens in a test.
+    #[test]
+    fn a_handoff_before_the_profile_opens_is_kept() {
+        use crate::application::{Handoff, OPEN_URLS, OPEN_WINDOW};
+        use gtk4::glib::subclass::types::ObjectSubclassIsExt;
+        use gtk4::prelude::{ActionExt, ToVariant};
+
+        let app = crate::application::Application::new("io.gosub.beacon.test");
+        app.setup_actions();
+        // Straight to the actions: the app is not registered, so its action group would not
+        // pass them on.
+        let activate = |name: &str, param: gtk4::glib::Variant| app.lookup_action(name).unwrap().activate(Some(&param));
+        activate(OPEN_WINDOW, vec!["https://a.test/".to_string()].to_variant());
+        activate(OPEN_URLS, (true, Vec::<String>::new()).to_variant());
+
+        let pending = app.imp().pending.borrow();
+        assert!(matches!(&pending[..], [Handoff::Window(urls), Handoff::Tabs { private: true, .. }] if urls == &["https://a.test/"]));
     }
 }

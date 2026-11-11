@@ -11,8 +11,8 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::TryRecvError;
 
-/// Set once the profile is open. Until then a launch handed over from elsewhere opens no
-/// window: its engine would try to take the profile a second time.
+/// Set once the profile is open. Until then a launch handed over from elsewhere waits for the
+/// first window: a window of its own would try to take the profile a second time.
 static OPEN: AtomicBool = AtomicBool::new(false);
 
 pub fn profile_open() -> bool {

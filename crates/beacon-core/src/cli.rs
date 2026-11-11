@@ -21,6 +21,12 @@ pub struct Cli {
     #[arg(long)]
     pub private: bool,
 
+    /// Open the URLs (or the home page) in a new window of the running Beacon instead of as
+    /// tabs in its current window. Without a running Beacon this is a normal start. GTK
+    /// only; egui ignores it.
+    #[arg(long)]
+    pub new_window: bool,
+
     /// Use exactly this folder as the profile (cookies, history, settings, session). Useful
     /// for a scratch profile that leaves the real ones alone. A `profile.toml` is written
     /// into it if it has none.
