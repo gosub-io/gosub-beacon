@@ -152,9 +152,24 @@ impl Application {
             // Never in a regular window: that would load them with its cookies and keep them
             // in its session.
             Handoff::Tabs { private: true, urls } => self.handed_off_window(true, urls),
-            Handoff::Tabs { private: false, urls } => self.window().open_urls(urls),
+            // Nor the other way round: the last focused window may be a private one.
+            Handoff::Tabs { private: false, urls } => match self.regular_window() {
+                Some(window) => {
+                    window.open_urls(urls);
+                    window.present();
+                }
+                None => self.handed_off_window(false, urls),
+            },
             Handoff::Window(urls) => self.handed_off_window(false, urls),
         }
+    }
+
+    /// The most recently focused window that is not private.
+    fn regular_window(&self) -> Option<BrowserWindow> {
+        self.windows()
+            .into_iter()
+            .filter_map(|w| w.downcast::<BrowserWindow>().ok())
+            .find(|w| !w.imp().private.get())
     }
 
     pub(crate) fn setup_actions(&self) {
