@@ -93,8 +93,9 @@ enum ProfileCommand {
     /// Print the settings a profile changed from their defaults, one `key<TAB>value` per
     /// line. Reads while Beacon has the profile open.
     Settings { profile: Option<String> },
-    /// Print the tabs Beacon restores on its next start, one per line in strip order:
-    /// `*` marks the active tab, `!` a pinned one. Reads while Beacon has the profile open.
+    /// Print the tabs Beacon restores on its next start, one per line in strip order and a
+    /// blank line between windows: `*` marks the active tab, `!` a pinned one. Reads while
+    /// Beacon has the profile open.
     Session { profile: Option<String> },
     /// Open a profile copied from another machine: the passphrase unwraps its key, and this
     /// machine's keychain keeps it from then on.
@@ -407,9 +408,18 @@ fn profile(command: ProfileCommand) -> Result<()> {
             let Some(data) = p.read_sealed(&key, SESSION)? else {
                 return Ok(());
             };
+            // One tab per line, a blank line between windows.
+            let mut gap = false;
+            let mut any = false;
             for line in String::from_utf8_lossy(&data).lines() {
-                if !line.is_empty() && !line.starts_with('#') {
+                if line.is_empty() {
+                    gap = any;
+                } else if !line.starts_with('#') {
+                    if std::mem::take(&mut gap) {
+                        println!();
+                    }
                     println!("{}", printable(line));
+                    any = true;
                 }
             }
         }

@@ -5,7 +5,7 @@ use gtk4::glib::clone;
 use gtk4::subclass::prelude::GtkApplicationImpl;
 use gtk4::{gio, glib, prelude::*, subclass::prelude::*, Settings};
 use log::info;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 /// The app action a second launch hands its URLs to the running instance with: whether it
 /// was started `--private`, and a string array, each opened as a tab.
@@ -40,6 +40,8 @@ mod imp {
         /// What other launches handed over while the profile was still opening; opened
         /// after the first window.
         pub(crate) pending: RefCell<Vec<Handoff>>,
+        /// Set once the app shuts down: windows going away then leave the session as it was.
+        pub(crate) quitting: Cell<bool>,
     }
 
     #[glib::object_subclass]
@@ -68,9 +70,23 @@ mod imp {
                 return;
             }
 
-            let private = beacon_core::cli::Cli::global().private;
-            let window = BrowserWindow::new(&obj, private);
+            // Without URLs on the command line, every window of the previous session comes
+            // back. The first one in it was focused last: it is made and presented last, which
+            // also puts it first in `windows()` again when nothing gets focus.
+            let cli = beacon_core::cli::Cli::global();
+            let mut session = Vec::new();
+            if !cli.private && cli.urls.is_empty() {
+                session = beacon_core::session::load_windows();
+            }
+            let restore = (!session.is_empty()).then(|| session.remove(0));
+            for tabs in session.into_iter().rev() {
+                let other = BrowserWindow::new(&obj, false);
+                *other.imp().restore.borrow_mut() = Some(tabs);
+                other.present();
+            }
+            let window = BrowserWindow::new(&obj, cli.private);
             window.imp().first_window.set(true);
+            *window.imp().restore.borrow_mut() = restore;
             window.present();
 
             for handoff in self.pending.take() {
@@ -89,6 +105,7 @@ mod imp {
 
         // Quitting leaves the windows open; their engines stop before `run` returns.
         fn shutdown(&self) {
+            self.quitting.set(true);
             for window in self.obj().windows() {
                 if let Ok(window) = window.downcast::<BrowserWindow>() {
                     window.imp().shutdown_engine();
@@ -99,12 +116,18 @@ mod imp {
     }
 
     impl GtkApplicationImpl for Application {
-        // A closed window, the last one included, stops its engine as it goes.
+        // A closed window, the last one included, stops its engine as it goes. Closing one
+        // of several regular windows takes it out of the session; closing the last one
+        // leaves the session for the next start.
         fn window_removed(&self, window: &gtk4::Window) {
+            let regular = window.downcast_ref::<BrowserWindow>().is_some_and(|w| !w.imp().private.get());
             if let Some(window) = window.downcast_ref::<BrowserWindow>() {
                 window.imp().shutdown_engine();
             }
             self.parent_window_removed(window);
+            if regular && !self.quitting.get() {
+                self.obj().save_session();
+            }
         }
     }
 }
@@ -126,6 +149,22 @@ impl Application {
     pub fn window(&self) -> BrowserWindow {
         self.active_window()
             .map_or_else(|| BrowserWindow::new(self, false), |w| w.downcast().unwrap())
+    }
+
+    /// Persist every regular window's tabs as the session, the most recently focused window
+    /// first. Nothing while none is open: closing the last one keeps the session it had.
+    pub(crate) fn save_session(&self) {
+        let windows: Vec<_> = self
+            .windows()
+            .into_iter()
+            .filter_map(|w| w.downcast::<BrowserWindow>().ok())
+            .filter(|w| !w.imp().private.get())
+            .map(|w| w.imp().session_tabs())
+            .filter(|tabs| !tabs.is_empty())
+            .collect();
+        if !windows.is_empty() {
+            beacon_core::session::save_windows(&windows);
+        }
     }
 
     /// A new window for another launch: it starts on `urls` alone, or the home page.
