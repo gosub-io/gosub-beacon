@@ -103,23 +103,20 @@ impl BrowserWindow {
                 let window_clone = wait_window.clone();
                 let private = window_clone.imp().private.get();
                 spawn_future_local(async move {
-                    // URLs on the command line become the startup tabs; without any, the
-                    // previous session is restored (falling back to the home page). That is
-                    // the first window only: a private one, or any opened later, starts on
-                    // the URLs handed to it, or the home page if there are none.
+                    // URLs on the command line become the first window's startup tabs; a
+                    // window of the previous session reopens its tabs. Any other, private
+                    // or opened later, starts on the URLs handed to it, or the home page if
+                    // there are none.
                     let mut initial_urls: Vec<String> = beacon_core::cli::Cli::global().urls.clone();
-                    let mut session = Vec::new();
-                    if private || !window_clone.imp().first_window.get() {
+                    let session = window_clone.imp().restore.borrow().clone().unwrap_or_default();
+                    if !session.is_empty() {
+                        initial_urls = session.iter().map(|t| t.url.clone()).collect();
+                    } else if private || !window_clone.imp().first_window.get() {
                         // One opened for another launch's URLs starts on those alone.
                         let handed = window_clone.imp().startup_urls.borrow().as_ref().is_some_and(|u| !u.is_empty());
                         initial_urls = if handed { Vec::new() } else { vec!["gosub://home".to_string()] };
                     } else if initial_urls.is_empty() {
-                        session = beacon_core::session::load();
-                        initial_urls = if session.is_empty() {
-                            vec!["gosub://home".to_string()]
-                        } else {
-                            session.iter().map(|t| t.url.clone()).collect()
-                        };
+                        initial_urls = vec!["gosub://home".to_string()];
                     }
 
                     for url in initial_urls.iter() {

@@ -256,6 +256,9 @@ pub struct BrowserWindow {
     /// command line's URLs or the session. Any later one starts on what it is handed, or the
     /// home page.
     pub first_window: Cell<bool>,
+    /// The previous session's tabs this window reopens. Until they are open the session
+    /// keeps these for it, so a save from another window meanwhile does not drop them.
+    pub restore: RefCell<Option<Vec<beacon_core::session::SessionTab>>>,
     /// Whether the user wants the bookmarks bar. Per window, as on the Mac: fullscreen hides
     /// the whole chrome, and this says whether the bar comes back with it.
     pub bookmarks_bar_wanted: Cell<bool>,
@@ -382,6 +385,7 @@ impl Default for BrowserWindow {
             private: Cell::new(false),
             startup_urls: RefCell::new(Some(Vec::new())),
             first_window: Cell::new(false),
+            restore: RefCell::new(None),
             bookmarks_bar_wanted: Cell::new(true),
             bookmark_opened: RefCell::new(HashMap::new()),
             picker: RefCell::new(None),
@@ -2954,11 +2958,21 @@ impl BrowserWindow {
     }
 
     /// Persist which tabs are open, so the next start can restore them. Called after
-    /// every tab mutation; private windows leave no trace. Only the first window saves:
-    /// there is one session, and a later window would overwrite it with its own tabs.
+    /// every tab mutation; private windows leave no trace. The session holds every regular
+    /// window, so the app writes it.
     pub(crate) fn save_session(&self) {
-        if self.private.get() || !self.first_window.get() {
+        if self.private.get() {
             return;
+        }
+        if let Some(app) = self.obj().application().and_downcast::<crate::application::Application>() {
+            app.save_session();
+        }
+    }
+
+    /// This window's tabs as the session keeps them.
+    pub(crate) fn session_tabs(&self) -> Vec<beacon_core::session::SessionTab> {
+        if let Some(tabs) = self.restore.borrow().as_ref() {
+            return tabs.clone();
         }
         let active = self.active_tab_id();
         let manager = self.tab_manager.lock().unwrap();
@@ -2974,9 +2988,7 @@ impl BrowserWindow {
             })
             .collect();
         drop(manager);
-        if !tabs.is_empty() {
-            beacon_core::session::save(&tabs);
-        }
+        tabs
     }
 
     pub(crate) fn refresh_tabs(&self) {
@@ -4832,6 +4844,9 @@ impl BrowserWindow {
                 if let Some(id) = active.and_then(|i| order.get(i)) {
                     self.activate_tab(*id);
                 }
+                // Every restored tab is open now: the session takes this window's own.
+                self.restore.take();
+                self.save_session();
             }
             Message::OpenTab(url, title) => {
                 self.open_tab(None, &url, &title);
